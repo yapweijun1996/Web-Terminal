@@ -7,7 +7,7 @@ These procedures are a checklist, not a deployment recipe. Confirm the target de
 1. Identify the service, its configuration source, origin socket, tunnel and Access policy, session manager, and active job ownership. Record versions and a secret-free baseline.
 2. Determine whether the change can disconnect browser clients or affect running jobs. Use a disposable listener and session first; do not send input to an existing user's pane.
 3. Record the exact prior configuration and a component-specific rollback plan. Do not replace other tunnels, DNS records, identities, or services.
-4. Test changes on the intended platform. A user launchd service depends on the logged-in user; do not assume equivalent behavior on Linux, WSL, or Windows.
+4. Test changes on the intended platform. User launchd and systemd services depend on their actual user-manager lifecycle; on the observed Linux host, lingering was disabled. Do not assume sessions survive logout, sleep or reboot.
 
 ## Acceptance checklist
 

@@ -1,6 +1,6 @@
 # Web Terminal Tasks
 
-Last reviewed: 2026-11-04. This file is the authoritative project backlog. All tasks below are proposals, not a claim that implementation or verification has been completed. The repository currently contains documentation only; the running Mac implementation is outside it. See [architecture](docs/architecture.md) for evidence and [operations](docs/operations.md) for verification and session-preservation requirements.
+Last reviewed: 2026-11-04. This file is the authoritative project backlog. Status and evidence are scoped to the implementation and environment stated. The repository includes a Linux source snapshot and fixture test; the separately maintained Mac implementation remains outside it. See [architecture](docs/architecture.md) and [Linux evidence](docs/linux-implementation.md) for boundaries and [operations](docs/operations.md) for session-preservation requirements.
 
 Status values: **Open** = not completed; **In progress** = actively being worked on; **Verified** = acceptance evidence recorded; **Blocked** = a specific prerequisite is unavailable. Priority describes order, not permission to change a live system. Record evidence, date, environment, and remaining limits when changing a status. A historical fixture result does not verify an unrelated live session.
 
@@ -16,15 +16,17 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-002: Establish reviewable source and reproducible builds
 
-- **Status:** Open
-- **Scope:** Inventory the separately maintained implementation and provenance; separate editable source from bundled or generated assets. Review what may be included before importing anything into the repository.
+- **Status:** In progress
+- **Scope:** Inventory the separately maintained implementations and provenance; separate editable source from bundled or generated assets. The Linux UI source and isolated test have been imported; the Mac implementation and reproducible installation/build remain outstanding.
 - **Acceptance:** A clean checkout builds the reviewed artifact using documented dependencies and versions. An inventory and secret review exclude private configuration, credentials, uploads, logs, and terminal contents; compare the artifact in isolation before any deployment.
+- **Evidence:** Linux source was copied from the owner-operated Ubuntu host on 2026-11-04. The imported files are editable source; ttyd supplies its embedded client at runtime. `node --test linux/test/integration.test.js` exercises a disposable tmux server, Unix sockets and ttyd. Dependency versions are observed rather than pinned; the full acceptance remains open.
 
 ### WT-003: Diagnose Codex scrolling and expose scroll state
 
 - **Status:** Open
 - **Scope:** Reproduce the recorded issue in a disposable equivalent session, determine mouse and alternate-screen behavior, and evaluate clear terminal/application scroll state and a return-to-latest control where supported. Preserve unknown state when it cannot be determined.
 - **Acceptance:** Document a reproducible cause or explicitly retain the unknown; verify any fix in shell, tmux copy mode, mouse-aware TUI, and the relevant Codex state. Do not modify drafts or submit commands. The original running pane is not considered fixed based on a separate fixture.
+- **Evidence:** A 2026-11-04 Linux Chromium fixture exercised wheel scrollback, return to latest and `less --mouse`; it did not test the original Mac Codex pane, physical trackpad or mobile touch.
 
 ### WT-004: Make connection and recovery states clear
 
