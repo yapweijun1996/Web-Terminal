@@ -12,6 +12,7 @@ Keep project documentation in English, concise, and consistent with the actual r
 | [Mac source inventory](source-inventory.md) | Source provenance, reconstruction boundaries, exclusions, and reproducibility evidence for the Mac candidate. |
 | [Linux implementation](linux-implementation.md) | Linux source provenance, trust boundary, fixture instructions, and evidence limits. |
 | [Operations](operations.md) | Safe investigation, verification, and rollback procedures. |
+| [Dependency assessment](dependency-assessment.md) | Dated vendor research, compatibility evidence, upgrade risks and rollback gaps. |
 | [Roadmap and research](improvement-roadmap.md) | Research rationale, source links, and sequencing; link to TASK for current task details rather than maintaining a second backlog. |
 
 ## When updating
