@@ -2,15 +2,22 @@
 
 Last reviewed: 2026-11-04. This file is the authoritative project backlog. Status and evidence are scoped to the implementation and environment stated. The repository includes a Linux source snapshot and a reconstructed Mac development candidate; neither is automatically deployed to the separately maintained live systems. See [architecture](docs/architecture.md), [Linux evidence](docs/linux-implementation.md), and [Mac evidence](docs/source-inventory.md) for boundaries and [operations](docs/operations.md) for session-preservation requirements.
 
+**Mac deployment (2026-11-04):** The reviewed client and runtime were installed after owner authorization. A local HTTP check matched the built page, the local upload capture control returned its expected empty target, and all four workspace pane processes recorded before the final terminal restart remained present. An existing signed-in browser profile reached the upload route with its expected GET rejection. Direct automated public requests received Cloudflare HTTP 403 with error 1010; this does not establish an Access identity decision. Full authenticated terminal, WebSocket, upload, mobile-device, and original Codex-pane acceptance were not tested. Linux was not deployed. Old browser pages should be refreshed to load the new client, then the active window checked before typing.
+
 Status values: **Open** = not completed; **In progress** = actively being worked on; **Verified** = acceptance evidence recorded; **Blocked** = a specific prerequisite is unavailable. Priority describes order, not permission to change a live system. Record evidence, date, environment, and remaining limits when changing a status. A historical fixture result does not verify an unrelated live session.
 
 ## P0 — Access and safety
 
 ### WT-001: Verify the complete access boundary
 
-- **Status:** Open
-- **Scope:** Inventory the terminal HTTP, WebSocket, and upload routes and their actual Cloudflare Access policy and audience. Current inspected configuration is not end-to-end proof.
+- **Status:** In progress
+- **Scope:** Inventory the terminal HTTP, WebSocket, and upload routes, including Linux image and receipt operations, and their actual Cloudflare Access policy and audience. Current inspected configuration is not end-to-end proof.
 - **Acceptance:** An approved identity succeeds; unauthenticated and unauthorized identities are denied for each route. Test expiry and revocation separately for new connections and existing WebSockets; record actual behavior and any gap without exposing credentials.
+- **Mac evidence (2026-11-04):** The Cloudflare dashboard showed an Access application with an email-based Allow policy; its policy tester reported an approved active identity. Separately, unauthenticated HTTPS requests to the page, token, ordinary WebSocket URL, and upload GET and empty POST were redirected to Access. The ordinary WebSocket request did not attempt an Upgrade. A GET in an existing browser profile displayed the upload service's expected method-rejection body; that is not a successful upload or proof of the request's identity. Unauthorized authenticated identities, actual WebSocket Upgrade, token expiry and revocation remain untested. See [architecture](docs/architecture.md) for evidence boundaries; do not publish identities, domains or audience values.
+- **Preparation (2026-11-04):** A [proposed isolated test plan](docs/isolated-access-validation.md) and a locally tested inert origin are available for review. They do not establish Access enforcement and have not been connected to cloud resources.
+- **Local socket hardening (2026-11-04):** The Linux candidate refuses an unsafe runtime directory or an existing UI socket path rather than unlinking it. An isolated ARM64 Linux fixture verified that an existing listener remains reachable and that a graceful UI restart retains the fixture job. This does not verify Cloudflare Access or the separately maintained live service; recovery after an unclean shutdown requires owner inspection of the existing path.
+- **Mac upload socket (2026-11-04):** The candidate also requires a private socket directory, refuses an existing path, and closes the listener on graceful shutdown. An isolated test preserved an existing listener and checked stop and restart; it did not modify or validate the running service or Cloudflare Access. An unclean stop can leave a path requiring owner inspection.
+- **Legacy title isolation (2026-11-04):** A Mac deployment initially enabled target metadata globally, causing a previously open legacy browser page to display the prefix in its tab title after reconnecting. Global title settings were restored. The corrected attach script enables metadata only in sessions with a validated current-client view ID; an isolated concurrent legacy/current WebSocket test checked their separate output and title settings. An already displayed legacy title can remain until that page is refreshed.
 
 ## P1 — Foundation and core experience
 
@@ -24,9 +31,10 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-003: Diagnose Codex scrolling and expose scroll state
 
-- **Status:** Open
+- **Status:** Verified in isolated candidates; original live pane unresolved
 - **Scope:** Reproduce the recorded issue in a disposable equivalent session, determine mouse and alternate-screen behavior, and evaluate clear terminal/application scroll state and a return-to-latest control where supported. Preserve unknown state when it cannot be determined.
 - **Acceptance:** Document a reproducible cause or explicitly retain the unknown; verify any fix in shell, tmux copy mode, mouse-aware TUI, and the relevant Codex state. Do not modify drafts or submit commands. The original running pane is not considered fixed based on a separate fixture.
+- **Evidence (2026-11-04):** Isolated Mac and Linux fixtures reported tmux copy mode and returned to live without changing synthetic unsubmitted shell input. A browser wheel reached a disposable mouse-aware `less` session; Return to live did not send it input. A disposable Codex 0.166.0 session with networking disabled reproduced alternate-screen enabled and mouse capture disabled; a simulated wheel and Return to live left its synthetic unsubmitted draft intact. The indicator describes tmux only and keeps application scroll unknown. At a simulated 390-pixel viewport, the Mac toolbar requires horizontal scrolling to reach the control; mobile usability remains part of WT-008. The original pane's cause and transcript position remain unknown; the Mac candidate is deployed, while physical trackpad and mobile behavior remain unverified.
 - **Evidence:** A 2026-11-04 Linux Chromium fixture exercised wheel scrollback, return to latest and `less --mouse`; it did not test the original Mac Codex pane, physical trackpad or mobile touch.
 
 ### WT-004: Make connection and recovery states clear
@@ -38,55 +46,70 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-005: Improve workspace navigation
 
-- **Status:** Open
+- **Status:** Verified
 - **Scope:** Evaluate named views, a clear active target, keyboard switching, focus, and explanatory feedback about closing a view versus ending a task. Preserve current session semantics.
 - **Acceptance:** Navigate views by keyboard with visible focus and identifiable labels at narrow and desktop widths. Closing or switching a disposable view does not end an unrelated tmux job.
+- **Evidence (2026-11-04):** In isolated Chrome/tmux fixtures, Mac toolbar navigation retained keyboard focus and showed the tmux-confirmed window and pane while a separate job continued. Linux tab buttons support arrow, Home and End navigation with visible focus; named views persist in browser-local storage, and hiding another view retained the active view and a separate fixture job. Desktop and 390×844 emulated viewports were checked. Physical devices, assistive technology and live deployment remain unverified.
 
 ### WT-006: Bind upload completion to the intended view
 
-- **Status:** Open
+- **Status:** Verified
 - **Scope:** First reproduce the hypothesis that changing views during an upload may change the insertion target. If confirmed, retain the original target and provide an explicit copy or retry path when it is unavailable.
 - **Acceptance:** Tests for view switching, disconnect, and target loss never silently insert into a different view; a saved path remains available and no Enter is sent. A path alone is not evidence of an accepted CLI attachment.
+- **Baseline evidence (2026-11-04):** In a disposable Mac ttyd/tmux and Chrome fixture, a delayed simulated upload began in one pane; after switching to a new window, completing it inserted the path into the new pane. No Enter was sent. The result confirms that browser focus and connection readiness do not identify the original tmux target.
+- **Candidate evidence (2026-11-04):** Isolated Chrome, ttyd and tmux tests exercised switching, pane loss, disconnect, and recovery after an interrupted upload response. The first candidate queried the current pane over HTTP and failed a simulated input-delay race. The revised candidate snapshots the last tmux-confirmed pane seen by the browser, validates its membership server-side and requires explicit insertion. With the HTTP capture held until after a window switch, insertion still reached the captured pane and did not send Enter. A switch not yet reflected by tmux is not a confirmed target; the interface asks the user to check the window and pane. Receipts expire after ten minutes or a service restart, and the page loses its reference on reload. Native picker, clipboard and drag/drop device workflows and live deployment remain unverified.
+- **Linux evidence (2026-11-04):** A concurrent upstream change added image transfer. In an isolated Chrome and ARM64 tmux fixture, its original code inserted into a different pane when the pane changed within one iframe. The revised candidate binds the last confirmed pane and requires explicit insertion; browser and integration checks covered pane switching and loss, an interrupted response with path recovery, and a disconnected view without an insert. Multiple result rows retain their paths while the page remains open. Receipt and device limitations are the same as for the Mac candidate; the change is not deployed.
 
 ### WT-007: Verify upload resource limits under interruption
 
 - **Status:** Verified
 - **Scope:** Verify and correct the upload-work limit across client disconnect, interrupted request bodies, rejected oversized streams, and image-inspection timeout.
 - **Acceptance:** Disposable interruption and timeout tests establish whether actual processing stays within the selected limit. Malformed and oversized images fail without uncontrolled work or unintended file changes.
-- **Evidence (2026-11-04):** An isolated HTTP regression first reproduced a fifth inspection starting after a client disconnected while four inspections were still active. The candidate now retains the slot until asynchronous work ends. Tests cover disconnect during inspection, abort while receiving, repeated oversized chunked uploads, an actual subprocess timeout using a controlled test inspector, file cleanup, and subsequent capacity recovery. The macOS fixture also checks malformed images and declared and streamed size limits. The change is not deployed to the separately maintained live service.
+- **Evidence (2026-11-04):** An isolated HTTP regression first reproduced a fifth inspection starting after a client disconnected while four inspections were still active. The candidate now retains the slot until asynchronous work ends. Tests cover disconnect during inspection, abort while receiving, repeated oversized chunked uploads, an actual subprocess timeout using a controlled test inspector, file cleanup, and subsequent capacity recovery. The macOS fixture also checks malformed images and declared and streamed size limits. The Mac change was deployed after these isolated checks; live interruption behavior was not retested.
+- **Graceful shutdown:** With a controlled inspector holding an upload, a disposable service waited for that upload to complete after SIGTERM, returned success, and removed its socket before exiting. An abrupt kill or a live-service restart was not tested.
 
 ## P2 — Usability and operational maturity
 
 ### WT-008: Add mobile terminal input controls
 
-- **Status:** Open
+- **Status:** In progress
 - **Scope:** Design a collapsible input bar for Esc, Ctrl, Tab, and directional keys, with clear modifier state and space for the input line.
 - **Acceptance:** On documented physical devices, touch controls work without accidental submission; with the soft keyboard open and closed, the terminal grid and PTY dimensions agree and the current input remains visible.
+- **Candidate evidence (2026-11-04):** A shared, collapsed-by-default key bar sends Esc, Tab and mode-aware arrows only to the connected active terminal. Ctrl requires a letter selection and a separate send; the selection clears after use, and Ctrl+J/M are excluded because they can submit. Isolated Chrome/tmux fixtures checked a synthetic unsubmitted draft, cursor movement, control-key selection, reconnect guards and a 390×844 emulated viewport. With the bar open, xterm dimensions matched tmux client dimensions, with one row used by the tmux status line. Real touch, soft-keyboard visibility and dimensions, and physical devices remain unverified; deployment and physical-device acceptance are tracked separately.
+- **Combined candidate:** The key bar and WT-009 font adjustment were exercised together in isolated Mac and Linux Chrome fixtures at 390×844; terminal and tmux client grids agreed after resizing, and an explicit Ctrl+A left the synthetic draft unsubmitted. Physical-device acceptance is still outstanding.
+- **Emulated touch:** In a separate Mac candidate fixture, Chromium mobile emulation dispatched touch events to the key bar; Left, Esc, Tab and Ctrl+A sent the expected bytes, retained an unsent synthetic draft, and left xterm and tmux client dimensions at 43×37. A separate isolated Linux ARM64 candidate fixture exercised the same emulated touch sequence across the parent toolbar and terminal iframe; the unsent synthetic draft remained and xterm and tmux client dimensions matched at 43×34. These checks do not validate a physical touchscreen or soft keyboard.
 
 ### WT-009: Improve keyboard and accessibility support
 
-- **Status:** Open
+- **Status:** Verified in isolated candidates
 - **Scope:** Provide keyboard-operable controls, visible focus, accessible names, connection announcements, and adjustable text and contrast. Treat screen-reader support for the terminal itself as a separate verification concern.
 - **Acceptance:** Switching views and reconnecting work without a mouse; tested assistive technology identifies controls and relevant state changes. Record tested devices and untested limitations.
+- **Candidate evidence (2026-11-04):** The existing navigation and reconnect controls have keyboard and focus checks under WT-004/005. In isolated Mac and Linux Chromium fixtures, a display panel adjusted terminal text size and minimum text contrast without submitting synthetic shell input; the terminal and tmux client dimensions agreed afterward. A new Linux view received the same page-local settings. The browser accessibility tree exposed control names, expanded and pressed state, and a polite status. Font adjustment also worked with the WT-008 key bar open.
+- **Assistive technology evidence (2026-11-04):** In an isolated Debian 12.15 virtual display using Orca 43.1 and Chromium 156, Orca's debug output recorded the terminal shortcut hint, control names, selected and expanded states, contrast change, disconnection, Retry, and reconnection. Keyboard-only navigation switched views and retried after a disposable UI restart; the same fixture job and an unsubmitted synthetic draft remained. The environment had no verified audio output, and no physical device, VoiceOver, full terminal-output accessibility, or live deployment was tested. The Linux frame now uses a generic title because the previous title could be spoken with internal tmux metadata and the launch command.
+- **Failed test retained:** An initial `Alt+Shift+T` shortcut conflicted with Orca table navigation; a subsequent test Return submitted a nonexistent synthetic command inside the disposable container. The revised `Control+Alt+Shift+T` shortcut returned focus to the toolbar and preserved a fresh synthetic draft in repeat tests. No user session was touched.
 
 ### WT-010: Provide a privacy-preserving status view
 
-- **Status:** Open
+- **Status:** Verified in isolated candidates
 - **Scope:** Show current view, connection state, and useful recovery information without claiming task health from process liveness.
 - **Acceptance:** End-to-end status, component liveness, and unknown states are distinct; no tokens, commands, terminal contents, or personal filenames are exposed.
+- **Evidence (2026-11-04):** Isolated Mac and Linux Chromium fixtures displayed the current view, connection and recovery guidance. The details panel separately marks end-to-end input/output, individual components and Access authorization as not checked, and task state as unknown. Stopping each disposable terminal service changed its displayed connection state without asserting task health. A browser-local renamed view is represented by its ordinal rather than its name. Keyboard opening and desktop and 390×844 emulated layouts were checked; the Mac candidate is deployed; physical-device and live assistive-technology checks remain outstanding.
 
 ### WT-011: Verify resize, lifecycle, and platform support
 
-- **Status:** Open
+- **Status:** Verified (evidence matrix; untested cases remain unknown)
 - **Scope:** Maintain an evidence-based matrix for browser/PTY dimensions, physical input, disconnect, sleep, logout, restart, and separately for Windows, WSL, and Xubuntu when available.
 - **Acceptance:** Each tested case records environment, trigger, job outcome, and reconnect behavior; untested cases remain explicitly unknown. No survival through reboot or platform support is implied without evidence.
 - **Display observation (2026-11-04):** In an isolated Linux Chromium emulation at 1280×800 and device scale factor 1, the terminal canvas appeared undersized in both the unmodified baseline and the connection-recovery candidate. A scale factor 2 emulation displayed normally. The cause and behavior on physical devices remain unverified; this does not establish a candidate regression.
+- **Evidence (2026-11-04):** The [lifecycle matrix](docs/lifecycle-matrix.md) records isolated resize, browser reload and Linux UI restart results, including measured grid sizes, fixture job outcomes, reconnect limits and explicitly unknown platforms and lifecycle events. It does not claim physical device coverage or survival through host sleep, logout or reboot.
 
 ### WT-012: Assess dependency upgrades
 
-- **Status:** Open
+- **Status:** In progress
 - **Scope:** Compare installed and candidate dependency versions and their configuration and path-handling behavior against vendor documentation before an upgrade.
 - **Acceptance:** Record versions and relevant compatibility differences; test route protection and reconnect in isolation and prepare a verified rollback before any authorized live upgrade.
+- **Evidence (2026-11-04):** See the [dependency assessment](docs/dependency-assessment.md) for Cloudflare's security recommendation, dated vendor sources, offline ingress comparisons, and an isolated Node LTS build and test. Access enforcement and reconnect with the candidate connector and a verified rollback remain untested; no live upgrade has been made.
+- **Preparation:** The [isolated test plan](docs/isolated-access-validation.md) describes a disposable connector and patched rollback comparison. Neither has yet been validated against an authenticated tunnel.
 
 ## Working order
 

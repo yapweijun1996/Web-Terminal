@@ -24,6 +24,16 @@ Cloudflare Access evaluates the visitor; the tunnel configuration must also vali
 
 The launchd user service was running during the 2026-11-04 read-only check. A running process alone does not prove the browser can connect securely.
 
+## Mac Access evidence and limits
+
+On 2026-11-04, the Cloudflare dashboard displayed a self-hosted application and an email-based Allow policy for the Mac terminal. The dashboard's policy tester reported one approved active identity; it evaluates previously seen identities and is not a live route or unauthorized-user test. Separate HTTPS requests with no browser credentials received Access login redirects for the terminal page, token endpoint, ordinary WebSocket URL, and upload GET and empty POST. The request to the WebSocket URL did not include an Upgrade. An existing browser profile displayed the upload service's expected rejection body for a GET, but the response alone does not establish the browser identity or a successful authorized upload.
+
+These checks do not establish denial of a separately authenticated unauthorized identity, audience validation on every route, behavior of a real WebSocket Upgrade, or expiry and revocation of new and already-open connections. The Linux implementation and any other application have separate boundaries. No Access configuration was changed. Do not infer the current policy from this dated snapshot; verify it privately before a change.
+
+## Mac development candidate: upload target
+
+The undeployed candidate correlates each browser view with a dedicated grouped tmux session using a validated random view ID. tmux includes the current pane ID in its terminal-title output; the client strips that metadata from the visible title and snapshots the last confirmed target at upload start. The private upload service verifies that the session and pane belong to the view, associates the saved path with a short-lived receipt, and inserts only on an explicit request for that captured pane. The view ID is correlation data, not an authentication credential; Access, origin checks and private sockets remain the security boundary. If target metadata is absent or invalid, the result can only be copied. A URL argument is accepted by ttyd only for this validated view ID, and the attach script rejects malformed or additional arguments.
+
 ## Evidence boundaries
 
 Historical Skill evidence reports that a protected-site Chrome fixture tested ordinary shell scrolling and reconnect while preserving its fixture process, history, and unsent input. Isolated fixtures tested mouse reporting on primary and alternate screens and a separate Codex TUI. These results do **not** prove that the original running Codex pane was repaired: that pane had alternate screen enabled, mouse capture disabled, and its recorded `Ctrl+T` attempt did not open a transcript. Its cause remains unknown.
@@ -33,6 +43,8 @@ Physical trackpad behavior, other browsers, unauthorized identities, long-durati
 ## Linux implementation
 
 The imported Linux snapshot adds a Node UI and HTTP/WebSocket proxy behind the dedicated Access-validating tunnel. The UI, ttyd instances and tmux use private Unix sockets or a private tmux server. Each visible terminal corresponds to a persistent tmux session; hiding a tab does not terminate its session. The UI enables tmux mouse handling and exposes a control to leave copy mode. See the [Linux inventory](linux-implementation.md) for the exact source and limits.
+
+The Linux candidate similarly passes tmux pane metadata through the embedded ttyd client and uses short-lived server-side receipts for saved images. Its session and pane identifiers are checked against the dedicated tmux server before explicit insertion. The per-process mutation token and same-origin check are additional request checks, not substitutes for Access on the image and receipt routes.
 
 The UI does not verify Access JWTs itself. The upstream tunnel must validate each HTTP and WebSocket request; the origin socket must remain private. Other processes running as the same OS user are within the local trust boundary. Login expiry is not proof that an already-open WebSocket has been terminated.
 

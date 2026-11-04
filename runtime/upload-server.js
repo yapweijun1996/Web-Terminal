@@ -6,6 +6,7 @@ const http = require("node:http"),
   execFile = require("node:child_process").execFile,
   promisify = require("node:util").promisify;
 const inspect = promisify(execFile);
+const { createUploadTargets } = require('./upload-target');
 const socket = process.env.TERMINAL_UPLOAD_SOCKET,
   directory = process.env.TERMINAL_UPLOAD_DIR,
   origin = process.env.TERMINAL_ALLOWED_ORIGIN;
@@ -17,6 +18,14 @@ if (
   !path.isAbsolute(directory)
 )
   throw new Error("Missing configuration");
+const socketDirectory = fs.lstatSync(path.dirname(socket));
+if (
+  !socketDirectory.isDirectory() ||
+  socketDirectory.isSymbolicLink() ||
+  socketDirectory.uid !== process.getuid() ||
+  (socketDirectory.mode & 0o077) !== 0
+)
+  throw new Error("Unsafe socket directory");
 fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
 const ds = fs.lstatSync(directory);
 if (
@@ -27,15 +36,15 @@ if (
 )
   throw new Error("Unsafe upload directory");
 try {
-  const st = fs.lstatSync(socket);
-  if (!st.isSocket() || st.uid !== process.getuid())
-    throw new Error("Unsafe socket");
-  fs.unlinkSync(socket);
+  fs.lstatSync(socket);
+  throw new Error("Upload socket path already exists; verify its owner before removal");
 } catch (e) {
   if (e.code !== "ENOENT") throw e;
 }
 const max = 10 * 1024 * 1024;
 let active = 0;
+let controlActive = 0;
+const targets = createUploadTargets(process.env.WEB_TERMINAL_TMUX_SERVER, process.env.TMUX_BIN || 'tmux');
 function reply(res, status, data) {
   if (res.headersSent) return;
   res.writeHead(status, {
@@ -71,6 +80,40 @@ const server = http.createServer((req, res) => {
     return reply(res, 404, { error: "Not found" });
   if (req.headers.origin !== origin)
     return reply(res, 403, { error: "Origin not allowed" });
+  const action = req.headers['x-terminal-action'];
+  if (action === 'capture' || action === 'insert' || action === 'result' || action === 'latest') {
+    if (req.headers['transfer-encoding'] || Number(req.headers['content-length'] || 0) !== 0)
+      return reply(res, 400, { error: 'Unexpected request body' });
+    if (controlActive >= 4) return reply(res, 429, { error: 'Too many target requests' });
+    controlActive++;
+    let controlFinished = false, controlProcessing = false;
+    const finishControl = () => {
+      if (!controlFinished) { controlFinished = true; controlActive--; }
+    };
+    const abortControl = () => { if (!controlProcessing) finishControl(); };
+    req.resume();
+    req.on('end', async () => {
+      if (controlFinished) return;
+      controlProcessing = true;
+      try {
+        const result = action === 'capture' || action === 'latest'
+          ? await targets[action === 'capture' ? 'capture' : 'returnToLive'](req.headers['x-terminal-view'], req.headers['x-terminal-session'], req.headers['x-terminal-session-id'], req.headers['x-terminal-pane'], req.headers['x-terminal-server-pid'])
+          : action === 'result'
+            ? targets.result(req.headers['x-terminal-target'])
+            : await targets.insert(req.headers['x-terminal-target']);
+        reply(res, 200, result || (action === 'latest' ? { requested: true } : { inserted: true }));
+      } catch {
+        reply(res, 409, { error: 'Target unavailable' });
+      } finally {
+        finishControl();
+      }
+    });
+    // A request aborted before its body ends must release its reserved slot.
+    req.on('aborted', abortControl);
+    req.on('error', abortControl);
+    return;
+  }
+  if (action) return reply(res, 400, { error: 'Unknown action' });
   if (
     (req.headers["content-type"] || "").split(";")[0] !==
     "application/octet-stream"
@@ -159,7 +202,8 @@ const server = http.createServer((req, res) => {
         width * height > 40000000
       )
         throw Error("Invalid or oversized image dimensions");
-      reply(res, 201, { path: dest });
+      const targetBound = targets.bind(req.headers['x-terminal-target'], dest);
+      reply(res, 201, { path: dest, targetBound });
     } catch (e) {
       if (handle) await handle.close().catch(() => {});
       await fs.promises.unlink(dest).catch(() => {});
@@ -175,3 +219,6 @@ server.requestTimeout = 30000;
 server.headersTimeout = 10000;
 server.maxHeadersCount = 64;
 server.listen(socket, () => fs.chmodSync(socket, 0o600));
+function shutdown() { server.close(); }
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);

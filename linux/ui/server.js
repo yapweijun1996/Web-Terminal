@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn, execFileSync } = require('node:child_process');
+const { createImageReceipts } = require('./image-receipts');
 
 const runtime = process.env.TERMINAL_RUNTIME || `/run/user/${process.getuid()}/linux-web-terminal-ui`;
 const tmuxSocket = process.env.TERMINAL_TMUX_SOCKET || 'linux-web-terminal';
@@ -18,12 +19,21 @@ const scheme = process.env.TERMINAL_TEST_HTTP === '1' ? 'http' : 'https';
 const children = new Map();
 const sessionPattern = /^(shared|web-[a-f0-9]{12})$/;
 const token = crypto.randomBytes(32).toString('hex');
+if (!path.isAbsolute(runtime)) throw new Error('Runtime directory must be absolute');
 fs.mkdirSync(runtime, { recursive: true, mode: 0o700 });
-try { fs.unlinkSync(socket); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+const runtimeStat = fs.lstatSync(runtime);
+if (!runtimeStat.isDirectory() || runtimeStat.isSymbolicLink() || runtimeStat.uid !== process.getuid() || (runtimeStat.mode & 0o077) !== 0) {
+  throw new Error('Runtime directory must be private and owned by the current user');
+}
+try {
+  fs.lstatSync(socket);
+  throw new Error('UI socket path already exists; verify its owner before removal');
+} catch (e) { if (e.code !== 'ENOENT') throw e; }
 
 function tmux(args) {
   return execFileSync('tmux', ['-L', tmuxSocket, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
+const imageReceipts = createImageReceipts(tmux);
 function sessions() {
   try { return tmux(['list-sessions', '-F', '#{session_name}']).trim().split('\n').filter(s => sessionPattern.test(s)).sort(); }
   catch { return []; }
@@ -50,8 +60,11 @@ async function upload(req, res) {
   const length = Number(req.headers['content-length']);
   if (!Number.isSafeInteger(length) || length < 1 || length > maxUploadBytes) return send(res, 413, '{"error":"Invalid image size"}');
   if (activeUploads >= 3) return send(res, 429, '{"error":"Too many uploads"}');
+  const ticket = req.headers['x-image-receipt'];
+  if (!imageReceipts.start(ticket)) return send(res, 409, '{"error":"Upload receipt unavailable"}');
   activeUploads++;
   const timeout = setTimeout(() => req.destroy(), 30000);
+  let savedPath = null;
   try {
     const chunks = []; let size = 0;
     for await (const chunk of req) {
@@ -68,11 +81,17 @@ async function upload(req, res) {
     if (entries.length >= 500 || totalBytes + size > 500 * 1024 * 1024) return send(res, 507, '{"error":"Image storage limit reached"}');
     const filename = path.join(uploadDir, `${crypto.randomBytes(16).toString('hex')}.${ext}`);
     fs.writeFileSync(filename, data, { flag: 'wx', mode: 0o600 });
+    savedPath = filename;
     return send(res, 201, JSON.stringify({ path: filename }));
-  } finally { clearTimeout(timeout); activeUploads--; }
+  } finally { clearTimeout(timeout); activeUploads--; imageReceipts.finish(ticket, savedPath); }
 }
 function ensureTtyd(name) {
   if (!sessionPattern.test(name) || !sessions().includes(name)) throw new Error('Unknown session');
+  // A session can be recreated under the same name while ttyd stays alive.
+  // Reapply per-session settings before reusing the existing ttyd process.
+  tmux(['set-option', '-t', name, 'mouse', 'on']);
+  tmux(['set-option', '-t', name, 'set-titles', 'on']);
+  tmux(['set-option', '-t', name, 'set-titles-string', '__WEB_TERMINAL_TARGET__|#{session_name}|#{session_id}|#{pane_id}|#{pid}|#{pane_mode}|#{pane_title}']);
   const existing = children.get(name);
   if (existing && existing.exitCode === null) return existing.socketPath;
   const socketPath = path.join(runtime, `ttyd-${name}.sock`);
@@ -80,7 +99,6 @@ function ensureTtyd(name) {
   // This is a tmux server option and therefore applies to every session on this socket.
   // Application OSC 52 writes must reach ttyd for the browser clipboard bridge.
   tmux(['set-option', '-s', 'set-clipboard', 'on']);
-  tmux(['set-option', '-t', name, 'mouse', 'on']);
   const child = spawn('/usr/bin/ttyd', ['-i', socketPath, '-W', '-O', '/bin/sh', path.join(__dirname, 'attach-tab.sh'), tmuxSocket, name], { stdio: 'ignore' });
   child.socketPath = socketPath;
   children.set(name, child);
@@ -110,12 +128,21 @@ function proxy(req, res, target, endpoint) {
       up.on('end', () => {
         const shim = `<script>
           (() => {
+            // The embedded ttyd client otherwise publishes its launch command
+            // and tmux title metadata to the browser's accessible page title.
+            try {
+              document.title = 'Terminal view';
+              Object.defineProperty(document, 'title', {
+                configurable: true, get: () => 'Terminal view', set: () => {},
+              });
+            } catch { /* Keep the terminal usable if this browser rejects the title override. */ }
             const Native = window.WebSocket;
             window.WebSocket = class extends Native {
               constructor(...args) {
                 super(...args);
                 const report = state => {
                   if (window.term) window.term.options.disableStdin = state !== 'Connected';
+                  if (state !== 'Connected') window.webTerminalTarget = null;
                   window.parent.postMessage({ type: 'terminal-connection', state }, window.location.origin);
                   if (state === 'Disconnected' || state === 'Connection error') {
                     setTimeout(() => {
@@ -127,6 +154,23 @@ function proxy(req, res, target, endpoint) {
                     }, 0);
                   }
                 };
+                if (typeof window.term?.onTitleChange === 'function' && !window.__terminalTargetListener) {
+                  window.__terminalTargetListener = true;
+                  window.term.onTitleChange(title => {
+                    const match = /^__WEB_TERMINAL_TARGET__\\|(shared|web-[a-f0-9]{12})\\|(\\$\\d+)\\|(%\\d+)\\|(\\d+)\\|([a-z0-9-]*)\\|/.exec(title);
+                    window.webTerminalTarget = match ? { session: match[1], sessionId: match[2], pane: match[3], serverPid: match[4] } : null;
+                    window.parent.postMessage({ type: 'terminal-scroll', mode: match ? match[5] : null }, window.location.origin);
+                  });
+                }
+                // ttyd focuses its terminal after opening. Preserve keyboard
+                // navigation unless the user has already focused this frame.
+                if (window.frameElement?.dataset?.preserveTabFocus === 'true' && typeof window.term?.focus === 'function') {
+                  const focus = window.term.focus.bind(window.term);
+                  window.term.focus = (...args) => {
+                    window.term.focus = focus;
+                    if (window.parent.document.activeElement === window.frameElement) focus(...args);
+                  };
+                }
                 report('Connecting');
                 for (const [event, state] of [['open', 'Connected'], ['close', 'Disconnected'], ['error', 'Connection error']]) {
                   this.addEventListener(event, () => report(state));
@@ -153,8 +197,23 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/') return file(res, 'index.html', 'text/html; charset=utf-8');
     if (req.method === 'GET' && req.url === '/app.js') return file(res, 'app.js', 'text/javascript; charset=utf-8');
     if (req.method === 'GET' && req.url === '/clipboard-bridge.js') return file(res, 'clipboard-bridge.js', 'text/javascript; charset=utf-8');
+    if (req.method === 'GET' && req.url === '/mobile-keys.js') return file(res, 'mobile-keys.js', 'text/javascript; charset=utf-8');
+    if (req.method === 'GET' && req.url === '/mobile-keys.css') return file(res, 'mobile-keys.css', 'text/css; charset=utf-8');
+    if (req.method === 'GET' && req.url === '/display-controls.js') return file(res, 'display-controls.js', 'text/javascript; charset=utf-8');
+    if (req.method === 'GET' && req.url === '/display-controls.css') return file(res, 'display-controls.css', 'text/css; charset=utf-8');
     if (req.method === 'GET' && req.url === '/style.css') return file(res, 'style.css', 'text/css; charset=utf-8');
     if (req.method === 'GET' && req.url === '/api/sessions') return send(res, 200, JSON.stringify({ sessions: sessions(), token }));
+    if (req.method === 'POST' && ['/api/images/prepare', '/api/images/result', '/api/images/insert'].includes(req.url)) {
+      if (!allowedMutation(req)) return send(res, 403, '{"error":"Forbidden"}');
+      if (req.headers['transfer-encoding'] || Number(req.headers['content-length'] || 0) !== 0) return send(res, 400, '{"error":"Unexpected body"}');
+      try {
+        const ticket = req.headers['x-image-receipt'];
+        const result = req.url.endsWith('/prepare')
+          ? imageReceipts.prepare({ session: req.headers['x-terminal-session'], sessionId: req.headers['x-terminal-session-id'], pane: req.headers['x-terminal-pane'], serverPid: req.headers['x-terminal-server-pid'] })
+          : req.url.endsWith('/result') ? imageReceipts.result(ticket) : (imageReceipts.insert(ticket), { inserted: true });
+        return send(res, 200, JSON.stringify(result));
+      } catch { return send(res, 409, '{"error":"Image target unavailable"}'); }
+    }
     if (req.method === 'POST' && req.url === '/api/images') return await upload(req, res);
     if (req.method === 'POST' && req.url === '/api/sessions') {
       if (!allowedMutation(req)) return send(res, 403, '{"error":"Forbidden"}');
@@ -168,8 +227,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && latest) {
       if (!allowedMutation(req)) return send(res, 403, '{"error":"Forbidden"}');
       if (!sessions().includes(latest[1])) return send(res, 404, '{"error":"Not found"}');
-      const mode = tmux(['display-message', '-p', '-t', latest[1], '#{pane_mode}']).trim();
-      if (mode === 'copy-mode' || mode === 'copy-mode-vi') tmux(['send-keys', '-t', latest[1], '-X', 'cancel']);
+      if (req.headers['x-terminal-session'] !== latest[1]) return send(res, 409, '{"error":"Target unavailable"}');
+      try {
+        imageReceipts.returnToLive({ session: latest[1], sessionId: req.headers['x-terminal-session-id'], pane: req.headers['x-terminal-pane'], serverPid: req.headers['x-terminal-server-pid'] });
+      } catch { return send(res, 409, '{"error":"Target unavailable"}'); }
       return send(res, 200, '{"ok":true}');
     }
     const route = parseTerminal(req.url);

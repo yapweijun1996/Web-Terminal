@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Linux Terminal</title>
   <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/mobile-keys.css">
+  <script src="/mobile-keys.js" defer></script>
+  <link rel="stylesheet" href="/display-controls.css">
+  <script src="/display-controls.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -12,15 +16,38 @@
     <strong>Terminal</strong>
     <nav id="tabs" aria-label="Terminal tabs"></nav>
     <button id="new-tab" type="button" title="New terminal" aria-label="New terminal">+</button>
-    <button id="latest" type="button" title="Return to the latest output">Latest</button>
+    <button id="rename-tab" type="button">Rename</button>
+    <button id="latest" type="button" title="Exit tmux copy mode; application scroll position is separate">Return to live</button>
     <button id="copy-selection" type="button" hidden>Copy selection</button>
     <button id="restore" type="button" hidden>Restore tabs</button>
+    <details id="terminal-diagnostics">
+      <summary>Details</summary>
+      <section aria-label="Terminal status details">
+        <p><strong>View:</strong> <span id="detail-view">Unknown</span></p>
+        <p><strong>Terminal connection:</strong> <span id="detail-link">Unknown</span></p>
+        <p><strong>End-to-end input and output:</strong> Not checked</p>
+        <p><strong>Individual components:</strong> Not checked</p>
+        <p><strong>Background task:</strong> Unknown</p>
+        <p><strong>Access authorization:</strong> Not checked</p>
+        <p>After reconnecting, check the active view. Use Retry if offered.</p>
+      </section>
+    </details>
     <div class="connection">
       <span id="status" role="status" aria-live="polite" tabindex="-1"></span>
+      <span id="scroll-status" role="status" aria-live="polite">tmux scroll unknown</span>
       <button id="retry" type="button" hidden>Retry</button>
     </div>
   </header>
-  <div id="image-result" hidden><label>Saved image path <input id="image-path" readonly></label><button id="copy-image-path" type="button">Copy path</button></div>
+  <form id="rename-form" hidden>
+    <label for="rename-input">View name</label>
+    <input id="rename-input" type="text" maxlength="40" autocomplete="off">
+    <button type="submit">Save name</button>
+    <button id="rename-cancel" type="button">Cancel</button>
+    <span id="rename-error" role="alert"></span>
+    <small>Names are stored in this browser. Hiding a view keeps its session running.</small>
+  </form>
+  <div id="image-notice" role="status" aria-live="polite" hidden></div>
+  <section id="image-results" aria-label="Saved image paths"></section>
   <main id="views"></main>
 </body>
 </html>

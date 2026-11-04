@@ -7,6 +7,7 @@ On 2026-11-04, the owner-operated Ubuntu 24.04 ARM64 host had a working Linux te
 | Source | Responsibility |
 | --- | --- |
 | `linux/ui/server.js` | Private Unix-socket UI, per-session ttyd processes, HTTP/WebSocket proxy and session operations. |
+| `linux/ui/image-receipts.js` | Short-lived image receipts and explicit, pane-bound insertion for the development candidate. |
 | `linux/ui/index.html`, `app.js`, `style.css` | Browser tab controls, connection indication, hide/restore and return-to-latest control. |
 | `linux/ui/attach-tab.sh` | Attach a ttyd client to the corresponding persistent tmux session. |
 | `linux/legacy-attach.sh` | Earlier grouped-session attachment used by the existing terminal service. |
@@ -16,15 +17,19 @@ The server obtains ttyd's embedded terminal client at runtime and adds a small c
 
 ## Session and scroll behavior
 
-The UI lists the existing shared session and its own named sessions. Each new tab creates a distinct tmux session. Hiding a tab detaches its view without killing the session; Restore tabs makes hidden tabs visible in that browser. Session state is managed by tmux, while hidden-tab preferences are browser-local. The proxy enables tmux mouse mode for a session. The Latest control exits tmux copy mode; it does not submit input or assert that an interactive application's own transcript is at the end.
+The UI lists the existing shared session and its own named sessions. Each new tab creates a distinct tmux session. View names can be changed in the browser and are stored locally; they do not rename the tmux session or synchronize to another browser. Use the arrow keys, Home or End while a view button is focused to switch views. Hiding a tab detaches its view without killing the session; Restore tabs makes hidden tabs visible in that browser. Session state is managed by tmux, while hidden-tab preferences are browser-local. The proxy enables tmux mouse mode for a session. The scroll indicator reports tmux mode when a current pane identity is available; application scroll remains unknown. Return to live exits tmux copy mode in the validated pane without sending application input or asserting that an application's transcript is at the end.
 
 The candidate displays connection state on desktop and narrow screens. When the session list or terminal connection fails, Retry reloads the session list or reconnects the active view to the same session; it does not create a session or submit input. A sign-in message is tentative because a failed connection can have other causes. Connection status does not report background-job health.
+
+The candidate attempts to give the embedded terminal a generic page title so ttyd's normal title assignments do not announce internal target metadata or the launch command. This worked in the isolated Chromium check; if a browser rejects the override, terminal operation continues and title privacy is not established. The parent iframe keeps its browser-local view label. This is an accessibility and privacy measure, not an access-control boundary.
 
 ## Security boundary
 
 The UI and ttyd do **not** independently authenticate the browser or verify a Cloudflare Access JWT. The observed deployment places an Access-protected Cloudflare Tunnel in front of the private UI socket and configures cloudflared to require JWT validation for the application audience on the ingress route. The UI checks origin and a per-process request token for session mutations and checks WebSocket origin; these checks are not a replacement for Access authentication. Terminal execution has the full permissions of its OS user, and processes under that same user can access the private socket.
 
 `TERMINAL_TEST_HTTP=1` is only for a disposable local test fixture. Never use it on a live service. Private hostnames, Access settings, application audience, account details, credentials, logs, terminal output, uploads and user session data are deliberately not included in this repository. The snapshot is not an installer or production deployment recipe.
+
+The Linux candidate requires an absolute, owner-only runtime directory owned by the service user. It refuses to start if `ui.sock` already exists, preserving any existing listener or file. A graceful shutdown removes the socket. After an unclean shutdown, the owner must verify that no service still uses the path and assess the existing entry before removing a stale socket and restarting; do not remove an unknown file or an active service socket. These checks do not authenticate same-user processes or replace Cloudflare Access.
 
 ## Verification and limits
 
@@ -51,7 +56,7 @@ Authenticated production-browser behavior, denial for an unauthorized identity, 
 
 ## Browser clipboard and image transfer
 
-The Linux UI handles Ctrl+V in the browser before it reaches terminal applications. PNG, JPEG and WebP files can be pasted or dropped into a terminal view; the UI saves the file in a private upload directory and pastes its path into the original view without submitting it. If the view changes, reloads, or loses focus while the upload is pending, the UI instead offers the saved path for copying. An inserted path is not proof that an application accepted an image attachment.
+The Linux UI handles Ctrl+V in the browser before it reaches terminal applications. PNG, JPEG and WebP files can be pasted or dropped into a terminal view. The candidate saves each file and displays its path and last tmux-confirmed window and pane. After the user checks the target, an explicit control can insert the path into that captured pane without sending Enter; switching to another pane cannot redirect it. If the view or target is unavailable, copy the retained path instead. A path sent to a pane is not proof that an application accepted an image attachment.
 
 For copying text, the UI receives tmux OSC 52 copy requests from the active terminal. A recent pointer or copy-key gesture allows it to write to the browser clipboard; otherwise it offers a Copy selection button. Browser clipboard permissions and focus can prevent automatic copying. Clipboard contents are held in the page while awaiting a copy action and are not logged or stored on the server by this bridge.
 
@@ -71,4 +76,4 @@ node linux/test/pi-browser.e2e.mjs
 
 For rollback after an authorized deployment, restore the previous UI implementation first, then restore the previous tmux `set-clipboard` server option. The candidate sets the option again when it starts a view, so changing only the tmux option while leaving the candidate active is not a durable rollback. Do not stop the tmux server or existing jobs to roll back; already-running processes retain the environment with which they started.
 
-Images are retained until the owner removes them. Requests require the same origin and per-process mutation token as session changes, and the tunnel must validate Access for the upload route. Each file is limited to 10 MiB; at most three uploads are processed concurrently, with a 30-second request deadline and a storage limit of 500 files or 500 MiB. The server checks file signatures and basic structure; it does not fully decode images. The fixture redirects uploads to its own temporary directory.
+Images are retained until the owner removes them. Requests require the same origin and per-process mutation token as session changes, and the tunnel must validate Access for the image and receipt routes. A receipt can recover a saved path for ten minutes while the same service and page remain available; a service restart loses server receipts and a page reload loses their references. Each file is limited to 10 MiB; at most three uploads are processed concurrently, with a 30-second request deadline and a storage limit of 500 files or 500 MiB. The server checks file signatures and basic structure; it does not fully decode images. The fixture redirects uploads to its own temporary directory.

@@ -1,15 +1,17 @@
 # Mac source inventory and reconstruction
 
-Snapshot: 2026-11-04. The development candidate is separate from the running service. Do not infer deployment or complete behavior parity from this inventory.
+Snapshot: 2026-11-04. The reviewed Mac client and runtime were deployed after owner authorization; see the backlog for the limited post-deployment checks. Complete behavior parity and the separately maintained Linux service remain unverified.
 
 | Component | Source and treatment |
 | --- | --- |
 | Terminal client | `client/src` is based on ttyd 1.7.7, upstream commit `40e79c706be14029b391f369bee6613c31667abb`. The upstream MIT license and Yarn lockfile are included. The existing local viewport and reconnect customizations were reconstructed in the template and TypeScript. |
-| Toolbar and upload UI | `client/src/toolbar.*` and `client/src/upload.*` were recovered from the local custom page and formatted as editable source. The initial reconstruction matched the local originals in a normalized comparison. The candidate toolbar now intentionally adds connection and recovery states; other existing issues are not represented as fixed. |
-| Runtime | The initial `runtime/upload-server.js` reconstruction matched the local service in an abstract-syntax comparison. The candidate now intentionally differs: an active upload retains its concurrency slot until filesystem and image-inspection work finishes, including after client disconnect. `runtime/tmux.conf` mirrors the inspected configuration. The attach and serve scripts use explicit environment configuration and add a guard against removing an existing socket, so they are candidates rather than byte-identical live scripts. |
+| Toolbar and upload UI | `client/src/toolbar.*` and `client/src/upload.*` were recovered from the local custom page and formatted as editable source. The initial reconstruction matched the local originals in a normalized comparison. The candidate now intentionally adds connection states and an explicit, pane-bound upload workflow. |
+| Runtime | The initial `runtime/upload-server.js` reconstruction matched the local service in an abstract-syntax comparison. The candidate intentionally differs: upload work retains its concurrency slot until completion, `upload-target.js` binds a receipt to an identified tmux pane, and the upload service guards its socket path. `runtime/attach.sh` enables pane metadata only for view-ID-aware sessions, so legacy sessions do not receive its title prefix. The attach and serve scripts use explicit environment configuration, validate view arguments, enable ttyd URL arguments for those IDs, and guard against removing an existing socket. |
 | Build and tests | `client/` contains the pinned upstream build configuration, patch and lockfile. `tests/` contains isolated runtime and macOS upload checks. Generated bundles and dependency directories are excluded by `.gitignore`. |
 
 No Mac tunnel configuration, Access identities, hostnames, tokens, uploaded files, logs, terminal history, or user session state were imported into this candidate. Before publishing any future change, review the actual diff and source provenance; an automated pattern scan alone cannot prove the absence of private data. The separate Linux snapshot is described in [Linux implementation](linux-implementation.md).
+
+The candidate upload socket must be in an existing owner-only directory owned by the service user. The service refuses to replace any existing socket path; a graceful stop closes the listener and removes its socket. After an unclean stop, verify that no service still uses the path and inspect the entry before removing a stale socket. This protects the local path from accidental replacement; it does not authenticate same-user processes or establish the Cloudflare Access boundary. The Mac service was updated after these isolated checks; the production Access boundary remains unverified.
 
 ## Verification evidence
 

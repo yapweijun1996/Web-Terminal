@@ -30,6 +30,16 @@ declare global {
     interface Window {
         term: TtydTerminal;
         mbaTerminalReady?: () => boolean;
+        webTerminalViewId?: string;
+        webTerminalTarget?: {
+            session: string;
+            sessionId: string;
+            pane: string;
+            serverPid: string;
+            windowIndex: string;
+            paneIndex: string;
+            paneMode: string;
+        };
         webTerminalConnectionState?: ConnectionState;
         webTerminalRetry?: () => void;
         WebTerminalConnectionLifecycle: new (options: {
@@ -132,6 +142,8 @@ export class Xterm {
     }
 
     destroy() {
+        window.webTerminalTarget = undefined;
+        window.dispatchEvent(new CustomEvent('web-terminal-target', { detail: null }));
         this.connection?.stop();
         this.dispose();
         this.socket?.close();
@@ -224,8 +236,37 @@ export class Xterm {
         const { terminal, fitAddon, overlayAddon, register, sendData } = this;
         register(
             terminal.onTitleChange(data => {
-                if (data && data !== '' && !this.titleFixed) {
-                    document.title = data + ' | ' + this.title;
+                const match =
+                    /^__WEB_TERMINAL_TARGET__\|(view-[a-f0-9-]{36}-\d+)\|(\$\d+)\|(%\d+)\|(\d+)\|(\d+)\|(\d+)\|([a-z0-9-]*)\|([\s\S]*)$/.exec(
+                        data
+                    );
+                const previous = window.webTerminalTarget;
+                if (match && window.webTerminalViewId && match[1].startsWith(`view-${window.webTerminalViewId}-`)) {
+                    window.webTerminalTarget = {
+                        session: match[1],
+                        sessionId: match[2],
+                        pane: match[3],
+                        serverPid: match[4],
+                        windowIndex: match[5],
+                        paneIndex: match[6],
+                        paneMode: match[7],
+                    };
+                } else {
+                    window.webTerminalTarget = undefined;
+                }
+                const current = window.webTerminalTarget;
+                if (
+                    previous?.session !== current?.session ||
+                    previous?.pane !== current?.pane ||
+                    previous?.windowIndex !== current?.windowIndex ||
+                    previous?.paneIndex !== current?.paneIndex ||
+                    previous?.paneMode !== current?.paneMode
+                ) {
+                    window.dispatchEvent(new CustomEvent('web-terminal-target', { detail: current || null }));
+                }
+                const title = match ? match[8] : data;
+                if (title && title !== '' && !this.titleFixed) {
+                    document.title = title + ' | ' + this.title;
                 }
             })
         );
@@ -332,6 +373,8 @@ export class Xterm {
     private onSocketClose(event: CloseEvent) {
         console.log(`[ttyd] websocket connection closed with code: ${event.code}`);
 
+        window.webTerminalTarget = undefined;
+        window.dispatchEvent(new CustomEvent('web-terminal-target', { detail: null }));
         this.dispose();
         this.connection?.socketClosed();
     }
