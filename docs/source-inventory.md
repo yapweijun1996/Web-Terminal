@@ -1,6 +1,6 @@
 # Mac source inventory and reconstruction
 
-Snapshot: 2026-11-04. The development candidate is separate from the running service. Do not infer deployment or complete behavior parity from this inventory.
+Snapshot: 2026-11-04. The reviewed Mac client and runtime were deployed after owner authorization; see the backlog for the limited post-deployment checks. Complete behavior parity and the separately maintained Linux service remain unverified.
 
 | Component | Source and treatment |
 | --- | --- |
@@ -11,7 +11,7 @@ Snapshot: 2026-11-04. The development candidate is separate from the running ser
 
 No Mac tunnel configuration, Access identities, hostnames, tokens, uploaded files, logs, terminal history, or user session state were imported into this candidate. Before publishing any future change, review the actual diff and source provenance; an automated pattern scan alone cannot prove the absence of private data. The separate Linux snapshot is described in [Linux implementation](linux-implementation.md).
 
-The candidate upload socket must be in an existing owner-only directory owned by the service user. The service refuses to replace any existing socket path; a graceful stop closes the listener and removes its socket. After an unclean stop, verify that no service still uses the path and inspect the entry before removing a stale socket. This protects the local path from accidental replacement; it does not authenticate same-user processes or establish the Cloudflare Access boundary. The running service has not been changed.
+The candidate upload socket must be in an existing owner-only directory owned by the service user. The service refuses to replace any existing socket path; a graceful stop closes the listener and removes its socket. After an unclean stop, verify that no service still uses the path and inspect the entry before removing a stale socket. This protects the local path from accidental replacement; it does not authenticate same-user processes or establish the Cloudflare Access boundary. The Mac service was updated after these isolated checks; the production Access boundary remains unverified.
 
 ## Verification evidence
 
