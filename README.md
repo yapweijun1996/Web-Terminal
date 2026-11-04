@@ -1,18 +1,19 @@
 # Web Terminal
 
-An owner-operated browser terminal for accessing a computer through Cloudflare Access and Tunnel. The current reference implementation runs on macOS and uses ttyd and tmux to provide terminal views and reconnectable sessions.
+An owner-operated browser terminal for accessing a computer through Cloudflare Access and Tunnel. Its implementations use ttyd and tmux to provide terminal views and reconnectable sessions.
 
 ## Repository status
 
-The repository contains a reconstructed, isolated development candidate in [client](client/README.md) and `runtime/`. The running Mac implementation is maintained separately under `~/.local/share/mba-browser-terminal/`; it is not automatically synchronized with this candidate. A production deployment or complete behavior parity has not been verified.
+The repository contains a [Linux implementation snapshot](docs/linux-implementation.md) and a reconstructed Mac development candidate in [client](client/README.md) and `runtime/`. The running Linux and Mac deployments are maintained separately and are not automatically synchronized with this repository. Importing these files did not deploy them; complete behavior parity remains unverified.
 
-The observed Mac environment on 2026-11-04 used ttyd 1.7.7, tmux 3.6a, and cloudflared 2025.11.1. These are observations, not repository-pinned dependencies. Windows, WSL, and Xubuntu are potential future targets, not verified deployments.
+On 2026-11-04, the observed Linux environment used Ubuntu 24.04 ARM64, ttyd 1.7.4, tmux 3.4, cloudflared 2026.10.0 and Node.js 22.23.3. The observed Mac environment used ttyd 1.7.7, tmux 3.6a and cloudflared 2025.11.1. These are observations, not repository-pinned dependencies. Windows and WSL remain unverified.
 
 ## Documentation
 
 - [Task backlog and acceptance criteria](TASK.md)
 - [Architecture and trust boundaries](docs/architecture.md)
-- [Source inventory and reconstruction](docs/source-inventory.md)
+- [Mac source inventory and reconstruction](docs/source-inventory.md)
+- [Linux source inventory and evidence](docs/linux-implementation.md)
 - [Operations and verification](docs/operations.md)
 - [Improvement roadmap and research](docs/improvement-roadmap.md)
 - [Documentation standard](docs/documentation-standard.md)
@@ -23,4 +24,4 @@ The KB-MCP `cloudflare-web-terminal` Skill v1.1.0 contains the reusable operatin
 
 An interactive terminal can act with the permissions of its operating-system account. Restrict access to explicitly authorized identities and protect every terminal and upload route. Preserve existing sessions and jobs when investigating or changing the service. Never commit credentials, tokens, private host configuration, logs, uploaded images, or terminal contents.
 
-Documentation does not authorize a deployment, service restart, permission change, or exposure of another machine.
+The Linux UI itself does not authenticate users or verify Access JWTs. It requires a separately configured, verified Access-protected tunnel and a private origin socket; never expose it directly. Documentation and source do not authorize deployment, service restart, permission change, or exposure of another machine.
