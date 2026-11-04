@@ -22,14 +22,13 @@ export class Terminal extends Component<Props, State> {
         this.xterm = new Xterm(props, this.showModal);
     }
 
-    async componentDidMount() {
-        await this.xterm.refreshToken();
+    componentDidMount() {
         this.xterm.open(this.container);
-        this.xterm.connect();
+        this.xterm.start();
     }
 
     componentWillUnmount() {
-        this.xterm.dispose();
+        this.xterm.destroy();
     }
 
     render({ id }: Props, { modal }: State) {

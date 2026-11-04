@@ -16,9 +16,28 @@ interface TtydTerminal extends Terminal {
     fit(): void;
 }
 
+type TokenResult = 'ok' | 'auth' | 'unavailable';
+type ConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'auth-required';
+interface ConnectionLifecycle {
+    start(): void;
+    socketOpened(): void;
+    socketClosed(): void;
+    retry(): void;
+    stop(): void;
+}
+
 declare global {
     interface Window {
         term: TtydTerminal;
+        mbaTerminalReady?: () => boolean;
+        webTerminalConnectionState?: ConnectionState;
+        webTerminalRetry?: () => void;
+        WebTerminalConnectionLifecycle: new (options: {
+            requestToken: () => Promise<TokenResult>;
+            openSocket: () => void;
+            onState: (state: ConnectionState) => void;
+            onInput: (enabled: boolean) => void;
+        }) => ConnectionLifecycle;
     }
 }
 
@@ -96,7 +115,7 @@ export class Xterm {
     private resizeOverlay = true;
     private reconnect = true;
     private doReconnect = true;
-    private mbaReconnectAttempts = 0;
+    private connection?: ConnectionLifecycle;
 
     private writeFunc = (data: ArrayBuffer) => this.writeData(new Uint8Array(data));
 
@@ -112,6 +131,16 @@ export class Xterm {
         this.disposables.length = 0;
     }
 
+    destroy() {
+        this.connection?.stop();
+        this.dispose();
+        this.socket?.close();
+    }
+
+    start() {
+        this.connection?.start();
+    }
+
     @bind
     private register<T extends IDisposable>(d: T): T {
         this.disposables.push(d);
@@ -124,15 +153,27 @@ export class Xterm {
     }
 
     @bind
-    public async refreshToken() {
+    public async refreshToken(): Promise<TokenResult> {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 10000);
         try {
-            const resp = await fetch(this.options.tokenUrl);
-            if (resp.ok) {
-                const json = await resp.json();
-                this.token = json.token;
+            const resp = await fetch(this.options.tokenUrl, {
+                cache: 'no-store',
+                redirect: 'manual',
+                signal: controller.signal,
+            });
+            if (resp.status === 401 || resp.status === 403 || resp.type === 'opaqueredirect' || resp.redirected) {
+                return 'auth';
             }
-        } catch (e) {
-            console.error(`[ttyd] fetch ${this.options.tokenUrl}: `, e);
+            if (!resp.ok) return 'unavailable';
+            const json = await resp.json();
+            if (typeof json.token !== 'string') return 'unavailable';
+            this.token = json.token;
+            return 'ok';
+        } catch {
+            return 'unavailable';
+        } finally {
+            window.clearTimeout(timeout);
         }
     }
 
@@ -151,6 +192,20 @@ export class Xterm {
     public open(parent: HTMLElement) {
         this.terminal = new Terminal(this.options.termOptions);
         const { terminal, fitAddon, overlayAddon } = this;
+        this.connection = new window.WebTerminalConnectionLifecycle({
+            requestToken: this.refreshToken,
+            openSocket: this.connect,
+            onInput: enabled => (terminal.options.disableStdin = !enabled),
+            onState: state => {
+                window.webTerminalConnectionState = state;
+                window.dispatchEvent(new CustomEvent('web-terminal-connection', { detail: state }));
+                if (state === 'reconnecting') overlayAddon.showOverlay('Reconnecting...');
+                if (state === 'offline') overlayAddon.showOverlay('Connection unavailable');
+                if (state === 'auth-required') overlayAddon.showOverlay('Sign-in may be required');
+            },
+        });
+        window.mbaTerminalReady = () => this.socket?.readyState === WebSocket.OPEN;
+        window.webTerminalRetry = () => this.connection?.retry();
         window.term = terminal as TtydTerminal;
         window.term.fit = () => {
             this.fitAddon.fit();
@@ -254,10 +309,8 @@ export class Xterm {
     @bind
     private onSocketOpen() {
         console.log('[ttyd] websocket connection opened');
-        this.mbaReconnectAttempts = 0;
-        Object.assign(window, { mbaTerminalReady: () => this.socket?.readyState === WebSocket.OPEN });
-
         const { textEncoder, terminal, overlayAddon } = this;
+        this.fitAddon.fit();
         const msg = JSON.stringify({ AuthToken: this.token, columns: terminal.cols, rows: terminal.rows });
         this.socket?.send(textEncoder.encode(msg));
 
@@ -271,6 +324,7 @@ export class Xterm {
 
         this.doReconnect = this.reconnect;
         this.initListeners();
+        this.connection?.socketOpened();
         terminal.focus();
     }
 
@@ -278,27 +332,8 @@ export class Xterm {
     private onSocketClose(event: CloseEvent) {
         console.log(`[ttyd] websocket connection closed with code: ${event.code}`);
 
-        const { refreshToken, connect, overlayAddon } = this;
         this.dispose();
-
-        this.mbaReconnectAttempts++;
-        if (this.mbaReconnectAttempts <= 6) {
-            overlayAddon.showOverlay('Reconnecting...');
-            const delay = Math.min(1000 * 2 ** (this.mbaReconnectAttempts - 1), 15000);
-            setTimeout(() => refreshToken().then(connect), delay);
-        } else {
-            const { terminal } = this;
-            const keyDispose = terminal.onKey(e => {
-                const event = e.domEvent;
-                if (event.key === 'Enter') {
-                    keyDispose.dispose();
-                    this.mbaReconnectAttempts = 0;
-                    overlayAddon.showOverlay('Reconnecting...');
-                    refreshToken().then(connect);
-                }
-            });
-            overlayAddon.showOverlay('Press ⏎ to Reconnect');
-        }
+        this.connection?.socketClosed();
     }
 
     @bind

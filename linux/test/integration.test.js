@@ -7,6 +7,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -72,7 +73,34 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     const name = JSON.parse(created.body).name;
     assert.match(name, /^web-[a-f0-9]{12}$/);
     assert.equal((await request('GET', '/terminal/invalid')).status, 404);
-    assert.equal((await request('GET', '/terminal/shared')).status, 200);
+    const terminalPage = await request('GET', '/terminal/shared');
+    assert.equal(terminalPage.status, 200);
+    const shim = terminalPage.body.match(/<head><script>([\s\S]*?)<\/script>/)?.[1];
+    assert.ok(shim, 'the ttyd page must include the connection-state shim');
+    const handlers = {}, messages = [], timers = [];
+    const overlay = { childNodes: [{ nodeType: 3 }], textContent: 'Press ⏎ to Reconnect' };
+    overlay.firstChild = overlay.childNodes[0];
+    const unrelated = { childNodes: [{ nodeType: 1 }, { nodeType: 1 }], textContent: 'Press ⏎ to Reconnect' };
+    const window = {
+      WebSocket: class { addEventListener(name, callback) { handlers[name] = callback; } },
+      term: { options: { disableStdin: false } },
+      parent: { postMessage: (message, target) => messages.push({ state: message.state, target }) },
+      location: { origin: 'http://fixture.test' },
+    };
+    vm.runInNewContext(shim, { window, document: { querySelectorAll: () => [overlay, unrelated] }, Node: { TEXT_NODE: 3 }, setTimeout: fn => timers.push(fn) });
+    new window.WebSocket('ws://fixture.test');
+    assert.equal(window.term.options.disableStdin, true);
+    assert.equal(messages.at(-1).state, 'Connecting');
+    handlers.open();
+    assert.equal(window.term.options.disableStdin, false);
+    assert.equal(messages.at(-1).state, 'Connected');
+    handlers.close();
+    assert.equal(window.term.options.disableStdin, true);
+    assert.equal(messages.at(-1).state, 'Disconnected');
+    assert.ok(messages.every(message => message.target === 'http://fixture.test'));
+    timers.forEach(fn => fn());
+    assert.equal(overlay.textContent, 'Use Retry in the toolbar');
+    assert.equal(unrelated.textContent, 'Press ⏎ to Reconnect');
     assert.equal(await upgrade('http://other.test'), 'rejected');
     assert.equal(await upgrade('http://fixture.test'), 101);
 

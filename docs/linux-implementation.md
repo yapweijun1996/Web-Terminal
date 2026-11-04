@@ -10,13 +10,15 @@ On 2026-11-04, the owner-operated Ubuntu 24.04 ARM64 host had a working Linux te
 | `linux/ui/index.html`, `app.js`, `style.css` | Browser tab controls, connection indication, hide/restore and return-to-latest control. |
 | `linux/ui/attach-tab.sh` | Attach a ttyd client to the corresponding persistent tmux session. |
 | `linux/legacy-attach.sh` | Earlier grouped-session attachment used by the existing terminal service. |
-| `linux/test/integration.test.js` | Disposable server, ttyd and tmux integration fixture; no live sessions or Cloudflare settings. |
+| `linux/test/` | Disposable server, ttyd and tmux integration fixture and browser-control unit checks; no live sessions or Cloudflare settings. |
 
 The server obtains ttyd's embedded terminal client at runtime and adds a small connection-status hook. The embedded client is not vendored here. The snapshot expects `tmux` on `PATH` and ttyd at `/usr/bin/ttyd`; it has no npm dependencies or build step. Observed host versions were Node.js 22.23.3, ttyd 1.7.4, tmux 3.4 and cloudflared 2026.10.0. These versions are observations, not pinned dependencies or compatibility guarantees.
 
 ## Session and scroll behavior
 
 The UI lists the existing shared session and its own named sessions. Each new tab creates a distinct tmux session. Hiding a tab detaches its view without killing the session; Restore tabs makes hidden tabs visible in that browser. Session state is managed by tmux, while hidden-tab preferences are browser-local. The proxy enables tmux mouse mode for a session. The Latest control exits tmux copy mode; it does not submit input or assert that an interactive application's own transcript is at the end.
+
+The candidate displays connection state on desktop and narrow screens. When the session list or terminal connection fails, Retry reloads the session list or reconnects the active view to the same session; it does not create a session or submit input. A sign-in message is tentative because a failed connection can have other causes. Connection status does not report background-job health.
 
 ## Security boundary
 
@@ -29,7 +31,7 @@ The UI and ttyd do **not** independently authenticate the browser or verify a Cl
 From the repository root on Linux with Node.js, tmux and `/usr/bin/ttyd` installed:
 
 ```sh
-node --test linux/test/integration.test.js
+node --test linux/test/integration.test.js linux/test/connection-ui.test.js
 ```
 
 The test starts a dedicated disposable tmux server and private sockets, tests session creation and origin rejection, checks a ttyd WebSocket upgrade, and verifies a fixture job survives UI restart. It cleans up only the fixture it creates. It does not test Cloudflare Access or the live deployment.

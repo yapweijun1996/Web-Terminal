@@ -27,6 +27,10 @@ Record the date, device, versions, test identity, test method, result, and remai
 
 For offline coding-TUI fixtures, independently isolate and verify all network transports before submitting a synthetic prompt. A dummy credential or a changed HTTP base URL does not by itself establish that WebSocket traffic is offline.
 
+## Candidate connection recovery
+
+The repository candidates show connection state independently of background-job state. The Mac candidate pauses terminal input during reconnect, retries with a bounded delay, and offers Retry after recovery fails or sign-in may be required. A new Mac connection can select the workspace's default tmux window rather than the window previously viewed: check the active window and use Previous or Next to return to the intended job before typing. Jobs, drafts and tmux history belong to their respective panes, not to the browser connection. The Linux candidate offers Retry for an unavailable session list or disconnected active view. Retry reconnects the view; it does not submit a command or prove a background job is healthy. If a sign-in message appears, verify access in the browser before retrying. These behaviors have been exercised in isolated fixtures, not deployed live.
+
 ## Scroll and display triage
 
 Inspect in order: browser viewport and terminal grid, ttyd/client resize, tmux pane and copy mode, then the foreground application's own alternate-screen and mouse modes. An alternate screen is not proof of mouse capture, and tmux history is not necessarily an application's transcript. Never translate all wheel events into arrow keys: that can alter a command or prompt.

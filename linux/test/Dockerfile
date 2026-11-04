@@ -18,6 +18,6 @@ RUN test "$(uname -m)" = aarch64 \
 
 WORKDIR /workspace/linux
 COPY ui ./ui
-COPY test/integration.test.js ./test/integration.test.js
+COPY test/integration.test.js test/connection-ui.test.js ./test/
 USER node
-CMD ["node", "--test", "test/integration.test.js"]
+CMD ["node", "--test", "test/integration.test.js", "test/connection-ui.test.js"]

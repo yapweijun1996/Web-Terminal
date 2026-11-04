@@ -42,6 +42,7 @@ const baseConfig = {
         new CopyWebpackPlugin({
             patterns: [
                 { from: './favicon.png', to: '.' },
+                { from: './connection-lifecycle.js', to: '.' },
                 { from: './toolbar.css', to: '.' },
                 { from: './toolbar.js', to: '.' },
                 { from: './upload.css', to: '.' },

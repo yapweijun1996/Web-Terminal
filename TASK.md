@@ -31,9 +31,10 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-004: Make connection and recovery states clear
 
-- **Status:** Open
+- **Status:** Verified
 - **Scope:** Design connected, reconnecting, offline, and reauthentication states, with explicit recovery failure and manual retry. Distinguish browser connection state from task state and preserve input where supported.
 - **Acceptance:** Disconnect and reconnect an isolated fixture to the same job; verify unsent input and history and ensure no duplicate submission or automatic Enter. Clearly disclose when recovery cannot be established.
+- **Evidence (2026-11-04):** Isolated Mac and Linux Chrome/tmux fixtures exercised failed authentication, disconnection, retry, an existing job and an unsubmitted shell draft without automatic submission. The Mac fixture retained tmux history across reload; its new connection returned to the default window, and the original window was reached with the toolbar. The candidate explicitly tells users to check the Mac window after reconnecting; automatic restoration of the previous window is not implemented. The Mac token request timeout, bounded retries, paused input and Linux same-session retry were also tested. Neither candidate is deployed; physical devices and actual task health remain unverified.
 
 ### WT-005: Improve workspace navigation
 
@@ -79,6 +80,7 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 - **Status:** Open
 - **Scope:** Maintain an evidence-based matrix for browser/PTY dimensions, physical input, disconnect, sleep, logout, restart, and separately for Windows, WSL, and Xubuntu when available.
 - **Acceptance:** Each tested case records environment, trigger, job outcome, and reconnect behavior; untested cases remain explicitly unknown. No survival through reboot or platform support is implied without evidence.
+- **Display observation (2026-11-04):** In an isolated Linux Chromium emulation at 1280×800 and device scale factor 1, the terminal canvas appeared undersized in both the unmodified baseline and the connection-recovery candidate. A scale factor 2 emulation displayed normally. The cause and behavior on physical devices remain unverified; this does not establish a candidate regression.
 
 ### WT-012: Assess dependency upgrades
 

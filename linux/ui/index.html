@@ -14,7 +14,10 @@
     <button id="new-tab" type="button" title="New terminal" aria-label="New terminal">+</button>
     <button id="latest" type="button" title="Return to the latest output">Latest</button>
     <button id="restore" type="button" hidden>Restore tabs</button>
-    <span id="status" role="status"></span>
+    <div class="connection">
+      <span id="status" role="status" aria-live="polite" tabindex="-1"></span>
+      <button id="retry" type="button" hidden>Retry</button>
+    </div>
   </header>
   <main id="views"></main>
 </body>

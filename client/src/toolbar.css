@@ -32,6 +32,14 @@
     color: #12241b;
     border-color: #a0dbbf;
 }
+#connection-status {
+    flex: 0 0 auto;
+    color: #d5e4f0;
+    font-size: 12px;
+}
+#connection-retry[hidden] {
+    display: none;
+}
 #terminal-container {
     height: calc(100dvh - 56px) !important;
 }
