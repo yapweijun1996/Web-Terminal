@@ -8,9 +8,10 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-001: Verify the complete access boundary
 
-- **Status:** Open
+- **Status:** In progress
 - **Scope:** Inventory the terminal HTTP, WebSocket, and upload routes, including Linux image and receipt operations, and their actual Cloudflare Access policy and audience. Current inspected configuration is not end-to-end proof.
 - **Acceptance:** An approved identity succeeds; unauthenticated and unauthorized identities are denied for each route. Test expiry and revocation separately for new connections and existing WebSockets; record actual behavior and any gap without exposing credentials.
+- **Mac evidence (2026-11-04):** The Cloudflare dashboard showed an Access application with an email-based Allow policy; its policy tester reported an approved active identity. Separately, unauthenticated HTTPS requests to the page, token, ordinary WebSocket URL, and upload GET and empty POST were redirected to Access. The ordinary WebSocket request did not attempt an Upgrade. A GET in an existing browser profile displayed the upload service's expected method-rejection body; that is not a successful upload or proof of the request's identity. Unauthorized authenticated identities, actual WebSocket Upgrade, token expiry and revocation remain untested. See [architecture](docs/architecture.md) for evidence boundaries; do not publish identities, domains or audience values.
 
 ## P1 — Foundation and core experience
 
