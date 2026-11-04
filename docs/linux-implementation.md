@@ -29,6 +29,8 @@ The UI and ttyd do **not** independently authenticate the browser or verify a Cl
 
 `TERMINAL_TEST_HTTP=1` is only for a disposable local test fixture. Never use it on a live service. Private hostnames, Access settings, application audience, account details, credentials, logs, terminal output, uploads and user session data are deliberately not included in this repository. The snapshot is not an installer or production deployment recipe.
 
+The Linux candidate requires an absolute, owner-only runtime directory owned by the service user. It refuses to start if `ui.sock` already exists, preserving any existing listener or file. A graceful shutdown removes the socket. After an unclean shutdown, the owner must verify that no service still uses the path and assess the existing entry before removing a stale socket and restarting; do not remove an unknown file or an active service socket. These checks do not authenticate same-user processes or replace Cloudflare Access.
+
 ## Verification and limits
 
 From the repository root on Linux with Node.js, tmux and `/usr/bin/ttyd` installed:
