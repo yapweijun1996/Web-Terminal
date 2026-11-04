@@ -19,8 +19,16 @@ const scheme = process.env.TERMINAL_TEST_HTTP === '1' ? 'http' : 'https';
 const children = new Map();
 const sessionPattern = /^(shared|web-[a-f0-9]{12})$/;
 const token = crypto.randomBytes(32).toString('hex');
+if (!path.isAbsolute(runtime)) throw new Error('Runtime directory must be absolute');
 fs.mkdirSync(runtime, { recursive: true, mode: 0o700 });
-try { fs.unlinkSync(socket); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+const runtimeStat = fs.lstatSync(runtime);
+if (!runtimeStat.isDirectory() || runtimeStat.isSymbolicLink() || runtimeStat.uid !== process.getuid() || (runtimeStat.mode & 0o077) !== 0) {
+  throw new Error('Runtime directory must be private and owned by the current user');
+}
+try {
+  fs.lstatSync(socket);
+  throw new Error('UI socket path already exists; verify its owner before removal');
+} catch (e) { if (e.code !== 'ENOENT') throw e; }
 
 function tmux(args) {
   return execFileSync('tmux', ['-L', tmuxSocket, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
