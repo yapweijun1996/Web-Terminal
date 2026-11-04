@@ -59,15 +59,16 @@ test('bound upload targets survive window switching and fail closed on pane or s
       await delay(25);
     }
     assert.ok(session, 'the view must correspond to an attached ttyd session');
-    const pane = tmux('display-message', '-p', '-t', `=${session}:`, '#{pane_id}');
+    const [sessionId, pane, serverPid] = tmux('display-message', '-p', '-t', `=${session}:`, '#{session_id}|#{pane_id}|#{pid}').split('|');
     const other = tmux('new-window', '-d', '-P', '-F', '#{pane_id}', '-t', `=${session}`, 'sh');
     const target = createUploadTargets(server);
-    assert.equal((await target.capture(view, session, '%999999')).target, null, 'unknown panes fail closed');
-    assert.equal((await target.capture(randomUUID(), session, pane)).target, null, 'another view cannot select this session');
+    assert.equal((await target.capture(view, session, sessionId, '%999999', serverPid)).target, null, 'unknown panes fail closed');
+    assert.equal((await target.capture(randomUUID(), session, sessionId, pane, serverPid)).target, null, 'another view cannot select this session');
+    assert.equal((await target.capture(view, session, sessionId, pane, '999999')).target, null, 'stale tmux server metadata fails closed');
     // The server receives the request after the active window has changed;
     // it must bind the pane the browser had already observed, not the new one.
     tmux('select-window', '-t', other);
-    const captured = await target.capture(view, session, pane);
+    const captured = await target.capture(view, session, sessionId, pane, serverPid);
     assert.ok(captured.target, 'an attached view should have a captured pane');
     assert.equal(captured.target.windowIndex, '0');
     const savedPath = "/tmp/image with 'quotes'.png";
@@ -85,13 +86,13 @@ test('bound upload targets survive window switching and fail closed on pane or s
     assert.ok(!otherOutput.includes(savedPath), 'a newly active pane must not receive the path');
     await assert.rejects(target.insert(captured.ticket), /unavailable/, 'a ticket cannot insert twice');
 
-    const lost = await target.capture(view, session, other);
+    const lost = await target.capture(view, session, sessionId, other, serverPid);
     assert.equal(target.bind(lost.ticket, savedPath), true);
     tmux('kill-pane', '-t', other);
     await assert.rejects(target.insert(lost.ticket), 'a deleted pane must not redirect insertion');
     assert.equal(tmux('capture-pane', '-p', '-t', pane), originalOutput, 'loss must not change another pane');
 
-    const disconnected = await target.capture(view, session, pane);
+    const disconnected = await target.capture(view, session, sessionId, pane, serverPid);
     assert.equal(target.bind(disconnected.ticket, savedPath), true);
     socket.close();
     for (let i = 0; i < 100; i++) {

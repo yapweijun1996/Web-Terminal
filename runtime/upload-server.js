@@ -91,7 +91,7 @@ const server = http.createServer((req, res) => {
       controlProcessing = true;
       try {
         const result = action === 'capture'
-          ? await targets.capture(req.headers['x-terminal-view'], req.headers['x-terminal-session'], req.headers['x-terminal-pane'])
+          ? await targets.capture(req.headers['x-terminal-view'], req.headers['x-terminal-session'], req.headers['x-terminal-session-id'], req.headers['x-terminal-pane'], req.headers['x-terminal-server-pid'])
           : action === 'result'
             ? targets.result(req.headers['x-terminal-target'])
             : await targets.insert(req.headers['x-terminal-target']);

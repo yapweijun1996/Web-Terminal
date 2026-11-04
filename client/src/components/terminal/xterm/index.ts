@@ -31,7 +31,7 @@ declare global {
         term: TtydTerminal;
         mbaTerminalReady?: () => boolean;
         webTerminalViewId?: string;
-        webTerminalTarget?: { session: string; pane: string };
+        webTerminalTarget?: { session: string; sessionId: string; pane: string; serverPid: string };
         webTerminalConnectionState?: ConnectionState;
         webTerminalRetry?: () => void;
         WebTerminalConnectionLifecycle: new (options: {
@@ -227,13 +227,19 @@ export class Xterm {
         const { terminal, fitAddon, overlayAddon, register, sendData } = this;
         register(
             terminal.onTitleChange(data => {
-                const match = /^__WEB_TERMINAL_TARGET__\|(view-[a-f0-9-]{36}-\d+)\|(%\d+)\|([\s\S]*)$/.exec(data);
+                const match =
+                    /^__WEB_TERMINAL_TARGET__\|(view-[a-f0-9-]{36}-\d+)\|(\$\d+)\|(%\d+)\|(\d+)\|([\s\S]*)$/.exec(data);
                 if (match && window.webTerminalViewId && match[1].startsWith(`view-${window.webTerminalViewId}-`)) {
-                    window.webTerminalTarget = { session: match[1], pane: match[2] };
+                    window.webTerminalTarget = {
+                        session: match[1],
+                        sessionId: match[2],
+                        pane: match[3],
+                        serverPid: match[4],
+                    };
                 } else {
                     window.webTerminalTarget = undefined;
                 }
-                const title = match ? match[3] : data;
+                const title = match ? match[5] : data;
                 if (title && title !== '' && !this.titleFixed) {
                     document.title = title + ' | ' + this.title;
                 }

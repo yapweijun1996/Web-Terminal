@@ -7,6 +7,7 @@ On 2026-11-04, the owner-operated Ubuntu 24.04 ARM64 host had a working Linux te
 | Source | Responsibility |
 | --- | --- |
 | `linux/ui/server.js` | Private Unix-socket UI, per-session ttyd processes, HTTP/WebSocket proxy and session operations. |
+| `linux/ui/image-receipts.js` | Short-lived image receipts and explicit, pane-bound insertion for the development candidate. |
 | `linux/ui/index.html`, `app.js`, `style.css` | Browser tab controls, connection indication, hide/restore and return-to-latest control. |
 | `linux/ui/attach-tab.sh` | Attach a ttyd client to the corresponding persistent tmux session. |
 | `linux/legacy-attach.sh` | Earlier grouped-session attachment used by the existing terminal service. |
@@ -51,8 +52,8 @@ Authenticated production-browser behavior, denial for an unauthorized identity, 
 
 ## Browser clipboard and image transfer
 
-The Linux UI handles Ctrl+V in the browser before it reaches terminal applications. PNG, JPEG and WebP files can be pasted or dropped into a terminal view; the UI saves the file in a private upload directory and pastes its path into the original view without submitting it. If the view changes, reloads, or loses focus while the upload is pending, the UI instead offers the saved path for copying. An inserted path is not proof that an application accepted an image attachment.
+The Linux UI handles Ctrl+V in the browser before it reaches terminal applications. PNG, JPEG and WebP files can be pasted or dropped into a terminal view. The candidate saves each file and displays its path and last tmux-confirmed window and pane. After the user checks the target, an explicit control can insert the path into that captured pane without sending Enter; switching to another pane cannot redirect it. If the view or target is unavailable, copy the retained path instead. A path sent to a pane is not proof that an application accepted an image attachment.
 
 For copying text, the UI receives tmux OSC 52 copy requests from the active terminal. A recent pointer or copy-key gesture allows it to write to the browser clipboard; otherwise it offers a Copy selection button. Browser clipboard permissions and focus can prevent automatic copying. Clipboard contents are held in the page while awaiting a copy action and are not logged or stored on the server by this bridge.
 
-Images are retained until the owner removes them. Requests require the same origin and per-process mutation token as session changes, and the tunnel must validate Access for the upload route. Each file is limited to 10 MiB; at most three uploads are processed concurrently, with a 30-second request deadline and a storage limit of 500 files or 500 MiB. The server checks file signatures and basic structure; it does not fully decode images. The fixture redirects uploads to its own temporary directory.
+Images are retained until the owner removes them. Requests require the same origin and per-process mutation token as session changes, and the tunnel must validate Access for the image and receipt routes. A receipt can recover a saved path for ten minutes while the same service and page remain available; a service restart loses server receipts and a page reload loses their references. Each file is limited to 10 MiB; at most three uploads are processed concurrently, with a 30-second request deadline and a storage limit of 500 files or 500 MiB. The server checks file signatures and basic structure; it does not fully decode images. The fixture redirects uploads to its own temporary directory.

@@ -9,7 +9,7 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 ### WT-001: Verify the complete access boundary
 
 - **Status:** Open
-- **Scope:** Inventory the terminal HTTP, WebSocket, and upload routes and their actual Cloudflare Access policy and audience. Current inspected configuration is not end-to-end proof.
+- **Scope:** Inventory the terminal HTTP, WebSocket, and upload routes, including Linux image and receipt operations, and their actual Cloudflare Access policy and audience. Current inspected configuration is not end-to-end proof.
 - **Acceptance:** An approved identity succeeds; unauthenticated and unauthorized identities are denied for each route. Test expiry and revocation separately for new connections and existing WebSockets; record actual behavior and any gap without exposing credentials.
 
 ## P1 — Foundation and core experience
@@ -44,12 +44,12 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-006: Bind upload completion to the intended view
 
-- **Status:** In progress
+- **Status:** Verified
 - **Scope:** First reproduce the hypothesis that changing views during an upload may change the insertion target. If confirmed, retain the original target and provide an explicit copy or retry path when it is unavailable.
 - **Acceptance:** Tests for view switching, disconnect, and target loss never silently insert into a different view; a saved path remains available and no Enter is sent. A path alone is not evidence of an accepted CLI attachment.
 - **Baseline evidence (2026-11-04):** In a disposable Mac ttyd/tmux and Chrome fixture, a delayed simulated upload began in one pane; after switching to a new window, completing it inserted the path into the new pane. No Enter was sent. The result confirms that browser focus and connection readiness do not identify the original tmux target.
 - **Candidate evidence (2026-11-04):** Isolated Chrome, ttyd and tmux tests exercised switching, pane loss, disconnect, and recovery after an interrupted upload response. The first candidate queried the current pane over HTTP and failed a simulated input-delay race. The revised candidate snapshots the last tmux-confirmed pane seen by the browser, validates its membership server-side and requires explicit insertion. With the HTTP capture held until after a window switch, insertion still reached the captured pane and did not send Enter. A switch not yet reflected by tmux is not a confirmed target; the interface asks the user to check the window and pane. Receipts expire after ten minutes or a service restart, and the page loses its reference on reload. Native picker, clipboard and drag/drop device workflows and live deployment remain unverified.
-- **Linux follow-up:** A concurrent upstream change added Linux image transfer. Its target-switching, disconnect and target-loss behavior must be verified against the same acceptance criteria.
+- **Linux evidence (2026-11-04):** A concurrent upstream change added image transfer. In an isolated Chrome and ARM64 tmux fixture, its original code inserted into a different pane when the pane changed within one iframe. The revised candidate binds the last confirmed pane and requires explicit insertion; browser and integration checks covered pane switching and loss, an interrupted response with path recovery, and a disconnected view without an insert. Multiple result rows retain their paths while the page remains open. Receipt and device limitations are the same as for the Mac candidate; the change is not deployed.
 
 ### WT-007: Verify upload resource limits under interruption
 

@@ -20,7 +20,8 @@
       <button id="retry" type="button" hidden>Retry</button>
     </div>
   </header>
-  <div id="image-result" hidden><label>Saved image path <input id="image-path" readonly></label><button id="copy-image-path" type="button">Copy path</button></div>
+  <div id="image-notice" role="status" aria-live="polite" hidden></div>
+  <section id="image-results" aria-label="Saved image paths"></section>
   <main id="views"></main>
 </body>
 </html>

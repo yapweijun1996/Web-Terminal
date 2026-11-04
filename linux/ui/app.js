@@ -6,9 +6,8 @@ const retry = document.querySelector('#retry');
 const restore = document.querySelector('#restore');
 const newTab = document.querySelector('#new-tab');
 const latest = document.querySelector('#latest');
-const imageResult = document.querySelector('#image-result');
-const imagePath = document.querySelector('#image-path');
-const copyImagePath = document.querySelector('#copy-image-path');
+const imageResults = document.querySelector('#image-results');
+const imageNotice = document.querySelector('#image-notice');
 const copySelection = document.querySelector('#copy-selection');
 const storageKey = 'linux-web-terminal-hidden-v1';
 let hidden;
@@ -80,31 +79,80 @@ function installDrop(target, getTarget) {
   }, true);
 }
 async function uploadImage(file, name, iframe) {
-  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) { status.textContent = 'Use a PNG, JPEG or WebP image'; return; }
-  if (!file.size || file.size > 10 * 1024 * 1024) { status.textContent = 'Image must be 10 MB or less'; return; }
-  const version = focusVersion;
-  const targetDocument = iframe.contentDocument;
-  status.textContent = 'Uploading image';
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) { showImageNotice('Use a PNG, JPEG or WebP image'); return; }
+  if (!file.size || file.size > 10 * 1024 * 1024) { showImageNotice('Image must be 10 MB or less'); return; }
+  const observed = connections.get(name) === 'Connected' ? iframe.contentWindow?.webTerminalTarget : null;
+  const input = observed?.session === name ? { ...observed } : null;
+  const controlHeaders = { 'Content-Type': 'application/json', 'X-Terminal-Request': token };
+  let receipt;
   try {
-    const response = await fetch('/api/images', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Terminal-Request': token }, body: file });
-    if (!response.ok) throw Error('Upload failed');
+    showImageNotice('Identifying image target');
+    const prepared = await fetch('/api/images/prepare', { method: 'POST', headers: { ...controlHeaders,
+      'X-Terminal-Session': input?.session || '', 'X-Terminal-Session-Id': input?.sessionId || '',
+      'X-Terminal-Pane': input?.pane || '', 'X-Terminal-Server-Pid': input?.serverPid || '' } });
+    if (!prepared.ok) throw Error('Receipt unavailable');
+    receipt = await prepared.json();
+    if (!/^[a-f0-9]{48}$/.test(receipt.ticket)) throw Error('Invalid receipt');
+    showImageNotice('Uploading image');
+  } catch { showImageNotice('Unable to start upload safely; check the connection and retry'); return; }
+  try {
+    const response = await fetch('/api/images', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-Terminal-Request': token, 'X-Image-Receipt': receipt.ticket }, body: file });
+    if (!response.ok) { showImageNotice('Image upload failed'); return; }
     const data = await response.json();
-    imagePath.value = data.path; imageResult.hidden = false;
-    if (frames.get(name) !== iframe || iframe.contentDocument !== targetDocument || active !== name || focusVersion !== version || document.activeElement !== iframe) {
-      status.textContent = 'Image saved; copy its path into the intended terminal'; return;
-    }
-    const textarea = iframe.contentDocument?.querySelector('.xterm-helper-textarea');
-    if (!textarea) { status.textContent = 'Image saved; copy its path into the terminal'; return; }
-    const transfer = new DataTransfer(); transfer.setData('text/plain', data.path);
-    textarea.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }));
-    status.textContent = 'Image saved and path pasted';
-  } catch { status.textContent = 'Image upload failed'; }
+    if (typeof data.path !== 'string' || !/^\/[^\x00-\x1f]*\/[a-f0-9]{32}\.(png|jpg|webp)$/.test(data.path)) throw Error('Invalid image path');
+    showSavedImage(data.path, receipt, name, iframe);
+  } catch { showImageRecovery(receipt, name, iframe); }
 }
 installDrop(window, () => ({ name: active, iframe: frames.get(active) }));
-copyImagePath.addEventListener('click', async () => {
-  try { await navigator.clipboard.writeText(imagePath.value); status.textContent = 'Image path copied'; }
-  catch { imagePath.select(); status.textContent = 'Select and copy the image path'; }
-});
+function showImageNotice(text) { imageNotice.textContent = text; imageNotice.hidden = !text; }
+function showSavedImage(path, receipt, name, iframe) {
+  const item = document.createElement('div');
+  const message = document.createElement('div'); message.setAttribute('role', 'status');
+  message.textContent = receipt.target
+    ? `Saved image. Captured ${label(name)}, window ${receipt.target.windowIndex}, pane ${receipt.target.paneIndex}. Check before inserting.`
+    : 'Image saved. Target unavailable; copy its path.';
+  const field = document.createElement('input'); field.readOnly = true; field.value = path; field.setAttribute('aria-label', 'Saved image path');
+  const copy = document.createElement('button'); copy.type = 'button'; copy.textContent = 'Copy path';
+  copy.onclick = async () => {
+    try { await navigator.clipboard.writeText(path); message.textContent = 'Image path copied'; }
+    catch { field.focus(); field.select(); message.textContent = 'Select and copy the image path'; }
+  };
+  const dismiss = document.createElement('button'); dismiss.type = 'button'; dismiss.textContent = 'Dismiss'; dismiss.onclick = () => item.remove();
+  item.append(message, field, copy, dismiss);
+  if (receipt.target) {
+    const insert = document.createElement('button'); insert.type = 'button'; insert.textContent = 'Insert into captured pane';
+    insert.onclick = async () => {
+      if (frames.get(name) !== iframe || connections.get(name) !== 'Connected') { message.textContent = 'The captured view is unavailable. Copy the path.'; return; }
+      insert.disabled = true;
+      try {
+        const response = await fetch('/api/images/insert', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Terminal-Request': token, 'X-Image-Receipt': receipt.ticket } });
+        message.textContent = response.ok ? 'Path sent to the captured pane. Check it before continuing.' : 'Insertion not confirmed. Check the captured pane; the path is available to copy.';
+      } catch { message.textContent = 'Insertion result unknown. Check the captured pane before retrying; the path is available to copy.'; }
+    };
+    item.append(insert);
+  }
+  imageResults.append(item); showImageNotice('');
+}
+function showImageRecovery(receipt, name, iframe) {
+  showImageNotice('');
+  const item = document.createElement('div'), message = document.createElement('div'), recover = document.createElement('button');
+  message.setAttribute('role', 'status'); message.textContent = 'Upload interrupted. Recover the saved path within ten minutes.';
+  recover.type = 'button'; recover.textContent = 'Recover saved path';
+  recover.onclick = async () => {
+    recover.disabled = true;
+    try {
+      const response = await fetch('/api/images/result', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Terminal-Request': token, 'X-Image-Receipt': receipt.ticket } });
+      if (!response.ok) throw Error('Receipt unavailable');
+      const data = await response.json();
+      if (data.state === 'saved' && typeof data.path === 'string' && /^\/[^\x00-\x1f]*\/[a-f0-9]{32}\.(png|jpg|webp)$/.test(data.path)) {
+        showSavedImage(data.path, data.attempted ? { ...receipt, target: null } : receipt, name, iframe); item.remove(); return;
+      }
+      message.textContent = data.state === 'failed' ? 'The image was not saved. Upload again.' : 'The save is not confirmed yet. Try recovery again.';
+    } catch { message.textContent = 'Recovery unavailable. Check the connection and retry; receipts expire after ten minutes.'; }
+    finally { recover.disabled = false; }
+  };
+  item.append(message, recover); imageResults.append(item);
+}
 async function copyTerminalSelection(selection) {
   try {
     await navigator.clipboard.writeText(selection.text);

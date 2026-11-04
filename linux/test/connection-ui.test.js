@@ -25,7 +25,7 @@ class Element {
 }
 
 test('session auth failure and iframe disconnect offer safe explicit recovery', async () => {
-  const nodes = Object.fromEntries(['tabs', 'views', 'status', 'retry', 'restore', 'new-tab', 'latest', 'image-result', 'image-path', 'copy-image-path', 'copy-selection'].map(id => [id, new Element()]));
+  const nodes = Object.fromEntries(['tabs', 'views', 'status', 'retry', 'restore', 'new-tab', 'latest', 'image-results', 'image-notice', 'copy-selection'].map(id => [id, new Element()]));
   const document = { querySelector: selector => nodes[selector.slice(1)], createElement: tag => new Element(tag) };
   const listeners = {};
   const window = { addEventListener: (name, handler) => { listeners[name] = handler; } };

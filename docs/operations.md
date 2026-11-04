@@ -35,6 +35,8 @@ The repository candidates show connection state independently of background-job 
 
 The Mac candidate saves an image and shows its path, the last tmux-confirmed window and pane, and an explicit insertion control. Check that label before inserting: a window switch still in flight has not yet been confirmed. Insertion targets the captured pane, even if another pane is now visible, and sends no Enter. If metadata, the original session, or the pane is unavailable, copy the saved path instead. A path being sent does not establish that a TUI accepted an attachment.
 
+The Linux candidate follows the same confirmation and captured-pane behavior for image paste and drop. It keeps separate result rows for concurrent images. Its ttyd proxy, tmux title settings, receipt service and browser UI are a compatible set; its image and receipt endpoints must all remain behind the verified Access boundary. A disconnected or replaced view requires copying the saved path instead of automatic insertion.
+
 An interrupted HTTP response can be recovered for ten minutes while the same upload service and page remain available. Receipts are in memory and do not survive service restart; the page also loses its receipt reference on reload. Retain or copy a displayed path before leaving the page. If a receipt cannot be obtained, the candidate does not start an upload. The client, ttyd argument validation, tmux configuration, and upload service must be reviewed and deployed as a compatible set. The upload service needs the same dedicated `WEB_TERMINAL_TMUX_SERVER` value as the terminal service for target capture; without it, saving and copying work but pane insertion is unavailable. No live deployment is implied.
 
 ## Scroll and display triage

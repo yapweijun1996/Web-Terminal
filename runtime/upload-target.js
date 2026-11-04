@@ -33,13 +33,14 @@ function createUploadTargets(server, tmux = 'tmux') {
     return tickets.get(id) || null;
   };
   return {
-    async capture(view, session, pane) {
+    async capture(view, session, expectedSessionId, pane, serverPid) {
       prune();
       if (tickets.size >= maxTickets) throw new Error('Target capture unavailable');
       let captured = null;
       if (typeof view === 'string' && viewPattern.test(view) && typeof session === 'string' &&
           session.startsWith(`view-${view}-`) && /^\d+$/.test(session.slice(`view-${view}-`.length)) &&
-          typeof pane === 'string' && /^%\d+$/.test(pane)) {
+          typeof expectedSessionId === 'string' && /^\$\d+$/.test(expectedSessionId) &&
+          typeof pane === 'string' && /^%\d+$/.test(pane) && typeof serverPid === 'string' && /^\d+$/.test(serverPid)) {
         try {
           const sessions = (await command('list-sessions', '-F', '#{session_name}|#{session_attached}')).trim().split('\n');
           const prefix = `view-${view}-`;
@@ -48,12 +49,11 @@ function createUploadTargets(server, tmux = 'tmux') {
           if (matches.length === 1 && matches[0][0] === session) {
             const sessionId = (await command('display-message', '-p', '-t', `=${session}:`, '#{session_id}')).trim();
             const panes = (await command('list-panes', '-s', '-t', `=${session}`,
-              '-F', '#{pane_id}|#{window_index}|#{pane_index}')).trim().split('\n');
-            const details = panes.map(line => line.split('|')).find(([id]) => id === pane) || [];
+              '-F', '#{pane_id}|#{window_index}|#{pane_index}|#{pid}')).trim().split('\n');
+            const details = panes.map(line => line.split('|')).find(([id, , , pid]) => id === pane && pid === serverPid) || [];
             const [, windowIndex, paneIndex] = details;
-            if (/^\$\d+$/.test(sessionId) && /^\d+$/.test(windowIndex) &&
-                /^\d+$/.test(paneIndex) && /^%\d+$/.test(pane)) {
-              captured = { session, sessionId, windowIndex, paneIndex, pane };
+            if (sessionId === expectedSessionId && /^\d+$/.test(windowIndex) && /^\d+$/.test(paneIndex)) {
+              captured = { session, sessionId, windowIndex, paneIndex, pane, serverPid };
             }
           }
         } catch { /* Save and copy still work if tmux cannot be identified. */ }
@@ -82,8 +82,8 @@ function createUploadTargets(server, tmux = 'tmux') {
       try {
         const current = (await command('display-message', '-p', '-t', `=${record.target.session}:`, '#{session_id}')).trim();
         if (current !== record.target.sessionId) throw new Error('Target unavailable');
-        const panes = (await command('list-panes', '-s', '-t', `=${record.target.session}`, '-F', '#{pane_id}')).trim().split('\n');
-        if (!panes.includes(record.target.pane)) throw new Error('Target unavailable');
+        const panes = (await command('list-panes', '-s', '-t', `=${record.target.session}`, '-F', '#{pane_id}|#{pid}')).trim().split('\n');
+        if (!panes.includes(`${record.target.pane}|${record.target.serverPid}`)) throw new Error('Target unavailable');
         await command('set-buffer', '-b', buffer, '--', shellQuote(record.path));
         bufferCreated = true;
         // -p honors bracketed-paste mode; -d deletes only this unique buffer.

@@ -46,7 +46,7 @@ function fixture({ captureFails = false } = {}) {
     setRequestHeader(name, value) { this.headers[name] = value; }
     send(file) { this.file = file; }
   }
-  const window = { webTerminalViewId: 'view', webTerminalTarget: { session: 'view-fixture-1', pane: '%1' }, mbaTerminalReady: () => true, term: { options: { disableStdin: false } } };
+  const window = { webTerminalViewId: 'view', webTerminalTarget: { session: 'view-fixture-1', sessionId: '$0', pane: '%1', serverPid: '1' }, mbaTerminalReady: () => true, term: { options: { disableStdin: false } } };
   vm.runInNewContext(fs.readFileSync(require.resolve('../client/src/upload.js'), 'utf8'), {
     document, window, fetch, XMLHttpRequest: Xhr, AbortController, navigator: { clipboard: { writeText: async () => {} } },
     setTimeout: () => 1, clearTimeout() {},

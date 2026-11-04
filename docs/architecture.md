@@ -38,6 +38,8 @@ Physical trackpad behavior, other browsers, unauthorized identities, long-durati
 
 The imported Linux snapshot adds a Node UI and HTTP/WebSocket proxy behind the dedicated Access-validating tunnel. The UI, ttyd instances and tmux use private Unix sockets or a private tmux server. Each visible terminal corresponds to a persistent tmux session; hiding a tab does not terminate its session. The UI enables tmux mouse handling and exposes a control to leave copy mode. See the [Linux inventory](linux-implementation.md) for the exact source and limits.
 
+The Linux candidate similarly passes tmux pane metadata through the embedded ttyd client and uses short-lived server-side receipts for saved images. Its session and pane identifiers are checked against the dedicated tmux server before explicit insertion. The per-process mutation token and same-origin check are additional request checks, not substitutes for Access on the image and receipt routes.
+
 The UI does not verify Access JWTs itself. The upstream tunnel must validate each HTTP and WebSocket request; the origin socket must remain private. Other processes running as the same OS user are within the local trust boundary. Login expiry is not proof that an already-open WebSocket has been terminated.
 
 ## Authoritative sources and ownership

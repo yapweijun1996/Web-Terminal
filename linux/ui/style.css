@@ -6,14 +6,18 @@ header strong { margin-right: 4px; }
 nav { display: flex; gap: 4px; overflow-x: auto; flex: 1; min-width: 0; }
 button { color: inherit; background: #252a35; border: 1px solid #454c5b; border-radius: 6px; padding: 6px 10px; cursor: pointer; white-space: nowrap; }
 button:hover, button:focus-visible { background: #394356; outline: 2px solid #8cbcff; outline-offset: 1px; }
+button:disabled { opacity: .5; cursor: not-allowed; }
 .tab { display: flex; border-radius: 6px; background: #252a35; }
 .tab.active { background: #354b6c; }
 .tab button { border: 0; background: transparent; }
 .tab .hide { padding-left: 4px; }
 #status { color: #adb7c6; font-size: 12px; }
-#image-result { padding: 6px 10px; }
-#image-result label { display: inline-flex; align-items: center; gap: 6px; }
-#image-path { width: min(50vw, 450px); color: inherit; background: #252a35; border: 1px solid #454c5b; padding: 6px; }
+#image-notice:not([hidden]) { padding: 6px 10px; }
+#image-results { max-height: 35vh; overflow: auto; }
+#image-results:empty { display: none; }
+#image-results > div { padding: 6px 10px; border-bottom: 1px solid #30343e; }
+#image-results input { width: min(50vw, 450px); color: inherit; background: #252a35; border: 1px solid #454c5b; padding: 6px; }
+#image-results button { margin: 4px 6px 0 0; }
 .connection { display: flex; align-items: center; gap: 6px; min-width: 0; }
 #retry[hidden] { display: none; }
 main { position: relative; flex: 1; min-height: 0; }

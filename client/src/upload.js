@@ -49,7 +49,9 @@
                     'X-Terminal-Action': 'capture',
                     'X-Terminal-View': observed ? (window.webTerminalViewId || '') : '',
                     'X-Terminal-Session': observed?.session || '',
+                    'X-Terminal-Session-Id': observed?.sessionId || '',
                     'X-Terminal-Pane': observed?.pane || '',
+                    'X-Terminal-Server-Pid': observed?.serverPid || '',
                 },
             });
             if (!response.ok) return null;
