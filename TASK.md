@@ -12,6 +12,7 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 - **Scope:** Inventory the terminal HTTP, WebSocket, and upload routes, including Linux image and receipt operations, and their actual Cloudflare Access policy and audience. Current inspected configuration is not end-to-end proof.
 - **Acceptance:** An approved identity succeeds; unauthenticated and unauthorized identities are denied for each route. Test expiry and revocation separately for new connections and existing WebSockets; record actual behavior and any gap without exposing credentials.
 - **Mac evidence (2026-11-04):** The Cloudflare dashboard showed an Access application with an email-based Allow policy; its policy tester reported an approved active identity. Separately, unauthenticated HTTPS requests to the page, token, ordinary WebSocket URL, and upload GET and empty POST were redirected to Access. The ordinary WebSocket request did not attempt an Upgrade. A GET in an existing browser profile displayed the upload service's expected method-rejection body; that is not a successful upload or proof of the request's identity. Unauthorized authenticated identities, actual WebSocket Upgrade, token expiry and revocation remain untested. See [architecture](docs/architecture.md) for evidence boundaries; do not publish identities, domains or audience values.
+- **Preparation (2026-11-04):** A [proposed isolated test plan](docs/isolated-access-validation.md) and a locally tested inert origin are available for review. They do not establish Access enforcement and have not been connected to cloud resources.
 
 ## P1 — Foundation and core experience
 
@@ -101,6 +102,7 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 - **Scope:** Compare installed and candidate dependency versions and their configuration and path-handling behavior against vendor documentation before an upgrade.
 - **Acceptance:** Record versions and relevant compatibility differences; test route protection and reconnect in isolation and prepare a verified rollback before any authorized live upgrade.
 - **Evidence (2026-11-04):** See the [dependency assessment](docs/dependency-assessment.md) for Cloudflare's security recommendation, dated vendor sources, offline ingress comparisons, and an isolated Node LTS build and test. Access enforcement and reconnect with the candidate connector and a verified rollback remain untested; no live upgrade has been made.
+- **Preparation:** The [isolated test plan](docs/isolated-access-validation.md) describes a disposable connector and patched rollback comparison. Neither has yet been validated against an authenticated tunnel.
 
 ## Working order
 
