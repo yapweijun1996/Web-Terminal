@@ -24,6 +24,6 @@ if [ -e "$SOCKET" ] || [ -L "$SOCKET" ]; then
     exit 1
 fi
 export WEB_TERMINAL_TMUX_SERVER WEB_TERMINAL_START_DIR
-exec "$TTYD_BIN" --interface "$SOCKET" --writable --check-origin --ping-interval 30 \
+exec "$TTYD_BIN" --interface "$SOCKET" --writable --check-origin --url-arg --ping-interval 30 \
     --index "$WEB_TERMINAL_CLIENT_HTML" --client-option lineHeight=1.25 \
     --client-option fontSize=16 "$SCRIPT_DIR/attach.sh"

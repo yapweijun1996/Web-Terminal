@@ -2,7 +2,7 @@
 
 Snapshot: 2026-11-04. This is a prioritized proposal based on read-only source inspection, the recorded Skill evidence, and vendor documentation. It is not a claim that the proposed changes are implemented or that an untested risk is a confirmed defect.
 
-The [task backlog](../TASK.md) owns priorities, statuses, scope, and acceptance checks. It covers access verification, reproducible source, Codex scrolling, reconnect and workspace UX, upload safety, accessibility, mobile input, diagnostics, lifecycle testing, and dependency assessment. Upload target selection remains an investigation hypothesis. The interrupted-processing limit was reproduced and corrected in the development candidate; that correction is not deployed to the live service.
+The [task backlog](../TASK.md) owns priorities, statuses, scope, and acceptance checks. It covers access verification, reproducible source, Codex scrolling, reconnect and workspace UX, upload safety, accessibility, mobile input, diagnostics, lifecycle testing, and dependency assessment. A disposable fixture confirmed that switching windows during upload could insert the path in the wrong pane; the candidate now binds the last confirmed pane and requires explicit insertion. The interrupted-processing limit was also reproduced and corrected. Neither change is deployed to the live service.
 
 ## Research notes
 

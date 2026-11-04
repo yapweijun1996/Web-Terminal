@@ -7,7 +7,15 @@ import type { ClientOptions, FlowControl } from './terminal/xterm';
 
 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const path = window.location.pathname.replace(/[/]+$/, '');
-const wsUrl = [protocol, '//', window.location.host, path, '/ws', window.location.search].join('');
+// A fresh ID ties this page's ttyd connection to a server-side tmux view.
+// If unavailable, uploads can still be saved and copied without auto-insertion.
+const viewId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : '';
+Object.assign(window, { webTerminalViewId: viewId });
+const wsQuery = new URLSearchParams(window.location.search);
+wsQuery.delete('arg');
+if (viewId) wsQuery.append('arg', viewId);
+const wsSearch = wsQuery.toString();
+const wsUrl = [protocol, '//', window.location.host, path, '/ws', wsSearch ? '?' + wsSearch : ''].join('');
 const tokenUrl = [window.location.protocol, '//', window.location.host, path, '/token'].join('');
 const clientOptions = {
     rendererType: 'webgl',

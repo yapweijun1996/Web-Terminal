@@ -21,7 +21,7 @@ async function waitFor(predicate, message) {
     throw new Error(message);
 }
 
-function upload(socket, origin) {
+function upload(socket, origin, ticket) {
     let result;
     let req;
     const done = new Promise(resolve => {
@@ -29,7 +29,7 @@ function upload(socket, origin) {
             socketPath: socket,
             path: '/__terminal_upload',
             method: 'POST',
-            headers: { origin, 'content-type': 'application/octet-stream', 'content-length': png.length },
+            headers: { origin, 'content-type': 'application/octet-stream', 'content-length': png.length, ...(ticket ? { 'x-terminal-target': ticket } : {}) },
         }, res => {
             res.resume();
             res.on('end', () => { result = { status: res.statusCode }; resolve(result); });
@@ -38,6 +38,21 @@ function upload(socket, origin) {
         req.end(png);
     });
     return { req, done, get result() { return result; } };
+}
+
+function control(socket, origin, action, ticket) {
+    return new Promise((resolve, reject) => {
+        const req = http.request({
+            socketPath: socket, path: '/__terminal_upload', method: 'POST',
+            headers: { origin, 'content-length': 0, 'x-terminal-action': action, ...(ticket ? { 'x-terminal-target': ticket } : {}) },
+        }, res => {
+            let body = '';
+            res.on('data', chunk => { body += chunk; });
+            res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(body) }));
+        });
+        req.on('error', reject);
+        req.end();
+    });
 }
 
 function oversizedChunkedUpload(socket, origin) {
@@ -101,6 +116,38 @@ test('disconnected upload retains its work slot until image inspection finishes'
         assert.equal((await upload(socket, origin).done).status, 201, 'capacity must be released after work finishes');
     } finally {
         for (const request of requests) request.req.destroy();
+        await stop();
+    }
+});
+
+test('a disconnected client can recover a saved path without an available pane', async () => {
+    const { socket, release, origin, directory, eventLines, stop } = startFixture();
+    let request;
+    try {
+        await waitFor(() => fs.existsSync(socket), 'upload fixture did not start');
+        const capture = await control(socket, origin, 'capture');
+        assert.equal(capture.status, 200);
+        assert.equal(capture.body.target, null);
+        const ticket = capture.body.ticket;
+        request = upload(socket, origin, ticket);
+        await waitFor(() => eventLines().includes('inspection-started'), 'inspection did not start');
+        request.req.destroy();
+        await waitFor(() => eventLines().includes('aborted-response'), 'disconnect was not observed');
+        assert.equal((await control(socket, origin, 'result', ticket)).body.pending, true);
+        fs.writeFileSync(release, 'release');
+        let recovered;
+        for (let i = 0; i < 200; i++) {
+            recovered = await control(socket, origin, 'result', ticket);
+            if (!recovered.body.pending) break;
+            await delay(10);
+        }
+        assert.equal(recovered.status, 200);
+        assert.equal(path.dirname(recovered.body.path), directory);
+        assert.equal(fs.existsSync(recovered.body.path), true, 'the recovered path must point to the saved file');
+        assert.equal((await control(socket, origin, 'insert', ticket)).status, 409, 'an unavailable pane cannot receive input');
+        assert.equal((await control(socket, 'https://wrong.example', 'result', ticket)).status, 403);
+    } finally {
+        request?.req.destroy();
         await stop();
     }
 });

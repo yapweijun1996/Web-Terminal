@@ -22,7 +22,7 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
   let server;
   const start = () => {
     server = spawn(process.execPath, [path.join(__dirname, '../ui/server.js')], {
-      env: { ...process.env, TERMINAL_RUNTIME: directory, TERMINAL_TMUX_SOCKET: tmuxSocket, TERMINAL_TEST_HTTP: '1' },
+      env: { ...process.env, TERMINAL_RUNTIME: directory, TERMINAL_TMUX_SOCKET: tmuxSocket, TERMINAL_TEST_HTTP: '1', TERMINAL_UPLOAD_DIR: path.join(directory, 'uploads') },
       stdio: 'ignore',
     });
   };
@@ -34,14 +34,14 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     }
     throw new Error('fixture socket did not appear');
   };
-  const request = (method, url, headers = {}) => new Promise((resolve, reject) => {
+  const request = (method, url, headers = {}, body) => new Promise((resolve, reject) => {
     const req = http.request({ socketPath: socket, method, path: url, headers: { host: 'fixture.test', ...headers } }, res => {
       const chunks = [];
       res.on('data', chunk => chunks.push(chunk));
       res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
     });
     req.on('error', reject);
-    req.end();
+    req.end(body);
   });
   const upgrade = origin => new Promise((resolve, reject) => {
     const req = http.request({ socketPath: socket, path: '/terminal/shared/ws', headers: {
@@ -66,6 +66,43 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     const list = JSON.parse((await request('GET', '/api/sessions')).body);
     assert.deepEqual(list.sessions, ['shared']);
     const headers = { origin: 'http://fixture.test', 'content-type': 'application/json', 'x-terminal-request': list.token };
+    const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl6sAAAAASUVORK5CYII=', 'base64');
+    const imageHeaders = { ...headers, 'content-type': 'application/octet-stream', 'content-length': image.length };
+    assert.equal((await request('POST', '/api/images', { ...imageHeaders, origin: 'http://other.test' }, image)).status, 403);
+    assert.equal((await request('POST', '/api/images', { ...imageHeaders, 'x-terminal-request': 'invalid' }, image)).status, 403);
+    assert.equal((await request('POST', '/api/images', imageHeaders, image)).status, 409, 'uploads require a recovery receipt');
+    assert.equal((await request('POST', '/api/images/prepare', { ...headers, origin: 'http://other.test' })).status, 403);
+    const invalidReceipt = JSON.parse((await request('POST', '/api/images/prepare', headers)).body);
+    assert.equal((await request('POST', '/api/images', { ...imageHeaders, 'x-image-receipt': invalidReceipt.ticket, 'content-length': 4 }, Buffer.from('nope'))).status, 415);
+    assert.equal(JSON.parse((await request('POST', '/api/images/result', { ...headers, 'x-image-receipt': invalidReceipt.ticket })).body).state, 'failed');
+    const receipt = JSON.parse((await request('POST', '/api/images/prepare', headers)).body);
+    assert.equal(receipt.target, null, 'missing target metadata must fail closed');
+    const uploaded = await request('POST', '/api/images', { ...imageHeaders, 'x-image-receipt': receipt.ticket }, image);
+    assert.equal(uploaded.status, 201);
+    const uploadedPath = JSON.parse(uploaded.body).path;
+    assert.equal(path.dirname(uploadedPath), path.join(directory, 'uploads'));
+    assert.equal(fs.statSync(uploadedPath).mode & 0o777, 0o600);
+    assert.deepEqual(fs.readFileSync(uploadedPath), image);
+    const recovered = await request('POST', '/api/images/result', { ...headers, 'x-image-receipt': receipt.ticket });
+    assert.equal(JSON.parse(recovered.body).path, uploadedPath);
+    assert.equal((await request('POST', '/api/images/insert', { ...headers, 'x-image-receipt': receipt.ticket })).status, 409);
+    const interrupted = JSON.parse((await request('POST', '/api/images/prepare', headers)).body);
+    const partial = http.request({ socketPath: socket, method: 'POST', path: '/api/images', headers: { host: 'fixture.test', ...imageHeaders, 'content-length': 100, 'x-image-receipt': interrupted.ticket } });
+    partial.on('error', () => {}); partial.write(image.subarray(0, 8));
+    let interruptedState;
+    for (let i = 0; i < 100; i++) {
+      interruptedState = JSON.parse((await request('POST', '/api/images/result', { ...headers, 'x-image-receipt': interrupted.ticket })).body).state;
+      if (interruptedState === 'uploading') break;
+      await sleep(10);
+    }
+    assert.equal(interruptedState, 'uploading');
+    partial.destroy();
+    for (let i = 0; i < 100; i++) {
+      interruptedState = JSON.parse((await request('POST', '/api/images/result', { ...headers, 'x-image-receipt': interrupted.ticket })).body).state;
+      if (interruptedState === 'failed') break;
+      await sleep(10);
+    }
+    assert.equal(interruptedState, 'failed', 'an interrupted request is recorded as not saved');
     assert.equal((await request('POST', '/api/sessions', { ...headers, origin: 'http://other.test' })).status, 403);
     assert.equal((await request('POST', '/api/sessions', { ...headers, 'x-terminal-request': 'invalid' })).status, 403);
     const created = await request('POST', '/api/sessions', headers);
@@ -75,15 +112,43 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     assert.equal((await request('GET', '/terminal/invalid')).status, 404);
     const terminalPage = await request('GET', '/terminal/shared');
     assert.equal(terminalPage.status, 200);
+    assert.match(terminalPage.body, /src="\/clipboard-bridge\.js"/);
+    assert.equal((await request('GET', '/clipboard-bridge.js')).status, 200);
+    const targetInfo = tmux('display-message', '-p', '-t', 'shared:', '#{session_id}|#{pane_id}|#{pid}').split('|');
+    const targetHeaders = { ...headers, 'x-terminal-session': 'shared', 'x-terminal-session-id': targetInfo[0], 'x-terminal-pane': targetInfo[1], 'x-terminal-server-pid': targetInfo[2] };
+    const mismatch = JSON.parse((await request('POST', '/api/images/prepare', { ...targetHeaders, 'x-terminal-session-id': '$999999' })).body);
+    assert.equal(mismatch.target, null, 'metadata from another session cannot select a pane');
+    const bound = JSON.parse((await request('POST', '/api/images/prepare', targetHeaders)).body);
+    assert.ok(bound.target, 'a valid pane in the requested session is captured');
+    const boundUpload = JSON.parse((await request('POST', '/api/images', { ...imageHeaders, 'x-image-receipt': bound.ticket }, image)).body);
+    const otherPane = tmux('split-window', '-h', '-d', '-P', '-F', '#{pane_id}', '-t', 'shared:', 'sh');
+    tmux('select-pane', '-t', otherPane);
+    assert.equal((await request('POST', '/api/images/insert', { ...headers, 'x-image-receipt': bound.ticket })).status, 200);
+    let oldPaneOutput = '';
+    for (let i = 0; i < 100; i++) {
+      oldPaneOutput = tmux('capture-pane', '-J', '-p', '-t', targetInfo[1]);
+      if (oldPaneOutput.replace(/\n/g, '').includes(boundUpload.path)) break;
+      await sleep(10);
+    }
+    assert.ok(oldPaneOutput.replace(/\n/g, '').endsWith(boundUpload.path), 'the captured pane receives the path without Enter');
+    assert.ok(!tmux('capture-pane', '-J', '-p', '-t', otherPane).includes(boundUpload.path), 'the later pane does not receive it');
+    assert.equal((await request('POST', '/api/images/insert', { ...headers, 'x-image-receipt': bound.ticket })).status, 409, 'insertion cannot be repeated');
+    const lostHeaders = { ...targetHeaders, 'x-terminal-pane': otherPane };
+    const lost = JSON.parse((await request('POST', '/api/images/prepare', lostHeaders)).body);
+    const lostUpload = JSON.parse((await request('POST', '/api/images', { ...imageHeaders, 'x-image-receipt': lost.ticket }, image)).body);
+    tmux('kill-pane', '-t', otherPane);
+    assert.equal((await request('POST', '/api/images/insert', { ...headers, 'x-image-receipt': lost.ticket })).status, 409);
+    assert.equal(JSON.parse((await request('POST', '/api/images/result', { ...headers, 'x-image-receipt': lost.ticket })).body).path, lostUpload.path);
     const shim = terminalPage.body.match(/<head><script>([\s\S]*?)<\/script>/)?.[1];
     assert.ok(shim, 'the ttyd page must include the connection-state shim');
     const handlers = {}, messages = [], timers = [];
+    let onTitle;
     const overlay = { childNodes: [{ nodeType: 3 }], textContent: 'Press ⏎ to Reconnect' };
     overlay.firstChild = overlay.childNodes[0];
     const unrelated = { childNodes: [{ nodeType: 1 }, { nodeType: 1 }], textContent: 'Press ⏎ to Reconnect' };
     const window = {
       WebSocket: class { addEventListener(name, callback) { handlers[name] = callback; } },
-      term: { options: { disableStdin: false } },
+      term: { options: { disableStdin: false }, onTitleChange: callback => { onTitle = callback; } },
       parent: { postMessage: (message, target) => messages.push({ state: message.state, target }) },
       location: { origin: 'http://fixture.test' },
     };
@@ -94,8 +159,15 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     handlers.open();
     assert.equal(window.term.options.disableStdin, false);
     assert.equal(messages.at(-1).state, 'Connected');
+    onTitle('__WEB_TERMINAL_TARGET__|shared|$0|%3|42|fixture');
+    assert.equal(window.webTerminalTarget.pane, '%3');
+    assert.equal(window.webTerminalTarget.session, 'shared');
+    onTitle('unverified title');
+    assert.equal(window.webTerminalTarget, null, 'unverified title metadata fails closed');
+    onTitle('__WEB_TERMINAL_TARGET__|shared|$0|%3|42|fixture');
     handlers.close();
     assert.equal(window.term.options.disableStdin, true);
+    assert.equal(window.webTerminalTarget, null, 'disconnect clears the target');
     assert.equal(messages.at(-1).state, 'Disconnected');
     assert.ok(messages.every(message => message.target === 'http://fixture.test'));
     timers.forEach(fn => fn());

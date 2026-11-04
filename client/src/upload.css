@@ -19,3 +19,24 @@
     margin-left: 6px;
     padding: 6px 10px;
 }
+#upload-results {
+    position: fixed;
+    right: 12px;
+    bottom: 72px;
+    z-index: 98;
+    width: min(90vw, 32rem);
+    max-height: 35vh;
+    overflow: auto;
+    font: 14px system-ui;
+}
+#upload-results:empty { display: none; }
+#upload-results > div {
+    margin-top: 8px;
+    padding: 10px;
+    border-radius: 8px;
+    background: #25374a;
+    color: #fff;
+    overflow-wrap: anywhere;
+}
+#upload-results input { width: 100%; margin: 8px 0 4px; }
+#upload-results button { margin: 4px 6px 0 0; padding: 6px 10px; }

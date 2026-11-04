@@ -7,6 +7,7 @@ On 2026-11-04, the owner-operated Ubuntu 24.04 ARM64 host had a working Linux te
 | Source | Responsibility |
 | --- | --- |
 | `linux/ui/server.js` | Private Unix-socket UI, per-session ttyd processes, HTTP/WebSocket proxy and session operations. |
+| `linux/ui/image-receipts.js` | Short-lived image receipts and explicit, pane-bound insertion for the development candidate. |
 | `linux/ui/index.html`, `app.js`, `style.css` | Browser tab controls, connection indication, hide/restore and return-to-latest control. |
 | `linux/ui/attach-tab.sh` | Attach a ttyd client to the corresponding persistent tmux session. |
 | `linux/legacy-attach.sh` | Earlier grouped-session attachment used by the existing terminal service. |
@@ -31,7 +32,7 @@ The UI and ttyd do **not** independently authenticate the browser or verify a Cl
 From the repository root on Linux with Node.js, tmux and `/usr/bin/ttyd` installed:
 
 ```sh
-node --test linux/test/integration.test.js linux/test/connection-ui.test.js
+node --test linux/test/*.test.js
 ```
 
 The test starts a dedicated disposable tmux server and private sockets, tests session creation and origin rejection, checks a ttyd WebSocket upgrade, and verifies a fixture job survives UI restart. It cleans up only the fixture it creates. It does not test Cloudflare Access or the live deployment.
@@ -47,4 +48,12 @@ On 2026-11-04, the pinned ARM64 Alpine fixture passed the integration test with 
 
 During the 2026-11-04 implementation, an isolated Chromium fixture separately exercised tab creation and switching, hide and restore, reload, wheel scrollback, Latest, `less --mouse`, a job surviving UI restart, and a phone-sized layout. The original live pane process survived the authorized tunnel restart. Unauthenticated requests to the deployed page, session API and terminal WebSocket path were redirected to Access. The owner displayed an email-restricted Allow policy, but the policy was not independently queried through Cloudflare's management API.
 
-Authenticated production-browser behavior, denial for an unauthorized identity, existing WebSocket expiry/revocation, physical trackpad and mobile touch, and survival across sleep, logout or reboot were not established by those checks. User-manager lingering was disabled at the observation time. The Linux snapshot does not provide the Mac implementation's image-upload service.
+Authenticated production-browser behavior, denial for an unauthorized identity, existing WebSocket expiry/revocation, physical trackpad and mobile touch, and survival across sleep, logout or reboot were not established by those checks. User-manager lingering was disabled at the observation time.
+
+## Browser clipboard and image transfer
+
+The Linux UI handles Ctrl+V in the browser before it reaches terminal applications. PNG, JPEG and WebP files can be pasted or dropped into a terminal view. The candidate saves each file and displays its path and last tmux-confirmed window and pane. After the user checks the target, an explicit control can insert the path into that captured pane without sending Enter; switching to another pane cannot redirect it. If the view or target is unavailable, copy the retained path instead. A path sent to a pane is not proof that an application accepted an image attachment.
+
+For copying text, the UI receives tmux OSC 52 copy requests from the active terminal. A recent pointer or copy-key gesture allows it to write to the browser clipboard; otherwise it offers a Copy selection button. Browser clipboard permissions and focus can prevent automatic copying. Clipboard contents are held in the page while awaiting a copy action and are not logged or stored on the server by this bridge.
+
+Images are retained until the owner removes them. Requests require the same origin and per-process mutation token as session changes, and the tunnel must validate Access for the image and receipt routes. A receipt can recover a saved path for ten minutes while the same service and page remain available; a service restart loses server receipts and a page reload loses their references. Each file is limited to 10 MiB; at most three uploads are processed concurrently, with a 30-second request deadline and a storage limit of 500 files or 500 MiB. The server checks file signatures and basic structure; it does not fully decode images. The fixture redirects uploads to its own temporary directory.
