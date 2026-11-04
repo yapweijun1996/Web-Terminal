@@ -49,9 +49,10 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-007: Verify upload resource limits under interruption
 
-- **Status:** Open
-- **Scope:** Test the hypothesis that releasing the request concurrency count on response close can leave asynchronous processing running beyond the intended limit.
+- **Status:** Verified
+- **Scope:** Verify and correct the upload-work limit across client disconnect, interrupted request bodies, rejected oversized streams, and image-inspection timeout.
 - **Acceptance:** Disposable interruption and timeout tests establish whether actual processing stays within the selected limit. Malformed and oversized images fail without uncontrolled work or unintended file changes.
+- **Evidence (2026-11-04):** An isolated HTTP regression first reproduced a fifth inspection starting after a client disconnected while four inspections were still active. The candidate now retains the slot until asynchronous work ends. Tests cover disconnect during inspection, abort while receiving, repeated oversized chunked uploads, an actual subprocess timeout using a controlled test inspector, file cleanup, and subsequent capacity recovery. The macOS fixture also checks malformed images and declared and streamed size limits. The change is not deployed to the separately maintained live service.
 
 ## P2 — Usability and operational maturity
 

@@ -15,19 +15,28 @@ const png = Buffer.from(
     'base64'
 );
 
-function request(socketPath, origin, body) {
+function request(socketPath, origin, body, extraHeaders = {}) {
     return new Promise((resolve, reject) => {
+        const headers = { origin, connection: 'close', 'content-type': 'application/octet-stream', ...extraHeaders };
+        if (!headers['transfer-encoding'] && !headers['content-length']) headers['content-length'] = body.length;
         const req = http.request({
             socketPath,
             path: '/__terminal_upload',
             method: 'POST',
-            headers: { origin, 'content-type': 'application/octet-stream', 'content-length': body.length },
+            headers,
         }, res => {
             const chunks = [];
             res.on('data', chunk => chunks.push(chunk));
-            res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(Buffer.concat(chunks).toString()) }));
+            res.on('end', () => {
+                const text = Buffer.concat(chunks).toString();
+                try { resolve({ status: res.statusCode, body: text ? JSON.parse(text) : null }); }
+                catch (error) { reject(error); }
+            });
+            res.on('aborted', () => reject(new Error('upload response was interrupted')));
+            res.on('error', reject);
         });
         req.on('error', reject);
+        req.setTimeout(5000, () => req.destroy(new Error('upload fixture request timed out')));
         req.end(body);
     });
 }
@@ -49,7 +58,12 @@ test('upload origin and image checks work on the isolated macOS baseline', { ski
         assert.ok(fs.existsSync(socket), 'fixture should listen on its private socket');
         assert.equal(fs.statSync(socket).mode & 0o777, 0o600);
         assert.equal((await request(socket, 'https://wrong.example', png)).status, 403);
+        assert.equal((await request(socket, origin, png, { 'content-type': 'image/png' })).status, 415);
         assert.equal((await request(socket, origin, Buffer.from('not an image'))).status, 415);
+        assert.equal((await request(socket, origin, png.subarray(0, 8))).status, 415, 'a malformed image with a valid signature must be removed');
+        assert.equal((await request(socket, origin, Buffer.alloc(0), { 'content-length': String(10 * 1024 * 1024 + 1) })).status, 413);
+        assert.equal((await request(socket, origin, Buffer.alloc(10 * 1024 * 1024 + 1), { 'transfer-encoding': 'chunked' })).status, 413);
+        assert.deepEqual(fs.readdirSync(directory), [], 'rejected uploads must not leave files');
         const result = await request(socket, origin, png);
         assert.equal(result.status, 201);
         assert.equal(path.dirname(result.body.path), directory);

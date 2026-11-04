@@ -82,6 +82,7 @@ const server = http.createServer((req, res) => {
   if (active >= 4) return reply(res, 429, { error: "Too many uploads" });
   active++;
   let done = false,
+    processing = false,
     size = 0,
     parts = [];
   function finish() {
@@ -90,10 +91,15 @@ const server = http.createServer((req, res) => {
       active--;
     }
   }
-  req.on("error", finish);
-  req.on("aborted", finish);
-  res.on("close", finish);
+  // Once filesystem or image inspection work starts, that work owns the slot
+  // until its finally block runs, even if the client disconnects meanwhile.
+  const finishBeforeProcessing = () => {
+    if (!processing) finish();
+  };
+  req.on("error", finishBeforeProcessing);
+  req.on("aborted", finishBeforeProcessing);
   req.on("data", (chunk) => {
+    if (done) return;
     size += chunk.length;
     if (size > max) {
       parts = [];
@@ -104,6 +110,7 @@ const server = http.createServer((req, res) => {
     parts.push(chunk);
   });
   req.on("end", async () => {
+    if (done) return;
     if (size > max) {
       finish();
       return;
@@ -120,6 +127,7 @@ const server = http.createServer((req, res) => {
     const name = crypto.randomUUID() + "." + ext;
     const dest = path.join(directory, name);
     let handle;
+    processing = true;
     try {
       handle = await fs.promises.open(
         dest,
