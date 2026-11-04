@@ -26,7 +26,7 @@ class Element {
 }
 
 test('session auth failure and iframe disconnect offer safe explicit recovery', async () => {
-  const nodes = Object.fromEntries(['tabs', 'views', 'status', 'scroll-status', 'retry', 'restore', 'new-tab', 'rename-tab', 'rename-form', 'rename-input', 'rename-cancel', 'rename-error', 'latest', 'image-results', 'image-notice', 'copy-selection'].map(id => [id, new Element()]));
+  const nodes = Object.fromEntries(['tabs', 'views', 'status', 'detail-view', 'detail-link', 'scroll-status', 'retry', 'restore', 'new-tab', 'rename-tab', 'rename-form', 'rename-input', 'rename-cancel', 'rename-error', 'latest', 'image-results', 'image-notice', 'copy-selection'].map(id => [id, new Element()]));
   const document = { querySelector: selector => nodes[selector.slice(1)], createElement: tag => new Element(tag) };
   const listeners = {};
   const window = { addEventListener: (name, handler) => { listeners[name] = handler; } };
@@ -53,10 +53,13 @@ test('session auth failure and iframe disconnect offer safe explicit recovery', 
   const first = nodes.views.children[0];
   assert.ok(first);
   assert.equal(nodes.status.textContent, 'Connecting');
+  assert.equal(nodes['detail-view'].textContent, '1 of 1');
+  assert.equal(nodes['detail-link'].textContent, 'Connecting');
   assert.equal(nodes['new-tab'].disabled, false);
   const message = (source, state, origin = location.origin) => listeners.message({ source, origin, data: { type: 'terminal-connection', state } });
   message(first.contentWindow, 'Connected');
   assert.equal(nodes.status.textContent, 'Connected');
+  assert.equal(nodes['detail-link'].textContent, 'Connected');
   listeners.message({ source: first.contentWindow, origin: location.origin, data: { type: 'terminal-scroll', mode: '' } });
   assert.equal(nodes['scroll-status'].textContent, 'tmux live; app scroll unknown');
   listeners.message({ source: first.contentWindow, origin: location.origin, data: { type: 'terminal-scroll', mode: 'copy-mode' } });
@@ -67,6 +70,7 @@ test('session auth failure and iframe disconnect offer safe explicit recovery', 
 
   message(first.contentWindow, 'Disconnected');
   assert.equal(nodes['scroll-status'].textContent, 'tmux scroll unknown; app scroll unknown');
+  assert.equal(nodes['detail-link'].textContent, 'Disconnected — retry or sign in');
   assert.equal(nodes.retry.hidden, false);
   nodes.retry.click();
   const second = nodes.views.children[0];
@@ -80,6 +84,8 @@ test('session auth failure and iframe disconnect offer safe explicit recovery', 
   assert.equal(nodes.retry.hidden, true);
   listeners.message({ source: second.contentWindow, origin: location.origin, data: { type: 'terminal-scroll', mode: '' } });
   nodes.tabs.children[0].children[1].click();
+  assert.equal(nodes['detail-view'].textContent, 'Unknown');
+  assert.equal(nodes['detail-link'].textContent, 'Unknown');
   nodes.restore.listeners.click({ detail: 0 });
   assert.equal(nodes.status.textContent, 'Connecting', 'a restored view starts with a fresh connection state');
   assert.equal(nodes['scroll-status'].textContent, 'tmux scroll unknown; app scroll unknown');

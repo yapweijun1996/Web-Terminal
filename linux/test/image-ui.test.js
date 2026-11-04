@@ -25,7 +25,7 @@ class Element {
 }
 
 function fixture() {
-  const ids = ['tabs', 'views', 'status', 'scroll-status', 'retry', 'restore', 'new-tab', 'rename-tab', 'rename-form', 'rename-input', 'rename-cancel', 'rename-error', 'latest', 'image-results', 'image-notice', 'copy-selection'];
+  const ids = ['tabs', 'views', 'status', 'detail-view', 'detail-link', 'scroll-status', 'retry', 'restore', 'new-tab', 'rename-tab', 'rename-form', 'rename-input', 'rename-cancel', 'rename-error', 'latest', 'image-results', 'image-notice', 'copy-selection'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element()]));
   const listeners = {}, calls = [];
   const document = { querySelector: selector => nodes[selector.slice(1)], createElement: tag => new Element(tag) };

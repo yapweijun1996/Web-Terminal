@@ -16,6 +16,18 @@
     <button id="latest" type="button" title="Exit tmux copy mode; application scroll position is separate">Return to live</button>
     <button id="copy-selection" type="button" hidden>Copy selection</button>
     <button id="restore" type="button" hidden>Restore tabs</button>
+    <details id="terminal-diagnostics">
+      <summary>Details</summary>
+      <section aria-label="Terminal status details">
+        <p><strong>View:</strong> <span id="detail-view">Unknown</span></p>
+        <p><strong>Terminal connection:</strong> <span id="detail-link">Unknown</span></p>
+        <p><strong>End-to-end input and output:</strong> Not checked</p>
+        <p><strong>Individual components:</strong> Not checked</p>
+        <p><strong>Background task:</strong> Unknown</p>
+        <p><strong>Access authorization:</strong> Not checked</p>
+        <p>After reconnecting, check the active view. Use Retry if offered.</p>
+      </section>
+    </details>
     <div class="connection">
       <span id="status" role="status" aria-live="polite" tabindex="-1"></span>
       <span id="scroll-status" role="status" aria-live="polite">tmux scroll unknown</span>

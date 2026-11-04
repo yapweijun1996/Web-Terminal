@@ -76,9 +76,10 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-010: Provide a privacy-preserving status view
 
-- **Status:** Open
+- **Status:** Verified in isolated candidates
 - **Scope:** Show current view, connection state, and useful recovery information without claiming task health from process liveness.
 - **Acceptance:** End-to-end status, component liveness, and unknown states are distinct; no tokens, commands, terminal contents, or personal filenames are exposed.
+- **Evidence (2026-11-04):** Isolated Mac and Linux Chromium fixtures displayed the current view, connection and recovery guidance. The details panel separately marks end-to-end input/output, individual components and Access authorization as not checked, and task state as unknown. Stopping each disposable terminal service changed its displayed connection state without asserting task health. A browser-local renamed view is represented by its ordinal rather than its name. Keyboard opening and desktop and 390×844 emulated layouts were checked; neither candidate is deployed, and physical device and assistive-technology checks remain outstanding.
 
 ### WT-011: Verify resize, lifecycle, and platform support
 

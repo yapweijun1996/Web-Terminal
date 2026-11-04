@@ -48,6 +48,29 @@
     font-size: 12px;
 }
 #scroll-latest:disabled { opacity: .5; cursor: not-allowed; }
+#terminal-diagnostics summary {
+    cursor: pointer;
+    padding: 12px;
+    border: 1px solid #71849a;
+    border-radius: 7px;
+}
+#terminal-diagnostics summary:focus-visible { outline: 3px solid #99d1ff; outline-offset: 2px; }
+#terminal-diagnostics section {
+    box-sizing: border-box;
+    position: fixed;
+    z-index: 20;
+    top: 58px;
+    right: 8px;
+    width: min(360px, calc(100vw - 16px));
+    max-height: calc(100dvh - 66px);
+    overflow: auto;
+    padding: 8px 14px;
+    border: 1px solid #71849a;
+    border-radius: 7px;
+    background: #17212c;
+    white-space: normal;
+    font-weight: 400;
+}
 #connection-retry[hidden] {
     display: none;
 }

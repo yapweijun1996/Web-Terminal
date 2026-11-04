@@ -25,7 +25,7 @@ function fixture({ rejectStorage = false } = {}) {
     select() {}
     click() { if (!this.hidden && !this.disabled) this.listeners.click?.({ detail: 0 }); }
   }
-  const ids = ['tabs', 'views', 'status', 'scroll-status', 'retry', 'restore', 'new-tab', 'rename-tab', 'rename-form', 'rename-input', 'rename-cancel', 'rename-error', 'latest', 'image-results', 'image-notice', 'copy-selection'];
+  const ids = ['tabs', 'views', 'status', 'detail-view', 'detail-link', 'scroll-status', 'retry', 'restore', 'new-tab', 'rename-tab', 'rename-form', 'rename-input', 'rename-cancel', 'rename-error', 'latest', 'image-results', 'image-notice', 'copy-selection'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element()]));
   nodes['rename-form'].hidden = true;
   document = { activeElement: null, querySelector: selector => nodes[selector.slice(1)], createElement: tag => new Element(tag) };
@@ -60,6 +60,7 @@ test('renaming is browser-local, unique, and preserves an identifiable view', as
   f.nodes['rename-input'].value = 'Build logs';
   f.nodes['rename-form'].listeners.submit({ preventDefault() {} });
   assert.equal(f.nodes.tabs.children[0].children[0].textContent, 'Build logs');
+  assert.equal(f.nodes['detail-view'].textContent, '1 of 3', 'status details do not repeat user-provided names');
   assert.equal(f.nodes.views.children[0].title, 'Build logs');
   assert.match(f.store['linux-web-terminal-names-v1'], /Build logs/);
   assert.equal(f.document.activeElement, f.nodes['rename-tab']);

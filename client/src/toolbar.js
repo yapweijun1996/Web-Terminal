@@ -26,9 +26,15 @@
     scrollNotice.id = 'scroll-notice';
     scrollNotice.setAttribute('role', 'status');
     scrollNotice.setAttribute('aria-live', 'polite');
+    const diagnostics = document.createElement('details');
+    diagnostics.id = 'terminal-diagnostics';
+    diagnostics.innerHTML = '<summary>Details</summary><section aria-label="Terminal status details"><p><strong>View:</strong> <span data-view>Unknown</span></p><p><strong>Terminal connection:</strong> <span data-link>Unknown</span></p><p><strong>End-to-end input and output:</strong> Not checked</p><p><strong>Individual components:</strong> Not checked</p><p><strong>Background task:</strong> Unknown</p><p><strong>Access authorization:</strong> Not checked</p><p>After reconnecting, check the active window. Use Retry if offered.</p></section>';
+    const detailView = diagnostics.querySelector('[data-view]');
+    const detailLink = diagnostics.querySelector('[data-link]');
     let returning = false;
     function showTarget(target) {
         activeTarget.textContent = target ? `Window ${target.windowIndex}, pane ${target.paneIndex}` : 'Window unknown';
+        detailView.textContent = target ? `Window ${target.windowIndex}, pane ${target.paneIndex}` : 'Unknown';
         activeTarget.title = 'The last tmux-confirmed window and pane.';
         const state = !target ? 'tmux scroll unknown' : /^copy-mode/.test(target.paneMode) ? 'tmux scrollback' : target.paneMode ? 'tmux mode unknown' : 'tmux live';
         scrollStatus.textContent = `${state}; app scroll unknown`;
@@ -50,6 +56,7 @@
     };
     function showConnection(state) {
         status.textContent = labels[state] || 'Connection state unknown';
+        detailLink.textContent = labels[state] || 'Unknown';
         status.title = 'Check the active window after reconnecting; background job status is unknown.';
         status.setAttribute('aria-label', `${status.textContent}. Check the active window after reconnecting. Background job status is unknown.`);
         retry.hidden = state !== 'offline' && state !== 'auth-required';
@@ -86,6 +93,7 @@
     bar.insertBefore(scrollStatus, bar.children[4]);
     bar.insertBefore(latest, bar.children[5]);
     bar.insertBefore(scrollNotice, bar.children[6]);
+    bar.append(diagnostics);
     window.addEventListener('web-terminal-connection', e => showConnection(e.detail));
     window.addEventListener('web-terminal-target', e => {
         scrollNotice.textContent = '';

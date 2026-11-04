@@ -2,6 +2,8 @@
 const tabs = document.querySelector('#tabs');
 const views = document.querySelector('#views');
 const status = document.querySelector('#status');
+const detailView = document.querySelector('#detail-view');
+const detailLink = document.querySelector('#detail-link');
 const scrollStatus = document.querySelector('#scroll-status');
 const retry = document.querySelector('#retry');
 const restore = document.querySelector('#restore');
@@ -41,8 +43,9 @@ function updateControls() {
   latest.disabled = !sessionReady || !active || returning;
   renameTab.disabled = !sessionReady || !active;
 }
-function showStatus(message, retryAction = null) {
+function showStatus(message, retryAction = null, link = message) {
   status.textContent = message;
+  detailLink.textContent = link;
   status.title = 'Connection status only; background job status is unknown.';
   status.setAttribute('aria-label', `${message}. Background job status is unknown.`);
   retryMode = retryAction;
@@ -64,6 +67,8 @@ function activate(name, focusTab = false) {
   if (renameTarget && renameTarget !== name) { renameForm.hidden = true; renameTarget = null; renameError.textContent = ''; }
   if (name !== active) { copyGestureAt = 0; pendingCopy = null; copySelection.hidden = true; }
   active = name;
+  const visible = sessions.filter(session => !hidden.has(session));
+  detailView.textContent = `${visible.indexOf(name) + 1} of ${visible.length}`;
   if (!frames.has(name)) {
     connections.set(name, 'Connecting');
     scrollModes.delete(name);
@@ -211,7 +216,7 @@ function renderTabs(focusName = null) {
       hidden.add(name); saveHidden(); frames.get(name)?.remove(); frames.delete(name);
       const next = active && !hidden.has(active) ? active : sessions.find(n => !hidden.has(n));
       if (next) activate(next, true);
-      else { active = null; renameTarget = null; renameForm.hidden = true; renameError.textContent = ''; renderTabs(); updateControls(); restore.focus(); }
+      else { active = null; detailView.textContent = 'Unknown'; showStatus('No visible terminals', null, 'Unknown'); renameTarget = null; renameForm.hidden = true; renameError.textContent = ''; renderTabs(); updateControls(); restore.focus(); }
     });
     group.append(open, hide); tabs.append(group);
   }
@@ -263,7 +268,7 @@ async function load() {
     const data = await response.json(); sessions = data.sessions; token = data.token; sessionReady = true;
     const first = sessions.includes(active) && !hidden.has(active) ? active : sessions.find(n => !hidden.has(n));
     if (first) activate(first); else renderTabs();
-    if (!first) { showStatus('No visible terminals'); updateControls(); }
+    if (!first) { detailView.textContent = 'Unknown'; showStatus('No visible terminals', null, 'Unknown'); updateControls(); }
   } catch { showStatus(authRequired ? 'Sign-in may be required' : 'Connection unavailable — retry or sign in', 'load'); }
   finally { loading = false; }
 }
@@ -285,7 +290,7 @@ newTab.addEventListener('click', async () => {
     const response = await fetch('/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Terminal-Request': token }, body: '{}' });
     if (!response.ok) throw Error('Unable to create terminal');
     const data = await response.json(); sessions.push(data.name); activate(data.name);
-  } catch { sessionReady = false; showStatus('Unable to create terminal — check connection or sign in', 'load'); } finally { creating = false; updateControls(); }
+  } catch { sessionReady = false; showStatus('Unable to create terminal — check connection or sign in', 'load', connections.get(active) || 'Unknown'); } finally { creating = false; updateControls(); }
 });
 restore.addEventListener('click', event => { hidden.clear(); saveHidden(); renderTabs(); if (!active && sessions.length) activate(sessions[0], event.detail === 0); });
 latest.addEventListener('click', async () => {

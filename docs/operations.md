@@ -47,6 +47,8 @@ Inspect in order: browser viewport and terminal grid, ttyd/client resize, tmux p
 
 The candidate toolbar reports tmux scrollback or live mode only when it has a current pane identity. Application scroll position remains unknown. **Return to live** asks tmux to leave copy mode in that confirmed pane; it does not send keys to the application or move an application's own transcript. After reconnecting, verify the active pane before using it. A missing or stale pane identity prevents the request.
 
+**Details** shows the current view and browser-observed terminal connection, along with recovery guidance. It does not probe individual components, perform an input/output round trip, determine task health or verify Access authorization; those values are shown as not checked or unknown. The panel displays generic view positions or tmux window and pane numbers, and does not copy commands, terminal output, filenames or credentials into status data. A connected browser socket alone is not proof of end-to-end task health.
+
 For the recorded ttyd 1.7.7 Mac bundle, historical fixture evidence found that applying line height before font size triggered a final fit and avoided clipping. This observation is version-specific and must be retested after a change or upgrade.
 
 ## Rollback principles
