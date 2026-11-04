@@ -21,7 +21,7 @@ The UI lists the existing shared session and its own named sessions. Each new ta
 
 The candidate displays connection state on desktop and narrow screens. When the session list or terminal connection fails, Retry reloads the session list or reconnects the active view to the same session; it does not create a session or submit input. A sign-in message is tentative because a failed connection can have other causes. Connection status does not report background-job health.
 
-The candidate gives the embedded terminal a generic page title so ttyd's normal title assignments do not announce internal target metadata or the launch command. The parent iframe keeps its browser-local view label. This is an accessibility and privacy measure, not an access-control boundary.
+The candidate attempts to give the embedded terminal a generic page title so ttyd's normal title assignments do not announce internal target metadata or the launch command. This worked in the isolated Chromium check; if a browser rejects the override, terminal operation continues and title privacy is not established. The parent iframe keeps its browser-local view label. This is an accessibility and privacy measure, not an access-control boundary.
 
 ## Security boundary
 
