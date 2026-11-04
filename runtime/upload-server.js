@@ -18,6 +18,14 @@ if (
   !path.isAbsolute(directory)
 )
   throw new Error("Missing configuration");
+const socketDirectory = fs.lstatSync(path.dirname(socket));
+if (
+  !socketDirectory.isDirectory() ||
+  socketDirectory.isSymbolicLink() ||
+  socketDirectory.uid !== process.getuid() ||
+  (socketDirectory.mode & 0o077) !== 0
+)
+  throw new Error("Unsafe socket directory");
 fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
 const ds = fs.lstatSync(directory);
 if (
@@ -28,10 +36,8 @@ if (
 )
   throw new Error("Unsafe upload directory");
 try {
-  const st = fs.lstatSync(socket);
-  if (!st.isSocket() || st.uid !== process.getuid())
-    throw new Error("Unsafe socket");
-  fs.unlinkSync(socket);
+  fs.lstatSync(socket);
+  throw new Error("Upload socket path already exists; verify its owner before removal");
 } catch (e) {
   if (e.code !== "ENOENT") throw e;
 }
@@ -213,3 +219,6 @@ server.requestTimeout = 30000;
 server.headersTimeout = 10000;
 server.maxHeadersCount = 64;
 server.listen(socket, () => fs.chmodSync(socket, 0o600));
+function shutdown() { server.close(); }
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
