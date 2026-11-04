@@ -15,7 +15,7 @@ corepack yarn install --immutable --mode=skip-build
 corepack yarn inline
 ```
 
-The output is `dist/inline.html`. The lockfile fixes the dependency graph; verify a clean install and compare output when changing toolchain versions. Upstream's legacy dependencies emit warnings and require a separate upgrade assessment. From the repository root, run `node --test tests/*.test.js` for the local runtime and macOS upload fixture tests.
+The output is `dist/inline.html`. The build also copies the shared mobile-key source from `../linux/ui`, so keep that directory in the checkout. The lockfile fixes the dependency graph; verify a clean install and compare output when changing toolchain versions. Upstream's legacy dependencies emit warnings and require a separate upgrade assessment. From the repository root, run `node --test tests/*.test.js` for the local runtime and macOS upload fixture tests.
 
 ## Runtime boundary
 

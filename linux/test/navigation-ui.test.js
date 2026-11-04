@@ -19,6 +19,7 @@ function fixture({ rejectStorage = false } = {}) {
     setAttribute(name, value) { this.attributes[name] = value; }
     append(...items) { for (const item of items) { item.parent = this; this.children.push(item); } }
     replaceChildren() { this.children = []; }
+    before() {}
     remove() { if (this.parent) this.parent.children = this.parent.children.filter(item => item !== this); }
     focus() { document.activeElement = this; }
     scrollIntoView() {}
@@ -28,14 +29,15 @@ function fixture({ rejectStorage = false } = {}) {
   const ids = ['tabs', 'views', 'status', 'detail-view', 'detail-link', 'scroll-status', 'retry', 'restore', 'new-tab', 'rename-tab', 'rename-form', 'rename-input', 'rename-cancel', 'rename-error', 'latest', 'image-results', 'image-notice', 'copy-selection'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element()]));
   nodes['rename-form'].hidden = true;
-  document = { activeElement: null, querySelector: selector => nodes[selector.slice(1)], createElement: tag => new Element(tag) };
+  const header = new Element();
+  document = { activeElement: null, querySelector: selector => selector === 'header' ? header : nodes[selector.slice(1)], createElement: tag => new Element(tag) };
   const store = {}, calls = [];
   const localStorage = { getItem: key => store[key] ?? null, setItem: (key, value) => { if (rejectStorage) throw Error('Storage denied'); store[key] = value; } };
   const fetch = async (url, options = {}) => {
     calls.push({ url, method: options.method || 'GET' });
     return { ok: true, json: async () => ({ sessions: ['shared', 'web-aaaaaaaaaaaa', 'web-bbbbbbbbbbbb'], token: 'fixture-token' }) };
   };
-  const context = vm.createContext({ document, window: { addEventListener() {} }, location: { origin: 'http://fixture.test' }, localStorage, fetch, console });
+  const context = vm.createContext({ document, window: { addEventListener() {}, createMobileKeys: () => ({ toggle: new Element(), panel: new Element(), reset() {}, resetIfTargetChanged() {} }) }, location: { origin: 'http://fixture.test' }, localStorage, fetch, console });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../ui/app.js'), 'utf8'), context);
   return { nodes, document, store, calls };
 }

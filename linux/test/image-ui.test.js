@@ -17,6 +17,7 @@ class Element {
   setAttribute() {}
   append(...children) { for (const child of children) { child.parent = this; this.children.push(child); } }
   replaceChildren() { this.children = []; }
+  before() {}
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(item => item !== this); }
   focus() {}
   scrollIntoView() {}
@@ -28,8 +29,9 @@ function fixture() {
   const ids = ['tabs', 'views', 'status', 'detail-view', 'detail-link', 'scroll-status', 'retry', 'restore', 'new-tab', 'rename-tab', 'rename-form', 'rename-input', 'rename-cancel', 'rename-error', 'latest', 'image-results', 'image-notice', 'copy-selection'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element()]));
   const listeners = {}, calls = [];
-  const document = { querySelector: selector => nodes[selector.slice(1)], createElement: tag => new Element(tag) };
-  const window = { addEventListener: (name, handler) => { listeners[name] = handler; } };
+  const header = new Element();
+  const document = { querySelector: selector => selector === 'header' ? header : nodes[selector.slice(1)], createElement: tag => new Element(tag) };
+  const window = { addEventListener: (name, handler) => { listeners[name] = handler; }, createMobileKeys: () => ({ toggle: new Element(), panel: new Element(), reset() {}, resetIfTargetChanged() {} }) };
   const location = { origin: 'http://fixture.test' };
   const ticket = 'a'.repeat(48), savedPath = '/tmp/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png';
   let releaseUpload;

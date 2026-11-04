@@ -117,6 +117,8 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     assert.equal(tmux('show-options', '-t', 'shared', 'set-titles'), 'set-titles on', 'reusing ttyd restores session metadata settings');
     assert.match(terminalPage.body, /src="\/clipboard-bridge\.js"/);
     assert.equal((await request('GET', '/clipboard-bridge.js')).status, 200);
+    assert.equal((await request('GET', '/mobile-keys.js')).status, 200);
+    assert.equal((await request('GET', '/mobile-keys.css')).status, 200);
     const targetInfo = tmux('display-message', '-p', '-t', 'shared:', '#{session_id}|#{pane_id}|#{pid}').split('|');
     const targetHeaders = { ...headers, 'x-terminal-session': 'shared', 'x-terminal-session-id': targetInfo[0], 'x-terminal-pane': targetInfo[1], 'x-terminal-server-pid': targetInfo[2] };
     const mismatch = JSON.parse((await request('POST', '/api/images/prepare', { ...targetHeaders, 'x-terminal-session-id': '$999999' })).body);

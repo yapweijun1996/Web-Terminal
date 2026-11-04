@@ -35,6 +35,15 @@ let renameTarget = null;
 const frames = new Map();
 const connections = new Map();
 const scrollModes = new Map();
+const mobileKeys = window.createMobileKeys({
+  getTerminal: () => active && connections.get(active) === 'Connected' && frames.get(active)?.contentWindow?.webTerminalTarget ? frames.get(active)?.contentWindow?.term : null,
+  getTargetKey: () => {
+    const target = active && connections.get(active) === 'Connected' && frames.get(active)?.contentWindow?.webTerminalTarget;
+    return target ? [target.session, target.sessionId, target.pane, target.serverPid].join('|') : null;
+  },
+});
+latest.before(mobileKeys.toggle);
+views.before(mobileKeys.panel);
 function label(name) { return names[name] || (name === 'shared' ? 'Existing terminal' : `Terminal ${name.slice(4)}`); }
 function saveHidden() { try { localStorage.setItem(storageKey, JSON.stringify([...hidden])); } catch {} }
 function saveNames() { try { localStorage.setItem(namesKey, JSON.stringify(names)); return true; } catch { return false; } }
@@ -67,6 +76,7 @@ function activate(name, focusTab = false) {
   if (renameTarget && renameTarget !== name) { renameForm.hidden = true; renameTarget = null; renameError.textContent = ''; }
   if (name !== active) { copyGestureAt = 0; pendingCopy = null; copySelection.hidden = true; }
   active = name;
+  mobileKeys.resetIfTargetChanged();
   const visible = sessions.filter(session => !hidden.has(session));
   detailView.textContent = `${visible.indexOf(name) + 1} of ${visible.length}`;
   if (!frames.has(name)) {
@@ -316,9 +326,11 @@ window.addEventListener('message', event => {
       if (event.data?.type === 'terminal-connection' && ['Connecting', 'Connected', 'Disconnected', 'Connection error'].includes(event.data.state)) {
         connections.set(name, event.data.state);
         if (event.data.state !== 'Connected') scrollModes.delete(name);
+        if (name === active && event.data.state !== 'Connected') mobileKeys.reset();
         if (name === active) showConnection(name);
       } else if (event.data?.type === 'terminal-scroll' && (event.data.mode === null || (typeof event.data.mode === 'string' && /^[a-z0-9-]{0,64}$/.test(event.data.mode)))) {
         scrollModes.set(name, event.data.mode);
+        if (name === active) mobileKeys.resetIfTargetChanged();
         if (name === active) showScroll(name);
       } else if (event.data?.type === 'terminal-clipboard' && name === active && typeof event.data.text === 'string' && event.data.text.length > 0 && event.data.text.length <= 1048576) {
         const selection = { name, text: event.data.text };

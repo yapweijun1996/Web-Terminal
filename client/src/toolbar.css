@@ -75,5 +75,5 @@
     display: none;
 }
 #terminal-container {
-    height: calc(100dvh - 56px) !important;
+    height: calc(100dvh - 56px - var(--mobile-keys-height, 0px)) !important;
 }

@@ -64,9 +64,10 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-008: Add mobile terminal input controls
 
-- **Status:** Open
+- **Status:** In progress
 - **Scope:** Design a collapsible input bar for Esc, Ctrl, Tab, and directional keys, with clear modifier state and space for the input line.
 - **Acceptance:** On documented physical devices, touch controls work without accidental submission; with the soft keyboard open and closed, the terminal grid and PTY dimensions agree and the current input remains visible.
+- **Candidate evidence (2026-11-04):** A shared, collapsed-by-default key bar sends Esc, Tab and mode-aware arrows only to the connected active terminal. Ctrl requires a letter selection and a separate send; the selection clears after use, and Ctrl+J/M are excluded because they can submit. Isolated Chrome/tmux fixtures checked a synthetic unsubmitted draft, cursor movement, control-key selection, reconnect guards and a 390×844 emulated viewport. With the bar open, xterm dimensions matched tmux client dimensions, with one row used by the tmux status line. Real touch, soft-keyboard visibility and dimensions, and physical devices remain unverified; the candidate is not deployed.
 
 ### WT-009: Improve keyboard and accessibility support
 

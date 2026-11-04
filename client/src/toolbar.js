@@ -102,6 +102,34 @@
     showConnection(window.webTerminalConnectionState || 'connecting');
     showTarget(window.webTerminalTarget);
     document.body.prepend(bar);
+    const mobileKeys = window.createMobileKeys({
+        getTerminal: () => window.mbaTerminalReady?.() && window.webTerminalTarget ? window.term : null,
+        getTargetKey: () => {
+            const target = window.mbaTerminalReady?.() && window.webTerminalTarget;
+            return target ? [target.session, target.sessionId, target.pane, target.serverPid].join('|') : null;
+        },
+        onLayout: () => requestAnimationFrame(() => {
+            document.documentElement.style.setProperty('--mobile-keys-height', `${mobileKeys.panel.getBoundingClientRect().height}px`);
+            window.term?.fit();
+        }),
+    });
+    bar.insertBefore(mobileKeys.toggle, bar.children[1]);
+    bar.after(mobileKeys.panel);
+    window.addEventListener('web-terminal-connection', e => { if (e.detail !== 'connected') mobileKeys.reset(); });
+    window.addEventListener('web-terminal-target', mobileKeys.resetIfTargetChanged);
+    addEventListener('resize', () => requestAnimationFrame(() => {
+        document.documentElement.style.setProperty('--mobile-keys-height', `${mobileKeys.panel.getBoundingClientRect().height}px`);
+        window.term?.fit();
+    }));
+    if (typeof ResizeObserver === 'function') {
+        new ResizeObserver(() => {
+            const height = `${mobileKeys.panel.getBoundingClientRect().height}px`;
+            if (document.documentElement.style.getPropertyValue('--mobile-keys-height') !== height) {
+                document.documentElement.style.setProperty('--mobile-keys-height', height);
+                window.term?.fit();
+            }
+        }).observe(mobileKeys.panel);
+    }
     bar.addEventListener('click', e => {
         const btn = e.target.closest('button[data-key]');
         if (!btn) return;
