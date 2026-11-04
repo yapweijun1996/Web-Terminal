@@ -14,6 +14,14 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .tab.active { background: #354b6c; }
 .tab button { border: 0; background: transparent; }
 .tab .hide { padding-left: 4px; }
+dialog { width: min(440px, calc(100vw - 32px)); color: #e8eaf0; background: #1b2029; border: 1px solid #71849a; border-radius: 8px; padding: 18px; }
+dialog::backdrop { background: rgba(0, 0, 0, .7); }
+.dialog-heading, .dialog-actions { display: flex; align-items: center; gap: 8px; }
+.dialog-heading h2 { flex: 1; margin: 0; font-size: 18px; }
+.dialog-actions { flex-wrap: wrap; justify-content: flex-end; }
+#close-confirm { background: #8c2930; border-color: #db737a; }
+#close-error { color: #ffcfb3; }
+#close-error:empty { display: none; }
 #rename-form:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid #30343e; }
 #rename-input { min-width: 0; max-width: 100%; color: inherit; background: #252a35; border: 1px solid #71849a; border-radius: 6px; padding: 6px; }
 #rename-form small { flex: 1 0 100%; color: #c6d3e2; }

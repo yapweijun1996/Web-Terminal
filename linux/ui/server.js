@@ -203,6 +203,31 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/display-controls.css') return file(res, 'display-controls.css', 'text/css; charset=utf-8');
     if (req.method === 'GET' && req.url === '/style.css') return file(res, 'style.css', 'text/css; charset=utf-8');
     if (req.method === 'GET' && req.url === '/api/sessions') return send(res, 200, JSON.stringify({ sessions: sessions(), token }));
+    const identity = /^\/api\/sessions\/(shared|web-[a-f0-9]{12})\/identity$/.exec(req.url);
+    if (req.method === 'GET' && identity) {
+      try {
+        const result = tmux(['display-message', '-p', '-t', `=${identity[1]}:`, '#{session_name}|#{session_id}|#{pid}']).trim().split('|');
+        if (result[0] !== identity[1] || !/^\$\d+$/.test(result[1]) || !/^\d+$/.test(result[2])) throw new Error('Session unavailable');
+        return send(res, 200, JSON.stringify({ sessionId: result[1], serverPid: result[2] }));
+      } catch { return send(res, 404, '{"error":"Session unavailable"}'); }
+    }
+    const close = /^\/api\/sessions\/(shared|web-[a-f0-9]{12})\/close$/.exec(req.url);
+    if (req.method === 'POST' && close) {
+      if (!allowedMutation(req)) return send(res, 403, '{"error":"Forbidden"}');
+      if (req.headers['transfer-encoding'] || Number(req.headers['content-length'] || 0) !== 0) return send(res, 400, '{"error":"Unexpected body"}');
+      const sessionId = req.headers['x-terminal-session-id'], serverPid = req.headers['x-terminal-server-pid'];
+      if (!/^\$\d+$/.test(sessionId || '') || !/^\d+$/.test(serverPid || '')) return send(res, 409, '{"error":"Session changed"}');
+      try {
+        // Check and kill in one tmux command queue, bound to the original session ID and server.
+        const result = tmux(['if-shell', '-F', '-t', sessionId,
+          `#{&&:#{==:#{session_name},${close[1]}},#{==:#{pid},${serverPid}}}`,
+          `kill-session -t '${sessionId}'`, 'display-message -p STALE']).trim();
+        if (result === 'STALE') throw new Error('Session changed');
+      } catch { return send(res, 409, '{"error":"Session changed or unavailable"}'); }
+      const child = children.get(close[1]);
+      if (child) { children.delete(close[1]); child.kill('SIGTERM'); }
+      return send(res, 200, '{"ok":true}');
+    }
     if (req.method === 'POST' && ['/api/images/prepare', '/api/images/result', '/api/images/insert'].includes(req.url)) {
       if (!allowedMutation(req)) return send(res, 403, '{"error":"Forbidden"}');
       if (req.headers['transfer-encoding'] || Number(req.headers['content-length'] || 0) !== 0) return send(res, 400, '{"error":"Unexpected body"}');

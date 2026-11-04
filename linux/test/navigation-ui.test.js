@@ -24,9 +24,11 @@ function fixture({ rejectStorage = false } = {}) {
     focus() { document.activeElement = this; }
     scrollIntoView() {}
     select() {}
-    click() { if (!this.hidden && !this.disabled) this.listeners.click?.({ detail: 0 }); }
+    showModal() { this.open = true; }
+    close() { this.open = false; }
+    click() { if (!this.hidden && !this.disabled) { this.listeners.click?.({ detail: 0 }); this.onclick?.({ detail: 0 }); } }
   }
-  const ids = ['tabs', 'views', 'status', 'detail-view', 'detail-link', 'scroll-status', 'retry', 'restore', 'new-tab', 'rename-tab', 'rename-form', 'rename-input', 'rename-cancel', 'rename-error', 'latest', 'image-results', 'image-notice', 'copy-selection'];
+  const ids = ['tabs', 'views', 'status', 'detail-view', 'detail-link', 'scroll-status', 'retry', 'restore', 'new-tab', 'rename-tab', 'rename-form', 'rename-input', 'rename-cancel', 'rename-error', 'latest', 'image-results', 'image-notice', 'copy-selection', 'close-dialog', 'close-name', 'close-error', 'close-confirm', 'close-cancel', 'close-dismiss', 'close-hide'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element()]));
   nodes['rename-form'].hidden = true;
   const header = new Element();
@@ -35,7 +37,7 @@ function fixture({ rejectStorage = false } = {}) {
   const localStorage = { getItem: key => store[key] ?? null, setItem: (key, value) => { if (rejectStorage) throw Error('Storage denied'); store[key] = value; } };
   const fetch = async (url, options = {}) => {
     calls.push({ url, method: options.method || 'GET' });
-    return { ok: true, json: async () => ({ sessions: ['shared', 'web-aaaaaaaaaaaa', 'web-bbbbbbbbbbbb'], token: 'fixture-token' }) };
+    return { ok: true, json: async () => url.endsWith('/identity') ? ({ sessionId: '$1', serverPid: '123' }) : ({ sessions: ['shared', 'web-aaaaaaaaaaaa', 'web-bbbbbbbbbbbb'], token: 'fixture-token' }) };
   };
   const context = vm.createContext({ document, window: { addEventListener() {}, createMobileKeys: () => ({ toggle: new Element(), panel: new Element(), reset() {}, resetIfTargetChanged() {} }), createTerminalDisplayControls: () => ({ element: new Element(), apply() {} }) }, location: { origin: 'http://fixture.test' }, localStorage, fetch, console });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../ui/app.js'), 'utf8'), context);
@@ -52,8 +54,24 @@ test('keyboard navigation keeps focus and hiding another view preserves the acti
   assert.equal(f.document.activeElement.textContent, 'Terminal aaaaaaaaaaaa');
   assert.equal(f.document.activeElement.attributes['aria-pressed'], 'true');
   tabs.children[0].children[1].click();
+  assert.equal(f.nodes['close-dialog'].open, true);
+  f.nodes['close-hide'].click();
   assert.equal(f.document.activeElement.textContent, 'Terminal aaaaaaaaaaaa', 'hiding a different view does not switch the active view');
   assert.equal(f.calls.some(call => call.method === 'POST'), false, 'hiding a view must not terminate a session');
+});
+
+test('closing requires explicit confirmation; cancel leaves the session untouched', async () => {
+  const f = fixture(); await flush();
+  f.nodes.tabs.children[1].children[1].click(); await flush();
+  assert.equal(f.nodes['close-name'].textContent, 'Terminal aaaaaaaaaaaa');
+  f.nodes['close-dismiss'].click();
+  assert.equal(f.nodes['close-dialog'].open, false);
+  assert.equal(f.calls.some(call => call.method === 'POST'), false);
+  f.nodes.tabs.children[1].children[1].click(); await flush();
+  f.nodes['close-confirm'].click(); await flush();
+  assert.ok(f.calls.some(call => call.url === '/api/sessions/web-aaaaaaaaaaaa/close' && call.method === 'POST'));
+  assert.equal(f.nodes.tabs.children.length, 2);
+  assert.equal(f.nodes.tabs.children[0].children[0].textContent, 'Existing terminal');
 });
 
 test('keyboard shortcut returns from the active terminal to the toolbar', async () => {

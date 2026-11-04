@@ -225,6 +225,29 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     await ready();
     assert.equal(tmux('display-message', '-p', '-t', name, '#{pane_current_command}'), 'sleep');
     assert.ok(JSON.parse((await request('GET', '/api/sessions')).body).sessions.includes(name));
+    const currentList = JSON.parse((await request('GET', '/api/sessions')).body);
+    const closeHeaders = { origin: 'http://fixture.test', 'content-type': 'application/json', 'x-terminal-request': currentList.token };
+    const identity = JSON.parse((await request('GET', `/api/sessions/${name}/identity`)).body);
+    const target = { ...closeHeaders, 'x-terminal-session-id': identity.sessionId, 'x-terminal-server-pid': identity.serverPid };
+    assert.equal((await request('POST', `/api/sessions/${name}/close`, { ...target, origin: 'http://other.test' })).status, 403);
+    assert.equal((await request('POST', `/api/sessions/${name}/close`, { ...target, 'x-terminal-request': 'invalid' })).status, 403);
+    assert.equal((await request('POST', `/api/sessions/${name}/close`, { ...target, 'x-terminal-server-pid': '999999999' })).status, 409);
+    assert.equal(tmux('display-message', '-p', '-t', name, '#{pane_current_command}'), 'sleep');
+    tmux('kill-session', '-t', `=${name}`);
+    tmux('new-session', '-d', '-s', name);
+    assert.equal((await request('POST', `/api/sessions/${name}/close`, target)).status, 409, 'a replacement session is not ended by an old confirmation');
+    const replacement = JSON.parse((await request('GET', `/api/sessions/${name}/identity`)).body);
+    assert.equal((await request('GET', `/terminal/${name}`)).status, 200);
+    const childPids = fs.readFileSync(`/proc/${server.pid}/task/${server.pid}/children`, 'utf8').trim().split(/\s+/).map(Number);
+    const childPid = childPids.find(pid => {
+      try { return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes(`ttyd-${name}.sock`); } catch { return false; }
+    });
+    assert.ok(childPid > 0, 'the session has its own UI-managed ttyd');
+    assert.equal((await request('POST', `/api/sessions/${name}/close`, { ...target, 'x-terminal-session-id': replacement.sessionId, 'x-terminal-server-pid': replacement.serverPid })).status, 200);
+    for (let i = 0; i < 100 && fs.existsSync(`/proc/${childPid}`); i++) await sleep(10);
+    assert.equal(fs.existsSync(`/proc/${childPid}`), false, 'ending the session also stops its ttyd');
+    assert.ok(!JSON.parse((await request('GET', '/api/sessions')).body).sessions.includes(name));
+    assert.ok(JSON.parse((await request('GET', '/api/sessions')).body).sessions.includes('shared'), 'another session is preserved');
   } finally {
     if (server && server.exitCode === null) {
       server.kill('SIGTERM');

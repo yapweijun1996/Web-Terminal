@@ -34,6 +34,7 @@ let sessions = [], active = null, token = '';
 let copyGestureAt = 0, pendingCopy = null;
 let retryMode = null, loading = false, sessionReady = false, creating = false, returning = false;
 let renameTarget = null;
+let closeSequence = 0;
 const frames = new Map();
 const connections = new Map();
 const scrollModes = new Map();
@@ -217,6 +218,58 @@ async function copyTerminalSelection(selection) {
   } catch { status.textContent = 'Click Copy selection and allow clipboard access'; }
 }
 copySelection.addEventListener('click', () => { if (pendingCopy) copyTerminalSelection(pendingCopy); });
+function removeView(name) {
+  if (name === active) { pendingCopy = null; copySelection.hidden = true; }
+  frames.get(name)?.remove(); frames.delete(name); connections.delete(name); scrollModes.delete(name);
+  const next = active && sessions.includes(active) && !hidden.has(active) ? active : sessions.find(n => !hidden.has(n));
+  if (next) activate(next, true);
+  else { active = null; detailView.textContent = 'Unknown'; showStatus('No visible terminals', null, 'Unknown'); renameTarget = null; renameForm.hidden = true; renameError.textContent = ''; renderTabs(); updateControls(); (restore.hidden ? newTab : restore).focus(); }
+}
+function confirmClose(name, opener) {
+  const sequence = ++closeSequence;
+  const dialog = document.querySelector('#close-dialog');
+  const title = document.querySelector('#close-name');
+  const error = document.querySelector('#close-error');
+  const confirm = document.querySelector('#close-confirm');
+  const cancel = document.querySelector('#close-cancel');
+  const dismiss = document.querySelector('#close-dismiss');
+  const hide = document.querySelector('#close-hide');
+  let identity = null, closing = false;
+  title.textContent = label(name);
+  error.textContent = '';
+  confirm.disabled = true; cancel.disabled = false; dismiss.disabled = false; hide.disabled = false;
+  const cancelDialog = () => { if (!closing) { dialog.close(); opener.focus(); } };
+  cancel.onclick = cancelDialog; dismiss.onclick = cancelDialog;
+  dialog.oncancel = event => { event.preventDefault(); cancelDialog(); };
+  hide.onclick = () => {
+    if (closing) return;
+    dialog.close(); hidden.add(name); saveHidden(); removeView(name);
+  };
+  confirm.onclick = async () => {
+    if (!identity || closing) return;
+    closing = true; confirm.disabled = true; cancel.disabled = true; dismiss.disabled = true; hide.disabled = true;
+    try {
+      const response = await fetch(`/api/sessions/${name}/close`, { method: 'POST', headers: {
+        'Content-Type': 'application/json', 'X-Terminal-Request': token,
+        'X-Terminal-Session-Id': identity.sessionId, 'X-Terminal-Server-Pid': identity.serverPid,
+      } });
+      if (!response.ok) throw Error('Session could not be ended');
+      dialog.close(); sessions = sessions.filter(session => session !== name);
+      hidden.delete(name); saveHidden(); delete names[name]; saveNames(); removeView(name);
+    } catch {
+      error.textContent = 'Session end was not confirmed. Refresh the page before trying again.';
+      identity = null; cancel.disabled = false; dismiss.disabled = false; hide.disabled = false;
+    } finally { closing = false; }
+  };
+  dialog.showModal(); cancel.focus();
+  fetch(`/api/sessions/${name}/identity`, { cache: 'no-store', redirect: 'manual' })
+    .then(response => { if (!response.ok) throw Error('Session unavailable'); return response.json(); })
+    .then(data => {
+      if (!/^\$\d+$/.test(data.sessionId) || !/^\d+$/.test(data.serverPid)) throw Error('Session unavailable');
+      if (dialog.open && sequence === closeSequence) { identity = data; confirm.disabled = false; }
+    })
+    .catch(() => { if (dialog.open && sequence === closeSequence) error.textContent = 'Session identity unavailable. Refresh and try again.'; });
+}
 function renderTabs(focusName = null) {
   let focusTarget = null;
   tabs.replaceChildren();
@@ -234,14 +287,8 @@ function renderTabs(focusName = null) {
     });
     if (name === focusName) focusTarget = open;
     const hide = document.createElement('button'); hide.type = 'button'; hide.className = 'hide'; hide.textContent = '×';
-    hide.setAttribute('aria-label', `Hide ${label(name)}`); hide.title = 'Hide tab; keep session running';
-    hide.addEventListener('click', () => {
-      if (name === active) { pendingCopy = null; copySelection.hidden = true; }
-      hidden.add(name); saveHidden(); frames.get(name)?.remove(); frames.delete(name);
-      const next = active && !hidden.has(active) ? active : sessions.find(n => !hidden.has(n));
-      if (next) activate(next, true);
-      else { active = null; detailView.textContent = 'Unknown'; showStatus('No visible terminals', null, 'Unknown'); renameTarget = null; renameForm.hidden = true; renameError.textContent = ''; renderTabs(); updateControls(); restore.focus(); }
-    });
+    hide.setAttribute('aria-label', `Close ${label(name)}`); hide.title = 'Close or hide terminal';
+    hide.addEventListener('click', () => confirmClose(name, hide));
     group.append(open, hide); tabs.append(group);
   }
   restore.hidden = !sessions.some(n => hidden.has(n));

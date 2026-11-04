@@ -35,6 +35,8 @@ The repository candidates show connection state independently of background-job 
 
 The Mac toolbar shows the last tmux-confirmed window and pane; the tmux status line shows window names. On Linux, focus a view button and use the arrow keys, Home or End to navigate. Rename changes only that browser's label. Hide detaches the browser view and keeps its tmux session running; it is not a command to end the task. If browser storage is unavailable, the interface reports that it cannot save a name.
 
+In the Linux repository candidate, a tab's × opens a confirmation: Cancel keeps the session, Hide instead hides its view, and End session stops its tmux windows and running tasks. Save work and verify the selected terminal before ending it. The separately deployed UI may still have the earlier hide-only control.
+
 ## Candidate image upload
 
 The Mac candidate saves an image and shows its path, the last tmux-confirmed window and pane, and an explicit insertion control. Check that label before inserting: a window switch still in flight has not yet been confirmed. Insertion targets the captured pane, even if another pane is now visible, and sends no Enter. If metadata, the original session, or the pane is unavailable, copy the saved path instead. A path being sent does not establish that a TUI accepted an attachment.

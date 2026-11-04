@@ -23,11 +23,13 @@ class Element {
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); }
   focus() {}
   scrollIntoView() {}
-  click() { if (!this.hidden && !this.disabled) this.listeners.click?.(); }
+  showModal() { this.open = true; }
+  close() { this.open = false; }
+  click() { if (!this.hidden && !this.disabled) { this.listeners.click?.(); this.onclick?.(); } }
 }
 
 test('session auth failure and iframe disconnect offer safe explicit recovery', async () => {
-  const nodes = Object.fromEntries(['tabs', 'views', 'status', 'detail-view', 'detail-link', 'scroll-status', 'retry', 'restore', 'new-tab', 'rename-tab', 'rename-form', 'rename-input', 'rename-cancel', 'rename-error', 'latest', 'image-results', 'image-notice', 'copy-selection'].map(id => [id, new Element()]));
+  const nodes = Object.fromEntries(['tabs', 'views', 'status', 'detail-view', 'detail-link', 'scroll-status', 'retry', 'restore', 'new-tab', 'rename-tab', 'rename-form', 'rename-input', 'rename-cancel', 'rename-error', 'latest', 'image-results', 'image-notice', 'copy-selection', 'close-dialog', 'close-name', 'close-error', 'close-confirm', 'close-cancel', 'close-dismiss', 'close-hide'].map(id => [id, new Element()]));
   const header = new Element();
   const document = { querySelector: selector => selector === 'header' ? header : nodes[selector.slice(1)], createElement: tag => new Element(tag) };
   const listeners = {};
@@ -86,6 +88,7 @@ test('session auth failure and iframe disconnect offer safe explicit recovery', 
   assert.equal(nodes.retry.hidden, true);
   listeners.message({ source: second.contentWindow, origin: location.origin, data: { type: 'terminal-scroll', mode: '' } });
   nodes.tabs.children[0].children[1].click();
+  nodes['close-hide'].click();
   assert.equal(nodes['detail-view'].textContent, 'Unknown');
   assert.equal(nodes['detail-link'].textContent, 'Unknown');
   nodes.restore.listeners.click({ detail: 0 });

@@ -49,5 +49,15 @@
   <div id="image-notice" role="status" aria-live="polite" hidden></div>
   <section id="image-results" aria-label="Saved image paths"></section>
   <main id="views"></main>
+  <dialog id="close-dialog" aria-labelledby="close-title" aria-describedby="close-description">
+    <div class="dialog-heading"><h2 id="close-title">Close terminal?</h2><button id="close-dismiss" type="button" aria-label="Cancel">×</button></div>
+    <p id="close-description">End <strong id="close-name"></strong>? This stops all windows and running tasks in the session. Unsaved work may be lost.</p>
+    <p id="close-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button id="close-hide" type="button">Hide instead</button>
+      <button id="close-cancel" type="button">Cancel</button>
+      <button id="close-confirm" type="button" disabled>End session</button>
+    </div>
+  </dialog>
 </body>
 </html>
