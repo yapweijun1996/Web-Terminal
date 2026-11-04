@@ -119,10 +119,12 @@ function proxy(req, res, target, endpoint) {
           (() => {
             // The embedded ttyd client otherwise publishes its launch command
             // and tmux title metadata to the browser's accessible page title.
-            document.title = 'Terminal view';
-            Object.defineProperty(document, 'title', {
-              configurable: true, get: () => 'Terminal view', set: () => {},
-            });
+            try {
+              document.title = 'Terminal view';
+              Object.defineProperty(document, 'title', {
+                configurable: true, get: () => 'Terminal view', set: () => {},
+              });
+            } catch { /* Keep the terminal usable if this browser rejects the title override. */ }
             const Native = window.WebSocket;
             window.WebSocket = class extends Native {
               constructor(...args) {

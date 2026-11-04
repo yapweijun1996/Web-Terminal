@@ -172,6 +172,11 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     vm.runInNewContext(shim, { window, document, Node: { TEXT_NODE: 3 }, setTimeout: fn => timers.push(fn) });
     document.title = 'synthetic command or path';
     assert.equal(document.title, 'Terminal view', 'ttyd must not publish its launch command in the frame title');
+    const restrictedDocument = { querySelectorAll: () => [] };
+    Object.defineProperty(restrictedDocument, 'title', { value: 'fixed', configurable: false });
+    const fallbackWindow = { WebSocket: class { addEventListener() {} }, parent: { postMessage() {} }, location: { origin: 'http://fixture.test' } };
+    vm.runInNewContext(shim, { window: fallbackWindow, document: restrictedDocument, Node: { TEXT_NODE: 3 }, setTimeout() {} });
+    assert.doesNotThrow(() => new fallbackWindow.WebSocket('ws://fixture.test'), 'a rejected title override must not prevent connections');
     new window.WebSocket('ws://fixture.test');
     window.term.focus();
     assert.equal(focusCalls, 0, 'the first terminal autofocus must not steal keyboard navigation focus');
