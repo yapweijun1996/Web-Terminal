@@ -9,6 +9,7 @@ Keep project documentation in English, concise, and consistent with the actual r
 | [README](../README.md) | Project entry point, repository scope, current limitations, and document links. |
 | [TASK](../TASK.md) | Single backlog for task IDs, priority, status, scope, acceptance, dependencies, and completion evidence. |
 | [Architecture](architecture.md) | Observed implementation, trust boundaries, and source-of-truth boundaries. |
+| [Source inventory](source-inventory.md) | Source provenance, reconstruction boundaries, exclusions, and reproducibility evidence. |
 | [Operations](operations.md) | Safe investigation, verification, and rollback procedures. |
 | [Roadmap and research](improvement-roadmap.md) | Research rationale, source links, and sequencing; link to TASK for current task details rather than maintaining a second backlog. |
 

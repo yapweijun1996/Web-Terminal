@@ -1,2 +1,4 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Unified-diff context lines use a single space to represent an empty line.
+client/.yarn/patches/*.patch whitespace=-blank-at-eol

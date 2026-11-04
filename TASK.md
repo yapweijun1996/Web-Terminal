@@ -1,6 +1,6 @@
 # Web Terminal Tasks
 
-Last reviewed: 2026-11-04. This file is the authoritative project backlog. All tasks below are proposals, not a claim that implementation or verification has been completed. The repository currently contains documentation only; the running Mac implementation is outside it. See [architecture](docs/architecture.md) for evidence and [operations](docs/operations.md) for verification and session-preservation requirements.
+Last reviewed: 2026-11-04. This file is the authoritative project backlog. Tasks remain incomplete until their acceptance evidence is recorded. The running Mac implementation remains outside the repository; the in-repository development candidate is not automatically deployed. See [architecture](docs/architecture.md) for evidence and [operations](docs/operations.md) for verification and session-preservation requirements.
 
 Status values: **Open** = not completed; **In progress** = actively being worked on; **Verified** = acceptance evidence recorded; **Blocked** = a specific prerequisite is unavailable. Priority describes order, not permission to change a live system. Record evidence, date, environment, and remaining limits when changing a status. A historical fixture result does not verify an unrelated live session.
 
@@ -16,8 +16,9 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-002: Establish reviewable source and reproducible builds
 
-- **Status:** Open
+- **Status:** In progress
 - **Scope:** Inventory the separately maintained implementation and provenance; separate editable source from bundled or generated assets. Review what may be included before importing anything into the repository.
+- **Evidence so far (2026-11-04):** The pinned unmodified upstream build matched the installed stock ttyd page byte-for-byte. A clean installation and two candidate builds produced the same output hash on this Mac. An isolated Chrome/tmux fixture created a window and retained a running fixture job through page reload. Local runtime socket and macOS upload baseline tests passed. See [source inventory](docs/source-inventory.md). Full live behavior parity, Linux reproducibility, other platforms, and deployment remain unverified.
 - **Acceptance:** A clean checkout builds the reviewed artifact using documented dependencies and versions. An inventory and secret review exclude private configuration, credentials, uploads, logs, and terminal contents; compare the artifact in isolation before any deployment.
 
 ### WT-003: Diagnose Codex scrolling and expose scroll state
