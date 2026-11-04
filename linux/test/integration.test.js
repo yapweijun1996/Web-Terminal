@@ -112,6 +112,9 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     assert.equal((await request('GET', '/terminal/invalid')).status, 404);
     const terminalPage = await request('GET', '/terminal/shared');
     assert.equal(terminalPage.status, 200);
+    tmux('set-option', '-u', '-t', 'shared', 'set-titles');
+    assert.equal((await request('GET', '/terminal/shared')).status, 200);
+    assert.equal(tmux('show-options', '-t', 'shared', 'set-titles'), 'set-titles on', 'reusing ttyd restores session metadata settings');
     assert.match(terminalPage.body, /src="\/clipboard-bridge\.js"/);
     assert.equal((await request('GET', '/clipboard-bridge.js')).status, 200);
     const targetInfo = tmux('display-message', '-p', '-t', 'shared:', '#{session_id}|#{pane_id}|#{pid}').split('|');
@@ -133,6 +136,14 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     assert.ok(oldPaneOutput.replace(/\n/g, '').endsWith(boundUpload.path), 'the captured pane receives the path without Enter');
     assert.ok(!tmux('capture-pane', '-J', '-p', '-t', otherPane).includes(boundUpload.path), 'the later pane does not receive it');
     assert.equal((await request('POST', '/api/images/insert', { ...headers, 'x-image-receipt': bound.ticket })).status, 409, 'insertion cannot be repeated');
+    assert.equal((await request('POST', '/api/sessions/shared/latest', { ...targetHeaders, 'x-terminal-pane': '%999999' }, '{}')).status, 409);
+    assert.equal((await request('POST', '/api/sessions/shared/latest', targetHeaders, '{}')).status, 200);
+    assert.equal(tmux('capture-pane', '-J', '-p', '-t', targetInfo[1]), oldPaneOutput, 'returning to live outside copy mode does not touch the draft');
+    tmux('copy-mode', '-t', targetInfo[1]);
+    assert.match(tmux('display-message', '-p', '-t', targetInfo[1], '#{pane_mode}'), /^copy-mode/);
+    assert.equal((await request('POST', '/api/sessions/shared/latest', targetHeaders, '{}')).status, 200);
+    assert.equal(tmux('display-message', '-p', '-t', targetInfo[1], '#{pane_mode}'), '');
+    assert.equal(tmux('capture-pane', '-J', '-p', '-t', targetInfo[1]), oldPaneOutput, 'leaving copy mode preserves the draft');
     const lostHeaders = { ...targetHeaders, 'x-terminal-pane': otherPane };
     const lost = JSON.parse((await request('POST', '/api/images/prepare', lostHeaders)).body);
     const lostUpload = JSON.parse((await request('POST', '/api/images', { ...imageHeaders, 'x-image-receipt': lost.ticket }, image)).body);
@@ -142,29 +153,34 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     const shim = terminalPage.body.match(/<head><script>([\s\S]*?)<\/script>/)?.[1];
     assert.ok(shim, 'the ttyd page must include the connection-state shim');
     const handlers = {}, messages = [], timers = [];
-    let onTitle;
+    let onTitle, focusCalls = 0;
     const overlay = { childNodes: [{ nodeType: 3 }], textContent: 'Press ⏎ to Reconnect' };
     overlay.firstChild = overlay.childNodes[0];
     const unrelated = { childNodes: [{ nodeType: 1 }, { nodeType: 1 }], textContent: 'Press ⏎ to Reconnect' };
     const window = {
       WebSocket: class { addEventListener(name, callback) { handlers[name] = callback; } },
-      term: { options: { disableStdin: false }, onTitleChange: callback => { onTitle = callback; } },
-      parent: { postMessage: (message, target) => messages.push({ state: message.state, target }) },
+      term: { options: { disableStdin: false }, onTitleChange: callback => { onTitle = callback; }, focus: () => { focusCalls++; } },
+      frameElement: { dataset: { preserveTabFocus: 'true' } },
+      parent: { document: { activeElement: {} }, postMessage: (message, target) => messages.push({ state: message.state, target }) },
       location: { origin: 'http://fixture.test' },
     };
     vm.runInNewContext(shim, { window, document: { querySelectorAll: () => [overlay, unrelated] }, Node: { TEXT_NODE: 3 }, setTimeout: fn => timers.push(fn) });
     new window.WebSocket('ws://fixture.test');
+    window.term.focus();
+    assert.equal(focusCalls, 0, 'the first terminal autofocus must not steal keyboard navigation focus');
+    window.term.focus();
+    assert.equal(focusCalls, 1, 'subsequent explicit terminal focus still works');
     assert.equal(window.term.options.disableStdin, true);
     assert.equal(messages.at(-1).state, 'Connecting');
     handlers.open();
     assert.equal(window.term.options.disableStdin, false);
     assert.equal(messages.at(-1).state, 'Connected');
-    onTitle('__WEB_TERMINAL_TARGET__|shared|$0|%3|42|fixture');
+    onTitle('__WEB_TERMINAL_TARGET__|shared|$0|%3|42|copy-mode|fixture');
     assert.equal(window.webTerminalTarget.pane, '%3');
     assert.equal(window.webTerminalTarget.session, 'shared');
     onTitle('unverified title');
     assert.equal(window.webTerminalTarget, null, 'unverified title metadata fails closed');
-    onTitle('__WEB_TERMINAL_TARGET__|shared|$0|%3|42|fixture');
+    onTitle('__WEB_TERMINAL_TARGET__|shared|$0|%3|42|copy-mode|fixture');
     handlers.close();
     assert.equal(window.term.options.disableStdin, true);
     assert.equal(window.webTerminalTarget, null, 'disconnect clears the target');
@@ -173,6 +189,10 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     timers.forEach(fn => fn());
     assert.equal(overlay.textContent, 'Use Retry in the toolbar');
     assert.equal(unrelated.textContent, 'Press ⏎ to Reconnect');
+    window.parent.document.activeElement = window.frameElement;
+    new window.WebSocket('ws://fixture.test');
+    window.term.focus();
+    assert.equal(focusCalls, 2, 'a terminal the user already focused may keep focus');
     assert.equal(await upgrade('http://other.test'), 'rejected');
     assert.equal(await upgrade('http://fixture.test'), 101);
 

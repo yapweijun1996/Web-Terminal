@@ -73,6 +73,20 @@ function createUploadTargets(server, tmux = 'tmux') {
       if (!record) throw new Error('Upload receipt unavailable');
       return { path: record.path, pending: record.path === null };
     },
+    async returnToLive(view, session, sessionId, pane, serverPid) {
+      const captured = await this.capture(view, session, sessionId, pane, serverPid);
+      const record = lookup(captured.ticket);
+      tickets.delete(captured.ticket);
+      if (!record?.target) throw new Error('Target unavailable');
+      const current = (await command('display-message', '-p', '-t', `=${record.target.session}:`, '#{session_id}')).trim();
+      const panes = (await command('list-panes', '-s', '-t', `=${record.target.session}`, '-F', '#{pane_id}|#{pid}')).trim().split('\n');
+      if (current !== record.target.sessionId || !panes.includes(`${record.target.pane}|${record.target.serverPid}`)) throw new Error('Target unavailable');
+      // tmux checks the pane mode itself before executing -X. This never
+      // sends a key to the application or submits an existing prompt.
+      await command('if-shell', '-F', '-t', record.target.pane,
+        '#{||:#{==:#{pane_mode},copy-mode},#{==:#{pane_mode},copy-mode-vi}}',
+        `send-keys -X -t ${record.target.pane} cancel`);
+    },
     async insert(ticket) {
       const record = lookup(ticket);
       if (!record || !record.path || !record.target || record.busy) throw new Error('Target unavailable');

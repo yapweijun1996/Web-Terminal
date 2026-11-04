@@ -24,9 +24,10 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-003: Diagnose Codex scrolling and expose scroll state
 
-- **Status:** Open
+- **Status:** Verified in isolated candidates; original live pane unresolved
 - **Scope:** Reproduce the recorded issue in a disposable equivalent session, determine mouse and alternate-screen behavior, and evaluate clear terminal/application scroll state and a return-to-latest control where supported. Preserve unknown state when it cannot be determined.
 - **Acceptance:** Document a reproducible cause or explicitly retain the unknown; verify any fix in shell, tmux copy mode, mouse-aware TUI, and the relevant Codex state. Do not modify drafts or submit commands. The original running pane is not considered fixed based on a separate fixture.
+- **Evidence (2026-11-04):** Isolated Mac and Linux fixtures reported tmux copy mode and returned to live without changing synthetic unsubmitted shell input. A browser wheel reached a disposable mouse-aware `less` session; Return to live did not send it input. A disposable Codex 0.166.0 session with networking disabled reproduced alternate-screen enabled and mouse capture disabled; a simulated wheel and Return to live left its synthetic unsubmitted draft intact. The indicator describes tmux only and keeps application scroll unknown. At a simulated 390-pixel viewport, the Mac toolbar requires horizontal scrolling to reach the control; mobile usability remains part of WT-008. The original pane's cause and transcript position remain unknown; the candidate has not been deployed, and physical trackpad and mobile behavior remain unverified.
 - **Evidence:** A 2026-11-04 Linux Chromium fixture exercised wheel scrollback, return to latest and `less --mouse`; it did not test the original Mac Codex pane, physical trackpad or mobile touch.
 
 ### WT-004: Make connection and recovery states clear
@@ -38,9 +39,10 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-005: Improve workspace navigation
 
-- **Status:** Open
+- **Status:** Verified
 - **Scope:** Evaluate named views, a clear active target, keyboard switching, focus, and explanatory feedback about closing a view versus ending a task. Preserve current session semantics.
 - **Acceptance:** Navigate views by keyboard with visible focus and identifiable labels at narrow and desktop widths. Closing or switching a disposable view does not end an unrelated tmux job.
+- **Evidence (2026-11-04):** In isolated Chrome/tmux fixtures, Mac toolbar navigation retained keyboard focus and showed the tmux-confirmed window and pane while a separate job continued. Linux tab buttons support arrow, Home and End navigation with visible focus; named views persist in browser-local storage, and hiding another view retained the active view and a separate fixture job. Desktop and 390×844 emulated viewports were checked. Physical devices, assistive technology and live deployment remain unverified.
 
 ### WT-006: Bind upload completion to the intended view
 
@@ -74,16 +76,18 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-010: Provide a privacy-preserving status view
 
-- **Status:** Open
+- **Status:** Verified in isolated candidates
 - **Scope:** Show current view, connection state, and useful recovery information without claiming task health from process liveness.
 - **Acceptance:** End-to-end status, component liveness, and unknown states are distinct; no tokens, commands, terminal contents, or personal filenames are exposed.
+- **Evidence (2026-11-04):** Isolated Mac and Linux Chromium fixtures displayed the current view, connection and recovery guidance. The details panel separately marks end-to-end input/output, individual components and Access authorization as not checked, and task state as unknown. Stopping each disposable terminal service changed its displayed connection state without asserting task health. A browser-local renamed view is represented by its ordinal rather than its name. Keyboard opening and desktop and 390×844 emulated layouts were checked; neither candidate is deployed, and physical device and assistive-technology checks remain outstanding.
 
 ### WT-011: Verify resize, lifecycle, and platform support
 
-- **Status:** Open
+- **Status:** Verified (evidence matrix; untested cases remain unknown)
 - **Scope:** Maintain an evidence-based matrix for browser/PTY dimensions, physical input, disconnect, sleep, logout, restart, and separately for Windows, WSL, and Xubuntu when available.
 - **Acceptance:** Each tested case records environment, trigger, job outcome, and reconnect behavior; untested cases remain explicitly unknown. No survival through reboot or platform support is implied without evidence.
 - **Display observation (2026-11-04):** In an isolated Linux Chromium emulation at 1280×800 and device scale factor 1, the terminal canvas appeared undersized in both the unmodified baseline and the connection-recovery candidate. A scale factor 2 emulation displayed normally. The cause and behavior on physical devices remain unverified; this does not establish a candidate regression.
+- **Evidence (2026-11-04):** The [lifecycle matrix](docs/lifecycle-matrix.md) records isolated resize, browser reload and Linux UI restart results, including measured grid sizes, fixture job outcomes, reconnect limits and explicitly unknown platforms and lifecycle events. It does not claim physical device coverage or survival through host sleep, logout or reboot.
 
 ### WT-012: Assess dependency upgrades
 

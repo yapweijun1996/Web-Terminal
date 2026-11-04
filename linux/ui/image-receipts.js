@@ -53,6 +53,14 @@ function createImageReceipts(tmux) {
       if (!receipt) throw Error('Receipt unavailable');
       return { state: receipt.state, path: receipt.path, attempted: receipt.attempted };
     },
+    returnToLive(input) {
+      const target = getTarget(input);
+      if (!target) throw Error('Target unavailable');
+      // Check the mode inside tmux and issue a mode command, never app input.
+      tmux(['if-shell', '-F', '-t', target.pane,
+        '#{||:#{==:#{pane_mode},copy-mode},#{==:#{pane_mode},copy-mode-vi}}',
+        `send-keys -X -t ${target.pane} cancel`]);
+    },
     insert(ticket) {
       const receipt = lookup(ticket);
       if (!receipt || receipt.state !== 'saved' || !receipt.target || receipt.attempted) throw Error('Target unavailable');

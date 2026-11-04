@@ -31,6 +31,8 @@ For offline coding-TUI fixtures, independently isolate and verify all network tr
 
 The repository candidates show connection state independently of background-job state. The Mac candidate pauses terminal input during reconnect, retries with a bounded delay, and offers Retry after recovery fails or sign-in may be required. A new Mac connection can select the workspace's default tmux window rather than the window previously viewed: check the active window and use Previous or Next to return to the intended job before typing. Jobs, drafts and tmux history belong to their respective panes, not to the browser connection. The Linux candidate offers Retry for an unavailable session list or disconnected active view. Retry reconnects the view; it does not submit a command or prove a background job is healthy. If a sign-in message appears, verify access in the browser before retrying. These behaviors have been exercised in isolated fixtures, not deployed live.
 
+The Mac toolbar shows the last tmux-confirmed window and pane; the tmux status line shows window names. On Linux, focus a view button and use the arrow keys, Home or End to navigate. Rename changes only that browser's label. Hide detaches the browser view and keeps its tmux session running; it is not a command to end the task. If browser storage is unavailable, the interface reports that it cannot save a name.
+
 ## Candidate image upload
 
 The Mac candidate saves an image and shows its path, the last tmux-confirmed window and pane, and an explicit insertion control. Check that label before inserting: a window switch still in flight has not yet been confirmed. Insertion targets the captured pane, even if another pane is now visible, and sends no Enter. If metadata, the original session, or the pane is unavailable, copy the saved path instead. A path being sent does not establish that a TUI accepted an attachment.
@@ -43,7 +45,13 @@ An interrupted HTTP response can be recovered for ten minutes while the same upl
 
 Inspect in order: browser viewport and terminal grid, ttyd/client resize, tmux pane and copy mode, then the foreground application's own alternate-screen and mouse modes. An alternate screen is not proof of mouse capture, and tmux history is not necessarily an application's transcript. Never translate all wheel events into arrow keys: that can alter a command or prompt.
 
+The candidate toolbar reports tmux scrollback or live mode only when it has a current pane identity. Application scroll position remains unknown. **Return to live** asks tmux to leave copy mode in that confirmed pane; it does not send keys to the application or move an application's own transcript. After reconnecting, verify the active pane before using it. A missing or stale pane identity prevents the request.
+
+**Details** shows the current view and browser-observed terminal connection, along with recovery guidance. It does not probe individual components, perform an input/output round trip, determine task health or verify Access authorization; those values are shown as not checked or unknown. The panel displays generic view positions or tmux window and pane numbers, and does not copy commands, terminal output, filenames or credentials into status data. A connected browser socket alone is not proof of end-to-end task health.
+
 For the recorded ttyd 1.7.7 Mac bundle, historical fixture evidence found that applying line height before font size triggered a final fit and avoided clipping. This observation is version-specific and must be retested after a change or upgrade.
+
+Consult the [lifecycle matrix](lifecycle-matrix.md) before assuming that a session survives a resize, disconnect, restart, sleep, logout or reboot on a given platform.
 
 ## Rollback principles
 

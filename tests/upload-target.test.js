@@ -85,6 +85,13 @@ test('bound upload targets survive window switching and fail closed on pane or s
     assert.ok(originalOutput.endsWith(quoted), 'the quoted path remains on the input line without Enter');
     assert.ok(!otherOutput.includes(savedPath), 'a newly active pane must not receive the path');
     await assert.rejects(target.insert(captured.ticket), /unavailable/, 'a ticket cannot insert twice');
+    await target.returnToLive(view, session, sessionId, pane, serverPid);
+    assert.equal(tmux('capture-pane', '-p', '-t', pane), originalOutput, 'returning to live outside copy mode must not change input');
+    tmux('copy-mode', '-t', pane);
+    assert.match(tmux('display-message', '-p', '-t', pane, '#{pane_mode}'), /^copy-mode/);
+    await target.returnToLive(view, session, sessionId, pane, serverPid);
+    assert.equal(tmux('display-message', '-p', '-t', pane, '#{pane_mode}'), '');
+    assert.equal(tmux('capture-pane', '-p', '-t', pane), originalOutput, 'leaving copy mode preserves the unsubmitted input');
 
     const lost = await target.capture(view, session, sessionId, other, serverPid);
     assert.equal(target.bind(lost.ticket, savedPath), true);

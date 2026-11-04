@@ -79,13 +79,15 @@ async function upload(req, res) {
 }
 function ensureTtyd(name) {
   if (!sessionPattern.test(name) || !sessions().includes(name)) throw new Error('Unknown session');
+  // A session can be recreated under the same name while ttyd stays alive.
+  // Reapply per-session settings before reusing the existing ttyd process.
+  tmux(['set-option', '-t', name, 'mouse', 'on']);
+  tmux(['set-option', '-t', name, 'set-titles', 'on']);
+  tmux(['set-option', '-t', name, 'set-titles-string', '__WEB_TERMINAL_TARGET__|#{session_name}|#{session_id}|#{pane_id}|#{pid}|#{pane_mode}|#{pane_title}']);
   const existing = children.get(name);
   if (existing && existing.exitCode === null) return existing.socketPath;
   const socketPath = path.join(runtime, `ttyd-${name}.sock`);
   try { fs.unlinkSync(socketPath); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-  tmux(['set-option', '-t', name, 'mouse', 'on']);
-  tmux(['set-option', '-t', name, 'set-titles', 'on']);
-  tmux(['set-option', '-t', name, 'set-titles-string', '__WEB_TERMINAL_TARGET__|#{session_name}|#{session_id}|#{pane_id}|#{pid}|#{pane_title}']);
   const child = spawn('/usr/bin/ttyd', ['-i', socketPath, '-W', '-O', '/bin/sh', path.join(__dirname, 'attach-tab.sh'), tmuxSocket, name], { stdio: 'ignore' });
   child.socketPath = socketPath;
   children.set(name, child);
@@ -136,9 +138,19 @@ function proxy(req, res, target, endpoint) {
                 if (typeof window.term?.onTitleChange === 'function' && !window.__terminalTargetListener) {
                   window.__terminalTargetListener = true;
                   window.term.onTitleChange(title => {
-                    const match = /^__WEB_TERMINAL_TARGET__\\|(shared|web-[a-f0-9]{12})\\|(\\$\\d+)\\|(%\\d+)\\|(\\d+)\\|/.exec(title);
+                    const match = /^__WEB_TERMINAL_TARGET__\\|(shared|web-[a-f0-9]{12})\\|(\\$\\d+)\\|(%\\d+)\\|(\\d+)\\|([a-z0-9-]*)\\|/.exec(title);
                     window.webTerminalTarget = match ? { session: match[1], sessionId: match[2], pane: match[3], serverPid: match[4] } : null;
+                    window.parent.postMessage({ type: 'terminal-scroll', mode: match ? match[5] : null }, window.location.origin);
                   });
+                }
+                // ttyd focuses its terminal after opening. Preserve keyboard
+                // navigation unless the user has already focused this frame.
+                if (window.frameElement?.dataset?.preserveTabFocus === 'true' && typeof window.term?.focus === 'function') {
+                  const focus = window.term.focus.bind(window.term);
+                  window.term.focus = (...args) => {
+                    window.term.focus = focus;
+                    if (window.parent.document.activeElement === window.frameElement) focus(...args);
+                  };
                 }
                 report('Connecting');
                 for (const [event, state] of [['open', 'Connected'], ['close', 'Disconnected'], ['error', 'Connection error']]) {
@@ -191,8 +203,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && latest) {
       if (!allowedMutation(req)) return send(res, 403, '{"error":"Forbidden"}');
       if (!sessions().includes(latest[1])) return send(res, 404, '{"error":"Not found"}');
-      const mode = tmux(['display-message', '-p', '-t', latest[1], '#{pane_mode}']).trim();
-      if (mode === 'copy-mode' || mode === 'copy-mode-vi') tmux(['send-keys', '-t', latest[1], '-X', 'cancel']);
+      if (req.headers['x-terminal-session'] !== latest[1]) return send(res, 409, '{"error":"Target unavailable"}');
+      try {
+        imageReceipts.returnToLive({ session: latest[1], sessionId: req.headers['x-terminal-session-id'], pane: req.headers['x-terminal-pane'], serverPid: req.headers['x-terminal-server-pid'] });
+      } catch { return send(res, 409, '{"error":"Target unavailable"}'); }
       return send(res, 200, '{"ok":true}');
     }
     const route = parseTerminal(req.url);
