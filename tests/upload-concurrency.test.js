@@ -92,8 +92,31 @@ function startFixture(extraEnv = {}) {
         }
         fs.rmSync(root, { recursive: true, force: true });
     };
-    return { socket, events, release, directory, origin, eventLines, stop };
+    return { socket, events, release, directory, origin, eventLines, child, stop };
 }
+
+test('graceful shutdown finishes an upload already being inspected', async () => {
+    const { socket, release, origin, eventLines, child, stop } = startFixture();
+    let request;
+    try {
+        await waitFor(() => fs.existsSync(socket), 'upload fixture did not start');
+        request = upload(socket, origin);
+        await waitFor(() => eventLines().includes('inspection-started'), 'inspection did not start');
+        const exited = new Promise(resolve => child.once('exit', resolve));
+        child.kill('SIGTERM');
+        await delay(100);
+        assert.equal(child.exitCode, null, 'shutdown must wait for the in-flight inspection');
+        assert.equal(child.signalCode, null);
+        fs.writeFileSync(release, 'release');
+        assert.equal((await request.done).status, 201, 'the in-flight upload completes');
+        await Promise.race([exited, delay(6000, undefined, { ref: false }).then(() => { throw new Error('upload fixture did not exit'); })]);
+        assert.equal(child.exitCode, 0);
+        assert.equal(fs.existsSync(socket), false, 'shutdown removes the socket after completion');
+    } finally {
+        request?.req.destroy();
+        await stop();
+    }
+});
 
 test('disconnected upload retains its work slot until image inspection finishes', async () => {
     const { socket, release, origin, eventLines, stop } = startFixture();
