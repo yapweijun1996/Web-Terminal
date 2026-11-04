@@ -16,6 +16,7 @@ On 2026-11-04, the observed Linux environment used Ubuntu 24.04 ARM64, ttyd 1.7.
 - [Linux source inventory and evidence](docs/linux-implementation.md)
 - [Operations and verification](docs/operations.md)
 - [Lifecycle and platform evidence](docs/lifecycle-matrix.md)
+- [Proposed isolated Access validation](docs/isolated-access-validation.md)
 - [Dependency assessment](docs/dependency-assessment.md)
 - [Improvement roadmap and research](docs/improvement-roadmap.md)
 - [Documentation standard](docs/documentation-standard.md)

@@ -1,0 +1,21 @@
+# Isolated Access and connector validation plan
+
+Reviewed 2026-11-04. This is a proposed test, not evidence that a route is protected or an authorization to modify Cloudflare. The [backlog](../TASK.md) owns completion status. Production deployment and changes to existing policies, DNS records, tunnels or sessions are outside this plan.
+
+## Proposed boundary
+
+Create one clearly named disposable hostname, Access application and tunnel in an owner-selected zone. The application must use a dedicated policy that allows only the owner's approved test identity, with a short test session duration. Do not attach a policy to an existing application or modify a shared policy. Independently check that the new hostname has no existing DNS record or conflicting Access application immediately before creation.
+
+Behind the tunnel, run only an isolated test origin containing synthetic data and a disposable long-lived fixture. It must have no user home directory, live terminal socket, credentials, or production data mounted. Expose the minimum routes needed for HTTP, a harmless upload operation and a WebSocket exchange. Record a secret-free inventory of the exact newly created resource identifiers privately for cleanup; never commit them, tunnel tokens, Access cookies, identities or real hostnames.
+
+`tests/fixtures/access-origin.js` is an inert candidate origin for this purpose. It requires an absolute Unix socket path in an existing owner-only directory, rejects an existing path, does not start a shell or save uploads, and returns only a random per-process marker and elapsed time. It limits request duration, upload size and concurrent WebSocket connections. The WebSocket endpoint is a deliberately limited, one-way test implementation, not a terminal or a general WebSocket server. Run `node --test tests/access-origin.test.js` to verify its local guards and behavior. To run it, set `WT_ACCESS_FIXTURE_SOCKET` to an unused socket in a private directory and invoke the script with Node. The fixture does not authenticate clients; never expose it publicly without the separately verified Access boundary.
+
+## Test sequence
+
+1. Verify the approved test identity can reach each fixture route. Separately use a user-controlled identity that is not allowed by the test policy; an unauthenticated browser is not a substitute for an authenticated unauthorized identity. The user enters their own credentials and any one-time codes.
+2. Check unauthenticated and unauthorized requests for HTTP, upload and an actual WebSocket Upgrade. An ordinary GET to a WebSocket URL is not an Upgrade test. Stop immediately if the isolated origin becomes accessible contrary to policy.
+3. Test short-session expiry and explicit revocation separately. For each, observe new requests and a WebSocket that was already open; do not assume its lifetime from the login session. Revoke only the disposable test session, never an existing user session.
+4. Exercise reconnect to the same disposable fixture after a connector interruption. Its per-process marker can show that the inert origin process remained the same; it does not prove survival of a real terminal job. Test the candidate connector and a separately verified patched rollback version against the same synthetic ingress and Access configuration. Capture binary provenance and hashes; do not treat a vulnerable prior version as a secure rollback. This validates the fixture only, not a live upgrade.
+5. Remove only the exact resources created for the test, using an authorized cleanup procedure, and verify that their hostname and application no longer resolve to the test origin. Recheck that existing resources were not changed. Keep a sanitized result and list any cleanup or verification failure.
+
+Before carrying this out, obtain any required per-action authorization for the new public hostname, tunnel, Access policy and eventual cleanup. Confirm the test identities, account, exact hostname, route scope, connector versions and any applicable service charges. If the available identity, policy, permissions or rollback evidence is insufficient, leave the corresponding acceptance result unknown. A live connector upgrade needs its own maintenance window, owner authorization and component-specific rollback.
