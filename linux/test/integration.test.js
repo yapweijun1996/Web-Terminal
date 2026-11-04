@@ -142,18 +142,23 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     const shim = terminalPage.body.match(/<head><script>([\s\S]*?)<\/script>/)?.[1];
     assert.ok(shim, 'the ttyd page must include the connection-state shim');
     const handlers = {}, messages = [], timers = [];
-    let onTitle;
+    let onTitle, focusCalls = 0;
     const overlay = { childNodes: [{ nodeType: 3 }], textContent: 'Press ⏎ to Reconnect' };
     overlay.firstChild = overlay.childNodes[0];
     const unrelated = { childNodes: [{ nodeType: 1 }, { nodeType: 1 }], textContent: 'Press ⏎ to Reconnect' };
     const window = {
       WebSocket: class { addEventListener(name, callback) { handlers[name] = callback; } },
-      term: { options: { disableStdin: false }, onTitleChange: callback => { onTitle = callback; } },
-      parent: { postMessage: (message, target) => messages.push({ state: message.state, target }) },
+      term: { options: { disableStdin: false }, onTitleChange: callback => { onTitle = callback; }, focus: () => { focusCalls++; } },
+      frameElement: { dataset: { preserveTabFocus: 'true' } },
+      parent: { document: { activeElement: {} }, postMessage: (message, target) => messages.push({ state: message.state, target }) },
       location: { origin: 'http://fixture.test' },
     };
     vm.runInNewContext(shim, { window, document: { querySelectorAll: () => [overlay, unrelated] }, Node: { TEXT_NODE: 3 }, setTimeout: fn => timers.push(fn) });
     new window.WebSocket('ws://fixture.test');
+    window.term.focus();
+    assert.equal(focusCalls, 0, 'the first terminal autofocus must not steal keyboard navigation focus');
+    window.term.focus();
+    assert.equal(focusCalls, 1, 'subsequent explicit terminal focus still works');
     assert.equal(window.term.options.disableStdin, true);
     assert.equal(messages.at(-1).state, 'Connecting');
     handlers.open();
@@ -173,6 +178,10 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     timers.forEach(fn => fn());
     assert.equal(overlay.textContent, 'Use Retry in the toolbar');
     assert.equal(unrelated.textContent, 'Press ⏎ to Reconnect');
+    window.parent.document.activeElement = window.frameElement;
+    new window.WebSocket('ws://fixture.test');
+    window.term.focus();
+    assert.equal(focusCalls, 2, 'a terminal the user already focused may keep focus');
     assert.equal(await upgrade('http://other.test'), 'rejected');
     assert.equal(await upgrade('http://fixture.test'), 101);
 

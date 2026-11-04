@@ -10,7 +10,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 class Element {
   constructor(tag = 'div') {
     this.tag = tag; this.children = []; this.listeners = {}; this.disabled = false; this.hidden = false; this.textContent = '';
-    this.classList = { toggle() {} };
+    this.classList = { toggle() {} }; this.dataset = {};
     if (tag === 'iframe') this.contentWindow = { webTerminalTarget: { session: 'shared', sessionId: '$0', pane: '%0', serverPid: '10' }, focus() {} };
   }
   addEventListener(name, listener) { this.listeners[name] = listener; }
@@ -19,12 +19,13 @@ class Element {
   replaceChildren() { this.children = []; }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(item => item !== this); }
   focus() {}
+  scrollIntoView() {}
   select() {}
   click() { if (!this.disabled) return this.onclick?.() ?? this.listeners.click?.(); }
 }
 
 function fixture() {
-  const ids = ['tabs', 'views', 'status', 'retry', 'restore', 'new-tab', 'latest', 'image-results', 'image-notice', 'copy-selection'];
+  const ids = ['tabs', 'views', 'status', 'retry', 'restore', 'new-tab', 'rename-tab', 'rename-form', 'rename-input', 'rename-cancel', 'rename-error', 'latest', 'image-results', 'image-notice', 'copy-selection'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element()]));
   const listeners = {}, calls = [];
   const document = { querySelector: selector => nodes[selector.slice(1)], createElement: tag => new Element(tag) };

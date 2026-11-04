@@ -38,9 +38,10 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-005: Improve workspace navigation
 
-- **Status:** Open
+- **Status:** Verified
 - **Scope:** Evaluate named views, a clear active target, keyboard switching, focus, and explanatory feedback about closing a view versus ending a task. Preserve current session semantics.
 - **Acceptance:** Navigate views by keyboard with visible focus and identifiable labels at narrow and desktop widths. Closing or switching a disposable view does not end an unrelated tmux job.
+- **Evidence (2026-11-04):** In isolated Chrome/tmux fixtures, Mac toolbar navigation retained keyboard focus and showed the tmux-confirmed window and pane while a separate job continued. Linux tab buttons support arrow, Home and End navigation with visible focus; named views persist in browser-local storage, and hiding another view retained the active view and a separate fixture job. Desktop and 390×844 emulated viewports were checked. Physical devices, assistive technology and live deployment remain unverified.
 
 ### WT-006: Bind upload completion to the intended view
 

@@ -37,6 +37,11 @@
     color: #d5e4f0;
     font-size: 12px;
 }
+#active-target {
+    flex: 0 0 auto;
+    color: #d5e4f0;
+    font-size: 12px;
+}
 #connection-retry[hidden] {
     display: none;
 }

@@ -9,6 +9,14 @@
     status.setAttribute('role', 'status');
     status.setAttribute('aria-live', 'polite');
     status.tabIndex = -1;
+    const activeTarget = document.createElement('span');
+    activeTarget.id = 'active-target';
+    activeTarget.setAttribute('role', 'status');
+    activeTarget.setAttribute('aria-live', 'polite');
+    function showTarget(target) {
+        activeTarget.textContent = target ? `Window ${target.windowIndex}, pane ${target.paneIndex}` : 'Window unknown';
+        activeTarget.title = 'The last tmux-confirmed window and pane.';
+    }
     const retry = document.createElement('button');
     retry.id = 'connection-retry';
     retry.type = 'button';
@@ -34,8 +42,11 @@
     });
     bar.insertBefore(status, bar.children[1]);
     bar.insertBefore(retry, bar.children[2]);
+    bar.insertBefore(activeTarget, bar.children[3]);
     window.addEventListener('web-terminal-connection', e => showConnection(e.detail));
+    window.addEventListener('web-terminal-target', e => showTarget(e.detail));
     showConnection(window.webTerminalConnectionState || 'connecting');
+    showTarget(window.webTerminalTarget);
     document.body.prepend(bar);
     bar.addEventListener('click', e => {
         const btn = e.target.closest('button[data-key]');
@@ -60,6 +71,7 @@
                 })
             );
         }
+        if (e.detail === 0) btn.focus();
     });
     window.dispatchEvent(new Event('resize'));
 })();

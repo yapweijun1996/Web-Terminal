@@ -140,6 +140,15 @@ function proxy(req, res, target, endpoint) {
                     window.webTerminalTarget = match ? { session: match[1], sessionId: match[2], pane: match[3], serverPid: match[4] } : null;
                   });
                 }
+                // ttyd focuses its terminal after opening. Preserve keyboard
+                // navigation unless the user has already focused this frame.
+                if (window.frameElement?.dataset?.preserveTabFocus === 'true' && typeof window.term?.focus === 'function') {
+                  const focus = window.term.focus.bind(window.term);
+                  window.term.focus = (...args) => {
+                    window.term.focus = focus;
+                    if (window.parent.document.activeElement === window.frameElement) focus(...args);
+                  };
+                }
                 report('Connecting');
                 for (const [event, state] of [['open', 'Connected'], ['close', 'Disconnected'], ['error', 'Connection error']]) {
                   this.addEventListener(event, () => report(state));

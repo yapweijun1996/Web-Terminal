@@ -12,7 +12,7 @@ class Element {
   constructor(tag = 'div') {
     this.tag = tag; this.children = []; this.listeners = {}; this.attributes = {};
     this.hidden = false; this.disabled = false; this.textContent = '';
-    this.classList = { toggle: (name, enabled) => { this[name] = enabled; } };
+    this.classList = { toggle: (name, enabled) => { this[name] = enabled; } }; this.dataset = {};
     if (tag === 'iframe') this.contentWindow = { focus() {} };
   }
   addEventListener(name, callback) { this.listeners[name] = callback; }
@@ -21,11 +21,12 @@ class Element {
   replaceChildren() { this.children = []; }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); }
   focus() {}
+  scrollIntoView() {}
   click() { if (!this.hidden && !this.disabled) this.listeners.click?.(); }
 }
 
 test('session auth failure and iframe disconnect offer safe explicit recovery', async () => {
-  const nodes = Object.fromEntries(['tabs', 'views', 'status', 'retry', 'restore', 'new-tab', 'latest', 'image-results', 'image-notice', 'copy-selection'].map(id => [id, new Element()]));
+  const nodes = Object.fromEntries(['tabs', 'views', 'status', 'retry', 'restore', 'new-tab', 'rename-tab', 'rename-form', 'rename-input', 'rename-cancel', 'rename-error', 'latest', 'image-results', 'image-notice', 'copy-selection'].map(id => [id, new Element()]));
   const document = { querySelector: selector => nodes[selector.slice(1)], createElement: tag => new Element(tag) };
   const listeners = {};
   const window = { addEventListener: (name, handler) => { listeners[name] = handler; } };
