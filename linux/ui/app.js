@@ -9,6 +9,8 @@ const retry = document.querySelector('#retry');
 const restore = document.querySelector('#restore');
 const newTab = document.querySelector('#new-tab');
 const renameTab = document.querySelector('#rename-tab');
+renameTab.setAttribute('aria-keyshortcuts', 'Control+Alt+Shift+T');
+renameTab.title = 'Press Control+Alt+Shift+T in the terminal to focus this toolbar.';
 const renameForm = document.querySelector('#rename-form');
 const renameInput = document.querySelector('#rename-input');
 const renameCancel = document.querySelector('#rename-cancel');
@@ -96,6 +98,9 @@ function installClipboard(iframe, name) {
   const win = iframe.contentWindow;
   win.addEventListener('pointerup', () => { if (name === active) copyGestureAt = Date.now(); }, true);
   win.addEventListener('keydown', event => {
+    if (name === active && frames.get(name) === iframe && event.code === 'KeyT' && event.altKey && event.shiftKey && event.ctrlKey && !event.metaKey) {
+      event.preventDefault(); event.stopImmediatePropagation(); renameTab.focus(); return;
+    }
     if (name === active && event.ctrlKey && event.key.toLowerCase() === 'c') copyGestureAt = Date.now();
     if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 'v') event.stopImmediatePropagation();
   }, true);
@@ -325,6 +330,7 @@ window.addEventListener('message', event => {
       if (event.data?.type === 'terminal-connection' && ['Connecting', 'Connected', 'Disconnected', 'Connection error'].includes(event.data.state)) {
         connections.set(name, event.data.state);
         if (event.data.state !== 'Connected') scrollModes.delete(name);
+        if (event.data.state === 'Connected') iframe.contentWindow?.term?.textarea?.setAttribute('aria-label', 'Terminal input. Press Control Alt Shift T to focus toolbar.');
         if (name === active && event.data.state === 'Connected') displayControls.apply();
         if (name === active) showConnection(name);
       } else if (event.data?.type === 'terminal-scroll' && (event.data.mode === null || (typeof event.data.mode === 'string' && /^[a-z0-9-]{0,64}$/.test(event.data.mode)))) {

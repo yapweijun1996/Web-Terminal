@@ -13,7 +13,7 @@ function fixture({ rejectStorage = false } = {}) {
     constructor(tag = 'div') {
       this.tag = tag; this.children = []; this.listeners = {}; this.attributes = {}; this.hidden = false; this.disabled = false; this.textContent = '';
       this.classList = { toggle() {} }; this.dataset = {};
-      if (tag === 'iframe') this.contentWindow = { focus() {} };
+      if (tag === 'iframe') this.contentWindow = { listeners: {}, focus() {}, addEventListener(name, handler) { this.listeners[name] = handler; } };
     }
     addEventListener(name, handler) { this.listeners[name] = handler; }
     setAttribute(name, value) { this.attributes[name] = value; }
@@ -53,6 +53,20 @@ test('keyboard navigation keeps focus and hiding another view preserves the acti
   tabs.children[0].children[1].click();
   assert.equal(f.document.activeElement.textContent, 'Terminal aaaaaaaaaaaa', 'hiding a different view does not switch the active view');
   assert.equal(f.calls.some(call => call.method === 'POST'), false, 'hiding a view must not terminate a session');
+});
+
+test('keyboard shortcut returns from the active terminal to the toolbar', async () => {
+  const f = fixture(); await flush();
+  const frame = f.nodes.views.children[0];
+  frame.listeners.load();
+  let prevented = false, stopped = false;
+  frame.contentWindow.listeners.keydown({ code: 'KeyT', altKey: true, shiftKey: true, ctrlKey: true, metaKey: false,
+    preventDefault() { prevented = true; }, stopImmediatePropagation() { stopped = true; } });
+  assert.equal(prevented, true);
+  assert.equal(stopped, true);
+  assert.equal(f.document.activeElement, f.nodes['rename-tab']);
+  assert.equal(f.nodes['rename-tab'].attributes['aria-keyshortcuts'], 'Control+Alt+Shift+T');
+  assert.equal(f.calls.some(call => call.method === 'POST'), false);
 });
 
 test('renaming is browser-local, unique, and preserves an identifiable view', async () => {

@@ -166,7 +166,10 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
       parent: { document: { activeElement: {} }, postMessage: (message, target) => messages.push({ state: message.state, target }) },
       location: { origin: 'http://fixture.test' },
     };
-    vm.runInNewContext(shim, { window, document: { querySelectorAll: () => [overlay, unrelated] }, Node: { TEXT_NODE: 3 }, setTimeout: fn => timers.push(fn) });
+    const document = { querySelectorAll: () => [overlay, unrelated], title: '' };
+    vm.runInNewContext(shim, { window, document, Node: { TEXT_NODE: 3 }, setTimeout: fn => timers.push(fn) });
+    document.title = 'synthetic command or path';
+    assert.equal(document.title, 'Terminal view', 'ttyd must not publish its launch command in the frame title');
     new window.WebSocket('ws://fixture.test');
     window.term.focus();
     assert.equal(focusCalls, 0, 'the first terminal autofocus must not steal keyboard navigation focus');
@@ -178,6 +181,7 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     assert.equal(window.term.options.disableStdin, false);
     assert.equal(messages.at(-1).state, 'Connected');
     onTitle('__WEB_TERMINAL_TARGET__|shared|$0|%3|42|copy-mode|fixture');
+    assert.equal(document.title, 'Terminal view', 'terminal metadata must not become the accessible frame title');
     assert.equal(window.webTerminalTarget.pane, '%3');
     assert.equal(window.webTerminalTarget.session, 'shared');
     onTitle('unverified title');
