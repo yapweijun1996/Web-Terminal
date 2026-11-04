@@ -1,4 +1,4 @@
-# Source inventory and reconstruction
+# Mac source inventory and reconstruction
 
 Snapshot: 2026-11-04. The development candidate is separate from the running service. Do not infer deployment or complete behavior parity from this inventory.
 
@@ -9,7 +9,7 @@ Snapshot: 2026-11-04. The development candidate is separate from the running ser
 | Runtime | `runtime/upload-server.js` was recovered from the local service and formatted; an abstract-syntax comparison matched the original. `runtime/tmux.conf` mirrors the inspected configuration. The attach and serve scripts use explicit environment configuration and add a guard against removing an existing socket, so they are candidates rather than byte-identical live scripts. |
 | Build and tests | `client/` contains the pinned upstream build configuration, patch and lockfile. `tests/` contains isolated runtime and macOS upload checks. Generated bundles and dependency directories are excluded by `.gitignore`. |
 
-No tunnel configuration, Access identities, hostnames, tokens, uploaded files, logs, terminal history, or user session state were imported. Before publishing any future change, review the actual diff and source provenance; an automated pattern scan alone cannot prove the absence of private data.
+No Mac tunnel configuration, Access identities, hostnames, tokens, uploaded files, logs, terminal history, or user session state were imported into this candidate. Before publishing any future change, review the actual diff and source provenance; an automated pattern scan alone cannot prove the absence of private data. The separate Linux snapshot is described in [Linux implementation](linux-implementation.md).
 
 ## Verification evidence
 

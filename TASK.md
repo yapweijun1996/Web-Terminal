@@ -16,10 +16,10 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-002: Establish reviewable source and reproducible builds
 
-- **Status:** In progress
-- **Scope:** Inventory the separately maintained implementations and provenance; separate editable source from bundled or generated assets. Both a Linux snapshot and a reconstructed Mac development candidate are present. Linux dependency reproducibility and full live behavior parity remain to be established.
+- **Status:** Verified
+- **Scope:** Inventory the separately maintained implementations and provenance; separate editable source from bundled or generated assets. Both a Linux snapshot and a reconstructed Mac development candidate are present.
 - **Acceptance:** A clean checkout builds the reviewed artifact using documented dependencies and versions. An inventory and secret review exclude private configuration, credentials, uploads, logs, and terminal contents; compare the artifact in isolation before any deployment.
-- **Evidence:** Linux source was copied from the owner-operated Ubuntu host on 2026-11-04. The imported files are editable source; ttyd supplies its embedded client at runtime. `node --test linux/test/integration.test.js` exercises a disposable tmux server, Unix sockets and ttyd. Dependency versions are observed rather than pinned; the full acceptance remains open.
+- **Linux evidence (2026-11-04):** The imported source is editable and ttyd supplies its embedded client at runtime. The pinned ARM64 Alpine fixture builds from the repository and passed `node --test` with a disposable tmux server and Unix sockets; see [Linux evidence](docs/linux-implementation.md). Its ttyd and tmux versions differ from those observed on the Ubuntu host, and registry availability is not guaranteed.
 - **Mac evidence (2026-11-04):** The pinned unmodified upstream build matched the installed stock ttyd page byte-for-byte. A clean installation and two candidate builds produced the same output hash on this Mac. An isolated Chrome/tmux fixture created a window and retained a running fixture job through page reload. Local runtime socket and macOS upload baseline tests passed. See [Mac source inventory](docs/source-inventory.md). Full live behavior parity, other platforms, and deployment remain unverified.
 
 ### WT-003: Diagnose Codex scrolling and expose scroll state
@@ -87,4 +87,4 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ## Working order
 
-Complete WT-001's access evidence and establish the isolated, reviewable foundation in WT-002. Reproduce WT-003, WT-006, and WT-007 with disposable fixtures before proposing behavioral changes. WT-004 and WT-005 can then be designed and tested against that foundation; prioritize P2 based on observed user needs. Live deployment and disruptive maintenance require their own authorization and rollback plan.
+Complete WT-001's access evidence and use the isolated, reviewable foundation from WT-002. Reproduce WT-003, WT-006, and WT-007 with disposable fixtures before proposing behavioral changes. WT-004 and WT-005 can then be designed and tested against that foundation; prioritize P2 based on observed user needs. Live deployment and disruptive maintenance require their own authorization and rollback plan.
