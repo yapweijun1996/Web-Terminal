@@ -21,7 +21,7 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
   let server;
   const start = () => {
     server = spawn(process.execPath, [path.join(__dirname, '../ui/server.js')], {
-      env: { ...process.env, TERMINAL_RUNTIME: directory, TERMINAL_TMUX_SOCKET: tmuxSocket, TERMINAL_TEST_HTTP: '1' },
+      env: { ...process.env, TERMINAL_RUNTIME: directory, TERMINAL_TMUX_SOCKET: tmuxSocket, TERMINAL_TEST_HTTP: '1', TERMINAL_UPLOAD_DIR: path.join(directory, 'uploads') },
       stdio: 'ignore',
     });
   };
@@ -33,14 +33,14 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     }
     throw new Error('fixture socket did not appear');
   };
-  const request = (method, url, headers = {}) => new Promise((resolve, reject) => {
+  const request = (method, url, headers = {}, body) => new Promise((resolve, reject) => {
     const req = http.request({ socketPath: socket, method, path: url, headers: { host: 'fixture.test', ...headers } }, res => {
       const chunks = [];
       res.on('data', chunk => chunks.push(chunk));
       res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
     });
     req.on('error', reject);
-    req.end();
+    req.end(body);
   });
   const upgrade = origin => new Promise((resolve, reject) => {
     const req = http.request({ socketPath: socket, path: '/terminal/shared/ws', headers: {
@@ -65,6 +65,17 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     const list = JSON.parse((await request('GET', '/api/sessions')).body);
     assert.deepEqual(list.sessions, ['shared']);
     const headers = { origin: 'http://fixture.test', 'content-type': 'application/json', 'x-terminal-request': list.token };
+    const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl6sAAAAASUVORK5CYII=', 'base64');
+    const imageHeaders = { ...headers, 'content-type': 'application/octet-stream', 'content-length': image.length };
+    assert.equal((await request('POST', '/api/images', { ...imageHeaders, origin: 'http://other.test' }, image)).status, 403);
+    assert.equal((await request('POST', '/api/images', { ...imageHeaders, 'x-terminal-request': 'invalid' }, image)).status, 403);
+    assert.equal((await request('POST', '/api/images', { ...imageHeaders, 'content-length': 4 }, Buffer.from('nope'))).status, 415);
+    const uploaded = await request('POST', '/api/images', imageHeaders, image);
+    assert.equal(uploaded.status, 201);
+    const uploadedPath = JSON.parse(uploaded.body).path;
+    assert.equal(path.dirname(uploadedPath), path.join(directory, 'uploads'));
+    assert.equal(fs.statSync(uploadedPath).mode & 0o777, 0o600);
+    assert.deepEqual(fs.readFileSync(uploadedPath), image);
     assert.equal((await request('POST', '/api/sessions', { ...headers, origin: 'http://other.test' })).status, 403);
     assert.equal((await request('POST', '/api/sessions', { ...headers, 'x-terminal-request': 'invalid' })).status, 403);
     const created = await request('POST', '/api/sessions', headers);
@@ -72,7 +83,10 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     const name = JSON.parse(created.body).name;
     assert.match(name, /^web-[a-f0-9]{12}$/);
     assert.equal((await request('GET', '/terminal/invalid')).status, 404);
-    assert.equal((await request('GET', '/terminal/shared')).status, 200);
+    const terminal = await request('GET', '/terminal/shared');
+    assert.equal(terminal.status, 200);
+    assert.match(terminal.body, /src="\/clipboard-bridge\.js"/);
+    assert.equal((await request('GET', '/clipboard-bridge.js')).status, 200);
     assert.equal(await upgrade('http://other.test'), 'rejected');
     assert.equal(await upgrade('http://fixture.test'), 101);
 

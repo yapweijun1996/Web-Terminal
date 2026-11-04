@@ -13,9 +13,11 @@
     <nav id="tabs" aria-label="Terminal tabs"></nav>
     <button id="new-tab" type="button" title="New terminal" aria-label="New terminal">+</button>
     <button id="latest" type="button" title="Return to the latest output">Latest</button>
+    <button id="copy-selection" type="button" hidden>Copy selection</button>
     <button id="restore" type="button" hidden>Restore tabs</button>
     <span id="status" role="status"></span>
   </header>
+  <div id="image-result" hidden><label>Saved image path <input id="image-path" readonly></label><button id="copy-image-path" type="button">Copy path</button></div>
   <main id="views"></main>
 </body>
 </html>
