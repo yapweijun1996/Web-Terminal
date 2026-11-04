@@ -91,10 +91,16 @@ test('bound upload targets survive window switching and fail closed on pane or s
     assert.equal((await target.capture(view, session, sessionId, pane, '999999')).target, null, 'stale tmux server metadata fails closed');
     // The server receives the request after the active window has changed;
     // it must bind the pane the browser had already observed, not the new one.
-    tmux('select-window', '-t', other);
+    tmux('select-window', '-t', `=${session}:1`);
+    assert.equal(tmux('display-message', '-p', '-t', `=${session}:`, '#{pane_id}'), other);
     const captured = await target.capture(view, session, sessionId, pane, serverPid);
     assert.ok(captured.target, 'an attached view should have a captured pane');
     assert.equal(captured.target.windowIndex, '0');
+    const staleAutomatic = await target.capture(view, session, sessionId, pane, serverPid);
+    assert.equal(target.bind(staleAutomatic.ticket, '/tmp/automatic-stale.png'), true);
+    await assert.rejects(target.insert(staleAutomatic.ticket, true), /unavailable/,
+      'automatic insertion must reject a pane that is no longer active');
+    assert.ok(!tmux('capture-pane', '-p', '-t', pane).includes('automatic-stale.png'));
     const savedPath = "/tmp/image with 'quotes'.png";
     assert.equal(target.bind(captured.ticket, savedPath), true);
     await target.insert(captured.ticket);
@@ -108,6 +114,23 @@ test('bound upload targets survive window switching and fail closed on pane or s
     const quoted = "'/tmp/image with '\\''quotes'\\''.png'";
     assert.ok(originalOutput.endsWith(quoted), 'the quoted path remains on the input line without Enter');
     assert.ok(!otherOutput.includes(savedPath), 'a newly active pane must not receive the path');
+    const currentAutomatic = await target.capture(view, session, sessionId, other, serverPid);
+    assert.equal(target.bind(currentAutomatic.ticket, '/tmp/automatic-current.png'), true);
+    await target.insert(currentAutomatic.ticket, true);
+    let automaticOutput = '';
+    for (let i = 0; i < 100; i++) {
+      automaticOutput = tmux('capture-pane', '-p', '-t', other);
+      if (automaticOutput.includes('/tmp/automatic-current.png')) break;
+      await delay(10);
+    }
+    assert.ok(automaticOutput.endsWith('/tmp/automatic-current.png'), 'the current pane receives a paste without Enter');
+    const scrollingAutomatic = await target.capture(view, session, sessionId, other, serverPid);
+    assert.equal(target.bind(scrollingAutomatic.ticket, '/tmp/automatic-scrollback.png'), true);
+    tmux('copy-mode', '-t', other);
+    await assert.rejects(target.insert(scrollingAutomatic.ticket, true), /unavailable/,
+      'automatic insertion must not alter a pane in copy mode');
+    tmux('send-keys', '-X', '-t', other, 'cancel');
+    assert.ok(!tmux('capture-pane', '-p', '-t', other).includes('automatic-scrollback.png'));
     await assert.rejects(target.insert(captured.ticket), /unavailable/, 'a ticket cannot insert twice');
     await target.returnToLive(view, session, sessionId, pane, serverPid);
     assert.equal(tmux('capture-pane', '-p', '-t', pane), originalOutput, 'returning to live outside copy mode must not change input');

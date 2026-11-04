@@ -19,7 +19,7 @@ class Element {
   click() { if (!this.disabled) return this.onclick?.(); }
 }
 
-function fixture({ captureFails = false } = {}) {
+function fixture({ captureFails = false, insertFails = false } = {}) {
   const bar = new Element('nav'), body = new Element('body'), listeners = {}, requests = [], fetches = [];
   const document = {
     body,
@@ -38,7 +38,7 @@ function fixture({ captureFails = false } = {}) {
       return new Promise(resolve => { resolveCapture = () => resolve({ ok: true, json: async () => target }); });
     }
     if (action === 'result') return { ok: true, json: async () => ({ path: '/tmp/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png', pending: false }) };
-    return { ok: true };
+    return { ok: !(action === 'insert-current' && insertFails) };
   };
   class Xhr {
     constructor() { this.upload = {}; this.headers = {}; requests.push(this); }
@@ -46,7 +46,17 @@ function fixture({ captureFails = false } = {}) {
     setRequestHeader(name, value) { this.headers[name] = value; }
     send(file) { this.file = file; }
   }
-  const window = { webTerminalViewId: 'view', webTerminalTarget: { session: 'view-fixture-1', sessionId: '$0', pane: '%1', serverPid: '1' }, mbaTerminalReady: () => true, term: { options: { disableStdin: false } } };
+  const windowListeners = {};
+  let inputListener;
+  const terminal = { options: { disableStdin: false }, textarea: {}, onData: listener => {
+    inputListener = listener;
+    return { dispose: () => { inputListener = null; } };
+  } };
+  document.activeElement = terminal.textarea;
+  document.hasFocus = () => true;
+  const window = { webTerminalViewId: 'view', webTerminalTarget: { session: 'view-fixture-1', sessionId: '$0', pane: '%1', serverPid: '1' }, mbaTerminalReady: () => true, term: terminal,
+    addEventListener: (name, cb) => { windowListeners[name] = cb; },
+    removeEventListener: name => { delete windowListeners[name]; } };
   vm.runInNewContext(fs.readFileSync(require.resolve('../client/src/upload.js'), 'utf8'), {
     document, window, fetch, XMLHttpRequest: Xhr, AbortController, navigator: { clipboard: { writeText: async () => {} } },
     setTimeout: () => 1, clearTimeout() {},
@@ -56,8 +66,59 @@ function fixture({ captureFails = false } = {}) {
     preventDefault() {}, stopImmediatePropagation() {},
   });
   const results = () => body.children.find(element => element.id === 'upload-results');
-  return { window, trigger, results, requests, fetches, target, resolveCapture: () => resolveCapture() };
+  return { window, trigger, results, requests, fetches, target, resolveCapture: () => resolveCapture(),
+    input: () => inputListener?.('x'), emit: (name, detail) => windowListeners[name]?.({ detail }) };
 }
+
+test('a clipboard image is inserted once into the unchanged captured pane', async () => {
+  const f = fixture();
+  f.trigger(); f.resolveCapture(); await flush();
+  f.requests[0].status = 201;
+  f.requests[0].responseText = JSON.stringify({ path: '/tmp/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png', targetBound: true });
+  f.requests[0].onload(); await flush();
+  assert.deepEqual(f.fetches.map(request => request.action), ['capture', 'insert-current']);
+  assert.equal(f.fetches[1].ticket, f.target.ticket);
+});
+
+test('input during upload prevents automatic insertion and retains the path', async () => {
+  const f = fixture();
+  f.trigger(); f.resolveCapture(); await flush(); f.input();
+  f.requests[0].status = 201;
+  f.requests[0].responseText = JSON.stringify({ path: '/tmp/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png', targetBound: true });
+  f.requests[0].onload(); await flush();
+  assert.deepEqual(f.fetches.map(request => request.action), ['capture']);
+  assert.ok(f.results().children[0].children.some(child => child.textContent === 'Insert into captured pane'));
+});
+
+test('switching away and back, losing focus, or disabled input prevents automatic insertion', async () => {
+  for (const event of ['switch', 'blur', 'disconnect', 'disabled']) {
+    const f = fixture();
+    f.trigger(); f.resolveCapture(); await flush();
+    if (event === 'switch') {
+      f.emit('web-terminal-target', { ...f.window.webTerminalTarget, pane: '%2' });
+      f.emit('web-terminal-target', f.window.webTerminalTarget);
+    } else if (event === 'blur') f.emit('blur');
+    else if (event === 'disconnect') f.emit('web-terminal-connection', 'reconnecting');
+    else f.window.term.options.disableStdin = true;
+    f.requests[0].status = 201;
+    f.requests[0].responseText = JSON.stringify({ path: '/tmp/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png', targetBound: true });
+    f.requests[0].onload(); await flush();
+    assert.deepEqual(f.fetches.map(request => request.action), ['capture'], event);
+  }
+});
+
+test('an uncertain automatic insertion keeps the saved path without retrying', async () => {
+  const f = fixture({ insertFails: true });
+  f.trigger(); f.resolveCapture(); await flush();
+  f.requests[0].status = 201;
+  f.requests[0].responseText = JSON.stringify({ path: '/tmp/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.png', targetBound: true });
+  f.requests[0].onload(); await flush();
+  assert.deepEqual(f.fetches.map(request => request.action), ['capture', 'insert-current']);
+  const row = f.results().children[0];
+  assert.match(row.children[0].textContent, /not confirmed/i);
+  assert.ok(row.children.some(child => child.textContent === 'Copy path'));
+  assert.ok(!row.children.some(child => child.textContent === 'Insert into captured pane'));
+});
 
 test('upload completion waits for explicit insertion into the captured pane', async () => {
   const f = fixture();
