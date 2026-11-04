@@ -49,6 +49,8 @@ The candidate toolbar reports tmux scrollback or live mode only when it has a cu
 
 **Details** shows the current view and browser-observed terminal connection, along with recovery guidance. It does not probe individual components, perform an input/output round trip, determine task health or verify Access authorization; those values are shown as not checked or unknown. The panel displays generic view positions or tmux window and pane numbers, and does not copy commands, terminal output, filenames or credentials into status data. A connected browser socket alone is not proof of end-to-end task health.
 
+The candidate **Display** controls adjust terminal font size and can request increased text contrast using xterm's `minimumContrastRatio`. Settings last for the current page; the Linux UI reapplies them to a newly active terminal view. A setting may be unavailable with a different embedded client. The contrast option is not proof of complete WCAG conformance, and terminal content with a screen reader remains unverified. See the [xterm option reference](https://xtermjs.org/docs/api/terminal/interfaces/iterminaloptions/).
+
 For the recorded ttyd 1.7.7 Mac bundle, historical fixture evidence found that applying line height before font size triggered a final fit and avoided clipping. This observation is version-specific and must be retested after a change or upgrade.
 
 Consult the [lifecycle matrix](lifecycle-matrix.md) before assuming that a session survives a resize, disconnect, restart, sleep, logout or reboot on a given platform.

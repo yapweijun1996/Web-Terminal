@@ -19,6 +19,7 @@ class Element {
   setAttribute(name, value) { this.attributes[name] = value; }
   append(...elements) { for (const element of elements) { element.parent = this; this.children.push(element); } }
   replaceChildren() { this.children = []; }
+  before() {}
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); }
   focus() {}
   scrollIntoView() {}
@@ -29,7 +30,7 @@ test('session auth failure and iframe disconnect offer safe explicit recovery', 
   const nodes = Object.fromEntries(['tabs', 'views', 'status', 'detail-view', 'detail-link', 'scroll-status', 'retry', 'restore', 'new-tab', 'rename-tab', 'rename-form', 'rename-input', 'rename-cancel', 'rename-error', 'latest', 'image-results', 'image-notice', 'copy-selection'].map(id => [id, new Element()]));
   const document = { querySelector: selector => nodes[selector.slice(1)], createElement: tag => new Element(tag) };
   const listeners = {};
-  const window = { addEventListener: (name, handler) => { listeners[name] = handler; } };
+  const window = { addEventListener: (name, handler) => { listeners[name] = handler; }, createTerminalDisplayControls: () => ({ element: new Element(), apply() {} }) };
   const location = { origin: 'http://fixture.test' };
   let mode = 'auth';
   let mutationRequests = 0;

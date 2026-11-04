@@ -17,6 +17,7 @@ class Element {
   setAttribute() {}
   append(...children) { for (const child of children) { child.parent = this; this.children.push(child); } }
   replaceChildren() { this.children = []; }
+  before() {}
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(item => item !== this); }
   focus() {}
   scrollIntoView() {}
@@ -29,7 +30,7 @@ function fixture() {
   const nodes = Object.fromEntries(ids.map(id => [id, new Element()]));
   const listeners = {}, calls = [];
   const document = { querySelector: selector => nodes[selector.slice(1)], createElement: tag => new Element(tag) };
-  const window = { addEventListener: (name, handler) => { listeners[name] = handler; } };
+  const window = { addEventListener: (name, handler) => { listeners[name] = handler; }, createTerminalDisplayControls: () => ({ element: new Element(), apply() {} }) };
   const location = { origin: 'http://fixture.test' };
   const ticket = 'a'.repeat(48), savedPath = '/tmp/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png';
   let releaseUpload;

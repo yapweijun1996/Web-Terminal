@@ -70,9 +70,10 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-009: Improve keyboard and accessibility support
 
-- **Status:** Open
+- **Status:** In progress
 - **Scope:** Provide keyboard-operable controls, visible focus, accessible names, connection announcements, and adjustable text and contrast. Treat screen-reader support for the terminal itself as a separate verification concern.
 - **Acceptance:** Switching views and reconnecting work without a mouse; tested assistive technology identifies controls and relevant state changes. Record tested devices and untested limitations.
+- **Candidate evidence (2026-11-04):** The existing navigation and reconnect controls have keyboard and focus checks under WT-004/005. In isolated Mac and Linux Chromium fixtures, a display panel adjusted terminal text size and minimum text contrast without submitting synthetic shell input; the terminal and tmux client dimensions agreed afterward. A new Linux view received the same page-local settings. The browser accessibility tree exposed control names, expanded and pressed state, and a polite status; keyboard opening and focus were exercised. A real screen reader, physical device, full terminal-output accessibility, and live deployment remain unverified.
 
 ### WT-010: Provide a privacy-preserving status view
 

@@ -19,6 +19,7 @@ function fixture({ rejectStorage = false } = {}) {
     setAttribute(name, value) { this.attributes[name] = value; }
     append(...items) { for (const item of items) { item.parent = this; this.children.push(item); } }
     replaceChildren() { this.children = []; }
+    before() {}
     remove() { if (this.parent) this.parent.children = this.parent.children.filter(item => item !== this); }
     focus() { document.activeElement = this; }
     scrollIntoView() {}
@@ -35,7 +36,7 @@ function fixture({ rejectStorage = false } = {}) {
     calls.push({ url, method: options.method || 'GET' });
     return { ok: true, json: async () => ({ sessions: ['shared', 'web-aaaaaaaaaaaa', 'web-bbbbbbbbbbbb'], token: 'fixture-token' }) };
   };
-  const context = vm.createContext({ document, window: { addEventListener() {} }, location: { origin: 'http://fixture.test' }, localStorage, fetch, console });
+  const context = vm.createContext({ document, window: { addEventListener() {}, createTerminalDisplayControls: () => ({ element: new Element(), apply() {} }) }, location: { origin: 'http://fixture.test' }, localStorage, fetch, console });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../ui/app.js'), 'utf8'), context);
   return { nodes, document, store, calls };
 }

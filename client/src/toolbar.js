@@ -102,6 +102,13 @@
     showConnection(window.webTerminalConnectionState || 'connecting');
     showTarget(window.webTerminalTarget);
     document.body.prepend(bar);
+    const displayControls = window.createTerminalDisplayControls({
+        getTerminal: () => window.mbaTerminalReady?.() ? window.term : null,
+        fit: term => term.fit(),
+    });
+    bar.insertBefore(displayControls.element, bar.children[1]);
+    window.addEventListener('web-terminal-connection', e => { if (e.detail === 'connected') displayControls.apply(); });
+    displayControls.apply();
     bar.addEventListener('click', e => {
         const btn = e.target.closest('button[data-key]');
         if (!btn) return;
