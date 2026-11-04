@@ -96,6 +96,9 @@ function ensureTtyd(name) {
   if (existing && existing.exitCode === null) return existing.socketPath;
   const socketPath = path.join(runtime, `ttyd-${name}.sock`);
   try { fs.unlinkSync(socketPath); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  // This is a tmux server option and therefore applies to every session on this socket.
+  // Application OSC 52 writes must reach ttyd for the browser clipboard bridge.
+  tmux(['set-option', '-s', 'set-clipboard', 'on']);
   const child = spawn('/usr/bin/ttyd', ['-i', socketPath, '-W', '-O', '/bin/sh', path.join(__dirname, 'attach-tab.sh'), tmuxSocket, name], { stdio: 'ignore' });
   child.socketPath = socketPath;
   children.set(name, child);
@@ -216,7 +219,8 @@ const server = http.createServer(async (req, res) => {
       if (!allowedMutation(req)) return send(res, 403, '{"error":"Forbidden"}');
       if (sessions().length >= maxSessions) return send(res, 409, '{"error":"Terminal limit reached"}');
       const name = `web-${crypto.randomBytes(6).toString('hex')}`;
-      tmux(['new-session', '-d', '-s', name]);
+      // Pi runs on the host, but the clipboard belongs to the remote browser.
+      tmux(['new-session', '-d', '-e', 'PI_CLIPBOARD_OSC52=1', '-s', name]);
       return send(res, 201, JSON.stringify({ name }));
     }
     const latest = /^\/api\/sessions\/(shared|web-[a-f0-9]{12})\/latest$/.exec(req.url);
