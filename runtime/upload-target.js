@@ -87,7 +87,7 @@ function createUploadTargets(server, tmux = 'tmux') {
         '#{||:#{==:#{pane_mode},copy-mode},#{==:#{pane_mode},copy-mode-vi}}',
         `send-keys -X -t ${record.target.pane} cancel`);
     },
-    async insert(ticket) {
+    async insert(ticket, requireCurrent = false) {
       const record = lookup(ticket);
       if (!record || !record.path || !record.target || record.busy) throw new Error('Target unavailable');
       record.busy = true;
@@ -101,7 +101,17 @@ function createUploadTargets(server, tmux = 'tmux') {
         await command('set-buffer', '-b', buffer, '--', shellQuote(record.path));
         bufferCreated = true;
         // -p honors bracketed-paste mode; -d deletes only this unique buffer.
-        await command('paste-buffer', '-p', '-d', '-b', buffer, '-t', record.target.pane);
+        if (requireCurrent) {
+          // Evaluate the view's active pane in tmux's own command queue. The
+          // paste still targets the captured pane, never a newly selected one.
+          const condition = `#{&&:#{==:#{session_id},${record.target.sessionId}},#{&&:#{==:#{pane_id},${record.target.pane}},#{==:#{pane_in_mode},0}}}`;
+          const output = await command('if-shell', '-F', '-t', `=${record.target.session}:`, condition,
+            `paste-buffer -p -d -b ${buffer} -t ${record.target.pane} ; display-message -p WT_INSERTED`,
+            'display-message -p WT_TARGET_CHANGED');
+          if (output.trim() !== 'WT_INSERTED') throw new Error('Target unavailable');
+        } else {
+          await command('paste-buffer', '-p', '-d', '-b', buffer, '-t', record.target.pane);
+        }
         bufferCreated = false;
         tickets.delete(ticket);
       } catch (error) {

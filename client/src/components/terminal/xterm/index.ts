@@ -9,6 +9,8 @@ import { ImageAddon } from '@xterm/addon-image';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { OverlayAddon } from './addons/overlay';
 import { ZmodemAddon } from './addons/zmodem';
+import { useTerminalKey } from './clipboard-shortcuts';
+import { createOsc52Clipboard } from './osc52-clipboard';
 
 import '@xterm/xterm/css/xterm.css';
 
@@ -126,6 +128,7 @@ export class Xterm {
     private reconnect = true;
     private doReconnect = true;
     private connection?: ConnectionLifecycle;
+    private oscClipboard?: ReturnType<typeof createOsc52Clipboard>;
 
     private writeFunc = (data: ArrayBuffer) => this.writeData(new Uint8Array(data));
 
@@ -228,12 +231,26 @@ export class Xterm {
         terminal.loadAddon(new WebLinksAddon());
 
         terminal.open(parent);
+        terminal.attachCustomKeyEventHandler(event => {
+            const copyKey =
+                event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 'c';
+            const result = useTerminalKey(
+                event,
+                navigator.platform,
+                terminal.hasSelection() || !!this.oscClipboard?.hasPending()
+            );
+            if (event.type === 'keydown' && !copyKey && !['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) {
+                this.oscClipboard?.clear();
+            }
+            return result;
+        });
         fitAddon.fit();
     }
 
     @bind
     private initListeners() {
         const { terminal, fitAddon, overlayAddon, register, sendData } = this;
+        this.oscClipboard = register(createOsc52Clipboard(terminal));
         register(
             terminal.onTitleChange(data => {
                 const match =

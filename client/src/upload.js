@@ -22,6 +22,33 @@
     document.body.append(results);
     let busy = false,
         statusTimer;
+    function watchPasteTarget() {
+        const terminal = window.term;
+        const target = window.webTerminalTarget;
+        if (!terminal?.onData || terminal.options.disableStdin || !target || !window.mbaTerminalReady?.() ||
+            document.activeElement !== terminal.textarea || !document.hasFocus()) return null;
+        const original = { ...target };
+        let valid = true;
+        const sameTarget = current => current && ['session', 'sessionId', 'pane', 'serverPid', 'paneMode']
+            .every(key => current[key] === original[key]);
+        const input = terminal.onData(() => { valid = false; });
+        const changed = event => { if (!sameTarget(event.detail)) valid = false; };
+        const disconnected = event => { if (event.detail !== 'connected') valid = false; };
+        const blurred = () => { valid = false; };
+        window.addEventListener('web-terminal-target', changed);
+        window.addEventListener('web-terminal-connection', disconnected);
+        window.addEventListener('blur', blurred);
+        return {
+            canInsert: () => valid && window.term === terminal && !terminal.options.disableStdin && window.mbaTerminalReady?.() &&
+                document.hasFocus() && document.activeElement === terminal.textarea && sameTarget(window.webTerminalTarget),
+            dispose: () => {
+                input.dispose();
+                window.removeEventListener('web-terminal-target', changed);
+                window.removeEventListener('web-terminal-connection', disconnected);
+                window.removeEventListener('blur', blurred);
+            },
+        };
+    }
     function say(text, temporary = false) {
         clearTimeout(statusTimer);
         status.hidden = false;
@@ -67,13 +94,17 @@
             buttons.forEach(([button, disabled]) => { button.disabled = disabled; });
         }
     }
-    function offerSavedPath(path, name, receipt) {
+    function offerSavedPath(path, name, receipt, insertionState = 'manual') {
         const target = receipt?.target;
         say('Image saved: ' + name, true);
         const item = document.createElement('div');
         const message = document.createElement('div');
         message.setAttribute('role', 'status');
-        message.textContent = target
+        message.textContent = insertionState === 'sent'
+            ? `Image sent to window ${target.windowIndex}, pane ${target.paneIndex}. Check the terminal.`
+            : insertionState === 'unknown'
+                ? `Insertion not confirmed. Check the terminal before retrying; the saved path is available to copy.`
+                : target
             ? `Saved ${name}. Captured target: window ${target.windowIndex}, pane ${target.paneIndex}. Check before inserting.`
             : `Saved ${name}. Original target unavailable; copy the path.`;
         const field = document.createElement('input');
@@ -94,7 +125,7 @@
         dismiss.setAttribute('aria-label', `Dismiss saved path for ${name}`);
         dismiss.onclick = () => item.remove();
         item.append(message, field, copy, dismiss);
-        if (target) {
+        if (target && insertionState === 'manual') {
             const insert = document.createElement('button');
             insert.type = 'button';
             insert.textContent = 'Insert into captured pane';
@@ -148,7 +179,7 @@
         item.append(message, recover);
         results.append(item);
     }
-    async function upload(file) {
+    async function upload(file, guard) {
         if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type)) {
             say('Unsupported image: ' + (file.name || 'clipboard image'));
             return;
@@ -183,7 +214,7 @@
                 resolve();
             };
             x.onabort = () => { offerRecovery(target, name); resolve(); };
-            x.onload = () => {
+            x.onload = async () => {
                 try {
                     let body = JSON.parse(x.responseText);
                     if (
@@ -192,7 +223,19 @@
                         !/^\/[^\x00-\x1f]*\/[a-f0-9-]{36}\.(png|jpg|gif|webp)$/.test(body.path)
                     )
                         throw Error(body.error || 'Upload failed');
-                    offerSavedPath(body.path, name, target && body.targetBound === true ? target : null);
+                    const receipt = target && body.targetBound === true ? target : null;
+                    let insertionState = 'manual';
+                    if (guard?.canInsert() && receipt?.target) {
+                        insertionState = 'unknown';
+                        try {
+                            const response = await fetch('/__terminal_upload', {
+                                method: 'POST', cache: 'no-store', redirect: 'manual',
+                                headers: { 'X-Terminal-Action': 'insert-current', 'X-Terminal-Target': receipt.ticket },
+                            });
+                            if (response.ok) insertionState = 'sent';
+                        } catch { /* The insert might have arrived; never retry automatically. */ }
+                    }
+                    offerSavedPath(body.path, name, receipt, insertionState);
                 } catch (err) {
                     say('Upload failed: ' + name + ' — ' + (err.message || 'unknown error'));
                 }
@@ -201,7 +244,7 @@
             x.send(file);
         });
     }
-    function enqueue(files) {
+    function enqueue(files, autoInsert = false) {
         if (busy) {
             say('An image is already uploading. Please wait.');
             return;
@@ -211,8 +254,10 @@
             return;
         }
         busy = true;
-        upload(files[0]).finally(() => {
+        const guard = autoInsert ? watchPasteTarget() : null;
+        upload(files[0], guard).finally(() => {
             busy = false;
+            guard?.dispose();
         });
     }
     picker.addEventListener('change', () => {
@@ -241,7 +286,7 @@
             if (files.length) {
                 e.preventDefault();
                 e.stopImmediatePropagation();
-                enqueue(files);
+                enqueue(files, true);
             }
         },
         true

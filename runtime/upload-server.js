@@ -81,7 +81,7 @@ const server = http.createServer((req, res) => {
   if (req.headers.origin !== origin)
     return reply(res, 403, { error: "Origin not allowed" });
   const action = req.headers['x-terminal-action'];
-  if (action === 'capture' || action === 'insert' || action === 'result' || action === 'latest') {
+  if (action === 'capture' || action === 'insert' || action === 'insert-current' || action === 'result' || action === 'latest') {
     if (req.headers['transfer-encoding'] || Number(req.headers['content-length'] || 0) !== 0)
       return reply(res, 400, { error: 'Unexpected request body' });
     if (controlActive >= 4) return reply(res, 429, { error: 'Too many target requests' });
@@ -100,7 +100,7 @@ const server = http.createServer((req, res) => {
           ? await targets[action === 'capture' ? 'capture' : 'returnToLive'](req.headers['x-terminal-view'], req.headers['x-terminal-session'], req.headers['x-terminal-session-id'], req.headers['x-terminal-pane'], req.headers['x-terminal-server-pid'])
           : action === 'result'
             ? targets.result(req.headers['x-terminal-target'])
-            : await targets.insert(req.headers['x-terminal-target']);
+            : await targets.insert(req.headers['x-terminal-target'], action === 'insert-current');
         reply(res, 200, result || (action === 'latest' ? { requested: true } : { inserted: true }));
       } catch {
         reply(res, 409, { error: 'Target unavailable' });
