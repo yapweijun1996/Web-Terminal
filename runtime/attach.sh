@@ -21,4 +21,10 @@ fi
 base new-session -d -t workspace -s "$view"
 cleanup() { base kill-session -t "=$view" >/dev/null 2>&1 || :; }
 trap cleanup EXIT HUP INT TERM
+# Only the current client understands and removes the private metadata prefix.
+# A legacy client has no view ID and must retain the server's normal title.
+if [ "$#" -eq 1 ]; then
+    base set-option -t "=$view:" set-titles-string '__WEB_TERMINAL_TARGET__|#{session_name}|#{session_id}|#{pane_id}|#{pid}|#{window_index}|#{pane_index}|#{pane_mode}|#{pane_title}'
+    base set-option -t "=$view:" set-titles on
+fi
 base attach-session -t "=$view"

@@ -37,9 +37,11 @@ test('bound upload targets survive window switching and fail closed on pane or s
   await new Promise(resolve => listener.listen(0, '127.0.0.1', resolve));
   const port = listener.address().port;
   await new Promise(resolve => listener.close(resolve));
-  let child, socket;
+  let child, socket, legacySocket, currentOutput = '', legacyOutput = '';
   try {
     tmux('new-session', '-d', '-s', 'workspace', '-c', root, 'sh');
+    tmux('set-option', '-g', 'set-titles', 'on');
+    tmux('set-option', '-g', 'set-titles-string', 'legacy-safe-title');
     child = spawn('ttyd', ['--interface', '127.0.0.1', '--port', String(port), '--url-arg', '--writable', attach], { env, stdio: 'ignore' });
     for (let i = 0; i < 100; i++) {
       const probe = net.connect(port, '127.0.0.1');
@@ -49,6 +51,8 @@ test('bound upload targets survive window switching and fail closed on pane or s
       await delay(25);
     }
     socket = new WebSocket(`ws://127.0.0.1:${port}/ws?arg=${view}`, ['tty']);
+    socket.binaryType = 'arraybuffer';
+    socket.addEventListener('message', event => { currentOutput += typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data); });
     await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }); });
     socket.send(JSON.stringify({ AuthToken: '', columns: 80, rows: 24 }));
     let session;
@@ -59,6 +63,26 @@ test('bound upload targets survive window switching and fail closed on pane or s
       await delay(25);
     }
     assert.ok(session, 'the view must correspond to an attached ttyd session');
+    assert.equal(tmux('show-options', '-gqv', 'set-titles-string'), 'legacy-safe-title', 'the new client must not change the global title');
+    assert.match(tmux('show-options', '-qv', '-t', `=${session}:`, 'set-titles-string'), /^__WEB_TERMINAL_TARGET__\|/);
+    legacySocket = new WebSocket(`ws://127.0.0.1:${port}/ws`, ['tty']);
+    legacySocket.binaryType = 'arraybuffer';
+    legacySocket.addEventListener('message', event => { legacyOutput += typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data); });
+    await new Promise((resolve, reject) => { legacySocket.addEventListener('open', resolve, { once: true }); legacySocket.addEventListener('error', reject, { once: true }); });
+    legacySocket.send(JSON.stringify({ AuthToken: '', columns: 80, rows: 24 }));
+    let legacySession;
+    for (let i = 0; i < 100; i++) {
+      legacySession = tmux('list-sessions', '-F', '#{session_name}|#{session_attached}')
+        .split('\n').filter(line => line.startsWith('view-') && line.endsWith('|1'))
+        .map(line => line.split('|')[0]).find(name => name !== session);
+      if (legacySession) break;
+      await delay(25);
+    }
+    assert.ok(legacySession, 'a legacy client must have its own attached session');
+    assert.equal(tmux('show-options', '-Aqv', '-t', `=${legacySession}:`, 'set-titles-string'), 'legacy-safe-title', 'legacy clients must never inherit the metadata prefix');
+    for (let i = 0; i < 100 && !currentOutput.includes('__WEB_TERMINAL_TARGET__|'); i++) await delay(25);
+    assert.ok(currentOutput.includes('__WEB_TERMINAL_TARGET__|'), 'the current client receives its metadata');
+    assert.ok(!legacyOutput.includes('__WEB_TERMINAL_TARGET__|'), 'legacy output contains no metadata prefix');
     const [sessionId, pane, serverPid] = tmux('display-message', '-p', '-t', `=${session}:`, '#{session_id}|#{pane_id}|#{pid}').split('|');
     const other = tmux('new-window', '-d', '-P', '-F', '#{pane_id}', '-t', `=${session}`, 'sh');
     const target = createUploadTargets(server);
@@ -109,6 +133,7 @@ test('bound upload targets survive window switching and fail closed on pane or s
     await assert.rejects(target.insert(disconnected.ticket), 'a disconnected view must not redirect insertion');
   } finally {
     if (socket && socket.readyState < WebSocket.CLOSING) socket.close();
+    if (legacySocket && legacySocket.readyState < WebSocket.CLOSING) legacySocket.close();
     if (child && child.exitCode === null && child.signalCode === null) {
       child.kill('SIGTERM');
       await new Promise(resolve => child.once('exit', resolve));
