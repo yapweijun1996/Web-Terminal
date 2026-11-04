@@ -66,7 +66,7 @@ The repository candidate enables tmux's server-level `set-clipboard on` when it 
 
 The environment change applies to new UI-created sessions and their new child processes. It does not alter an already-running shell or Pi process, including the existing shared session. After preserving any active work, Pi started from an existing shell needs the variable in its own environment, for example `PI_CLIPBOARD_OSC52=1 pi`. Reconnecting the browser alone does not update an existing process. Pi's OSC 52 implementation has its own encoded-size limit and browser permissions may still require the manual Copy selection button.
 
-This candidate is **not deployed**. Its isolated end-to-end fixture uses the installed Pi, ttyd and tmux and a separate headless Chrome profile, with no model calls and a stubbed host clipboard command. With those prerequisites and Node.js 22 or later, run:
+On 2026-11-04, only the Pi clipboard changes were deployed to the existing Linux UI version; the other repository candidate changes were not deployed as part of that update. The UI and terminal endpoints returned HTTP 200 on the private socket, `set-clipboard` was `on`, and all 15 previously recorded tmux panes retained their process IDs. This does not establish authenticated production-browser behavior or update already-running Pi processes. The isolated end-to-end fixture uses the installed Pi, ttyd and tmux and a separate headless Chrome profile, with no model calls and a stubbed host clipboard command. With those prerequisites and Node.js 22 or later, run:
 
 ```sh
 node linux/test/pi-browser.e2e.mjs
