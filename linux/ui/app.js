@@ -44,6 +44,14 @@ const mobileKeys = window.createMobileKeys({
 });
 latest.before(mobileKeys.toggle);
 views.before(mobileKeys.panel);
+const displayControls = window.createTerminalDisplayControls({
+  getTerminal: () => active && connections.get(active) === 'Connected' ? frames.get(active)?.contentWindow?.term : null,
+  fit: () => {
+    const win = frames.get(active)?.contentWindow;
+    if (win) win.dispatchEvent(new win.Event('resize'));
+  },
+});
+latest.before(displayControls.element);
 function label(name) { return names[name] || (name === 'shared' ? 'Existing terminal' : `Terminal ${name.slice(4)}`); }
 function saveHidden() { try { localStorage.setItem(storageKey, JSON.stringify([...hidden])); } catch {} }
 function saveNames() { try { localStorage.setItem(namesKey, JSON.stringify(names)); return true; } catch { return false; } }
@@ -90,6 +98,7 @@ function activate(name, focusTab = false) {
   }
   for (const [id, iframe] of frames) iframe.classList.toggle('active', id === name);
   showConnection(name);
+  displayControls.apply();
   renderTabs(focusTab ? name : null);
   updateControls();
 }
@@ -327,6 +336,7 @@ window.addEventListener('message', event => {
         connections.set(name, event.data.state);
         if (event.data.state !== 'Connected') scrollModes.delete(name);
         if (name === active && event.data.state !== 'Connected') mobileKeys.reset();
+        if (name === active && event.data.state === 'Connected') displayControls.apply();
         if (name === active) showConnection(name);
       } else if (event.data?.type === 'terminal-scroll' && (event.data.mode === null || (typeof event.data.mode === 'string' && /^[a-z0-9-]{0,64}$/.test(event.data.mode)))) {
         scrollModes.set(name, event.data.mode);

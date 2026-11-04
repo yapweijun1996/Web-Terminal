@@ -49,6 +49,8 @@ const baseConfig = {
                 { from: './upload.js', to: '.' },
                 { from: '../../linux/ui/mobile-keys.js', to: '.' },
                 { from: '../../linux/ui/mobile-keys.css', to: '.' },
+                { from: '../../linux/ui/display-controls.js', to: '.' },
+                { from: '../../linux/ui/display-controls.css', to: '.' },
             ],
         }),
         new MiniCssExtractPlugin({

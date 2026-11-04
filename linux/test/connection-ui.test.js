@@ -31,7 +31,7 @@ test('session auth failure and iframe disconnect offer safe explicit recovery', 
   const header = new Element();
   const document = { querySelector: selector => selector === 'header' ? header : nodes[selector.slice(1)], createElement: tag => new Element(tag) };
   const listeners = {};
-  const window = { addEventListener: (name, handler) => { listeners[name] = handler; }, createMobileKeys: () => ({ toggle: new Element(), panel: new Element(), reset() {}, resetIfTargetChanged() {} }) };
+  const window = { addEventListener: (name, handler) => { listeners[name] = handler; }, createMobileKeys: () => ({ toggle: new Element(), panel: new Element(), reset() {}, resetIfTargetChanged() {} }), createTerminalDisplayControls: () => ({ element: new Element(), apply() {} }) };
   const location = { origin: 'http://fixture.test' };
   let mode = 'auth';
   let mutationRequests = 0;

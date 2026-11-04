@@ -68,12 +68,15 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 - **Scope:** Design a collapsible input bar for Esc, Ctrl, Tab, and directional keys, with clear modifier state and space for the input line.
 - **Acceptance:** On documented physical devices, touch controls work without accidental submission; with the soft keyboard open and closed, the terminal grid and PTY dimensions agree and the current input remains visible.
 - **Candidate evidence (2026-11-04):** A shared, collapsed-by-default key bar sends Esc, Tab and mode-aware arrows only to the connected active terminal. Ctrl requires a letter selection and a separate send; the selection clears after use, and Ctrl+J/M are excluded because they can submit. Isolated Chrome/tmux fixtures checked a synthetic unsubmitted draft, cursor movement, control-key selection, reconnect guards and a 390×844 emulated viewport. With the bar open, xterm dimensions matched tmux client dimensions, with one row used by the tmux status line. Real touch, soft-keyboard visibility and dimensions, and physical devices remain unverified; the candidate is not deployed.
+- **Combined candidate:** The key bar and WT-009 font adjustment were exercised together in isolated Mac and Linux Chrome fixtures at 390×844; terminal and tmux client grids agreed after resizing, and an explicit Ctrl+A left the synthetic draft unsubmitted. Physical-device acceptance is still outstanding.
 
 ### WT-009: Improve keyboard and accessibility support
 
-- **Status:** Open
+- **Status:** In progress
 - **Scope:** Provide keyboard-operable controls, visible focus, accessible names, connection announcements, and adjustable text and contrast. Treat screen-reader support for the terminal itself as a separate verification concern.
 - **Acceptance:** Switching views and reconnecting work without a mouse; tested assistive technology identifies controls and relevant state changes. Record tested devices and untested limitations.
+- **Candidate evidence (2026-11-04):** The existing navigation and reconnect controls have keyboard and focus checks under WT-004/005. In isolated Mac and Linux Chromium fixtures, a display panel adjusted terminal text size and minimum text contrast without submitting synthetic shell input; the terminal and tmux client dimensions agreed afterward. A new Linux view received the same page-local settings. The browser accessibility tree exposed control names, expanded and pressed state, and a polite status; keyboard opening and focus were exercised. A real screen reader, physical device, full terminal-output accessibility, and live deployment remain unverified.
+- **Combined candidate:** Font adjustment was also exercised with the WT-008 key bar open in both fixtures. A real assistive-technology check remains outstanding.
 
 ### WT-010: Provide a privacy-preserving status view
 
@@ -84,10 +87,11 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-011: Verify resize, lifecycle, and platform support
 
-- **Status:** Open
+- **Status:** Verified (evidence matrix; untested cases remain unknown)
 - **Scope:** Maintain an evidence-based matrix for browser/PTY dimensions, physical input, disconnect, sleep, logout, restart, and separately for Windows, WSL, and Xubuntu when available.
 - **Acceptance:** Each tested case records environment, trigger, job outcome, and reconnect behavior; untested cases remain explicitly unknown. No survival through reboot or platform support is implied without evidence.
 - **Display observation (2026-11-04):** In an isolated Linux Chromium emulation at 1280×800 and device scale factor 1, the terminal canvas appeared undersized in both the unmodified baseline and the connection-recovery candidate. A scale factor 2 emulation displayed normally. The cause and behavior on physical devices remain unverified; this does not establish a candidate regression.
+- **Evidence (2026-11-04):** The [lifecycle matrix](docs/lifecycle-matrix.md) records isolated resize, browser reload and Linux UI restart results, including measured grid sizes, fixture job outcomes, reconnect limits and explicitly unknown platforms and lifecycle events. It does not claim physical device coverage or survival through host sleep, logout or reboot.
 
 ### WT-012: Assess dependency upgrades
 

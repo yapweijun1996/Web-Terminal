@@ -37,7 +37,7 @@ function fixture({ rejectStorage = false } = {}) {
     calls.push({ url, method: options.method || 'GET' });
     return { ok: true, json: async () => ({ sessions: ['shared', 'web-aaaaaaaaaaaa', 'web-bbbbbbbbbbbb'], token: 'fixture-token' }) };
   };
-  const context = vm.createContext({ document, window: { addEventListener() {}, createMobileKeys: () => ({ toggle: new Element(), panel: new Element(), reset() {}, resetIfTargetChanged() {} }) }, location: { origin: 'http://fixture.test' }, localStorage, fetch, console });
+  const context = vm.createContext({ document, window: { addEventListener() {}, createMobileKeys: () => ({ toggle: new Element(), panel: new Element(), reset() {}, resetIfTargetChanged() {} }), createTerminalDisplayControls: () => ({ element: new Element(), apply() {} }) }, location: { origin: 'http://fixture.test' }, localStorage, fetch, console });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../ui/app.js'), 'utf8'), context);
   return { nodes, document, store, calls };
 }

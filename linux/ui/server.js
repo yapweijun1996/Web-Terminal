@@ -180,6 +180,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/clipboard-bridge.js') return file(res, 'clipboard-bridge.js', 'text/javascript; charset=utf-8');
     if (req.method === 'GET' && req.url === '/mobile-keys.js') return file(res, 'mobile-keys.js', 'text/javascript; charset=utf-8');
     if (req.method === 'GET' && req.url === '/mobile-keys.css') return file(res, 'mobile-keys.css', 'text/css; charset=utf-8');
+    if (req.method === 'GET' && req.url === '/display-controls.js') return file(res, 'display-controls.js', 'text/javascript; charset=utf-8');
+    if (req.method === 'GET' && req.url === '/display-controls.css') return file(res, 'display-controls.css', 'text/css; charset=utf-8');
     if (req.method === 'GET' && req.url === '/style.css') return file(res, 'style.css', 'text/css; charset=utf-8');
     if (req.method === 'GET' && req.url === '/api/sessions') return send(res, 200, JSON.stringify({ sessions: sessions(), token }));
     if (req.method === 'POST' && ['/api/images/prepare', '/api/images/result', '/api/images/insert'].includes(req.url)) {
