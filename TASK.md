@@ -69,7 +69,7 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 - **Status:** In progress
 - **Scope:** Design a collapsible input bar for Esc, Ctrl, Tab, and directional keys, with clear modifier state and space for the input line.
 - **Acceptance:** On documented physical devices, touch controls work without accidental submission; with the soft keyboard open and closed, the terminal grid and PTY dimensions agree and the current input remains visible.
-- **Candidate evidence (2026-11-04):** An unmerged local candidate provides a collapsible key bar for Mac and Linux. Isolated browser/tmux and automated checks exercised key encoding, view changes, disconnect guards, synthetic drafts and emulated viewport sizes. It was also tested alongside the WT-009 display controls. Physical touch, soft-keyboard behavior and deployment remain unverified; the candidate is not part of main.
+- **Candidate evidence (2026-11-04):** An unmerged local candidate provides a collapsible key bar for Mac and Linux. Isolated browser/tmux and automated checks exercised key encoding, view changes, disconnect guards, synthetic drafts and emulated viewport sizes. It was also tested alongside the WT-009 display controls. In a separate Mac candidate fixture, Chromium mobile emulation dispatched touch events to the key bar; Left, Esc, Tab and Ctrl+A sent the expected bytes, retained an unsent synthetic draft, and left xterm and tmux client dimensions at 43×37. This does not validate a physical touchscreen or soft keyboard. Physical-device acceptance and deployment remain unverified; the candidate is not part of main.
 
 ### WT-009: Improve keyboard and accessibility support
 
