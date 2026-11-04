@@ -83,9 +83,12 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     assert.equal(created.status, 201);
     const name = JSON.parse(created.body).name;
     assert.match(name, /^web-[a-f0-9]{12}$/);
+    assert.equal(tmux('show-environment', '-t', name, 'PI_CLIPBOARD_OSC52'), 'PI_CLIPBOARD_OSC52=1');
+    assert.equal(tmux('show-options', '-s', '-v', 'set-clipboard'), 'external');
     assert.equal((await request('GET', '/terminal/invalid')).status, 404);
     const terminalPage = await request('GET', '/terminal/shared');
     assert.equal(terminalPage.status, 200);
+    assert.equal(tmux('show-options', '-s', '-v', 'set-clipboard'), 'on');
     assert.match(terminalPage.body, /src="\/clipboard-bridge\.js"/);
     assert.equal((await request('GET', '/clipboard-bridge.js')).status, 200);
     const shim = terminalPage.body.match(/<head><script>([\s\S]*?)<\/script>/)?.[1];

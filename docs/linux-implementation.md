@@ -55,4 +55,20 @@ The Linux UI handles Ctrl+V in the browser before it reaches terminal applicatio
 
 For copying text, the UI receives tmux OSC 52 copy requests from the active terminal. A recent pointer or copy-key gesture allows it to write to the browser clipboard; otherwise it offers a Copy selection button. Browser clipboard permissions and focus can prevent automatic copying. Clipboard contents are held in the page while awaiting a copy action and are not logged or stored on the server by this bridge.
 
+### Pi selection and clipboard candidate
+
+The repository candidate enables tmux's server-level `set-clipboard on` when it starts a terminal view and sets `PI_CLIPBOARD_OSC52=1` in sessions created by the UI. Pi's fullscreen text selection can then send its copy request through tmux and ttyd to the browser bridge. This option applies to **every session on the same tmux server**: applications can create tmux clipboard buffers and send clipboard requests to attached clients. An isolated two-client tmux test confirmed that both attached clients received an application OSC 52 sequence. The browser's recent-gesture check is not application identity verification or an isolation boundary; a client without a recent gesture may still receive the text and offer a manual copy. Multiple clients and other applications on the same server must be considered before deployment. Pi may also try to write the host desktop clipboard before emitting OSC 52.
+
+The environment change applies to new UI-created sessions and their new child processes. It does not alter an already-running shell or Pi process, including the existing shared session. After preserving any active work, Pi started from an existing shell needs the variable in its own environment, for example `PI_CLIPBOARD_OSC52=1 pi`. Reconnecting the browser alone does not update an existing process. Pi's OSC 52 implementation has its own encoded-size limit and browser permissions may still require the manual Copy selection button.
+
+This candidate is **not deployed**. Its isolated end-to-end fixture uses the installed Pi, ttyd and tmux and a separate headless Chrome profile, with no model calls and a stubbed host clipboard command. With those prerequisites and Node.js 22 or later, run:
+
+```sh
+node linux/test/pi-browser.e2e.mjs
+```
+
+`PI_BIN` and `CHROME_BIN` can select different executables. The fixture checks visible selection attributes and the test browser's clipboard; it does not establish the original user's browser or existing Pi session is fixed. Its Chrome process is launched without the Chromium sandbox for the local fixture, so run it only in a trusted test environment.
+
+For rollback after an authorized deployment, restore the previous UI implementation first, then restore the previous tmux `set-clipboard` server option. The candidate sets the option again when it starts a view, so changing only the tmux option while leaving the candidate active is not a durable rollback. Do not stop the tmux server or existing jobs to roll back; already-running processes retain the environment with which they started.
+
 Images are retained until the owner removes them. Requests require the same origin and per-process mutation token as session changes, and the tunnel must validate Access for the upload route. Each file is limited to 10 MiB; at most three uploads are processed concurrently, with a 30-second request deadline and a storage limit of 500 files or 500 MiB. The server checks file signatures and basic structure; it does not fully decode images. The fixture redirects uploads to its own temporary directory.
