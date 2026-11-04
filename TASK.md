@@ -83,10 +83,11 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-011: Verify resize, lifecycle, and platform support
 
-- **Status:** Open
+- **Status:** Verified (evidence matrix; untested cases remain unknown)
 - **Scope:** Maintain an evidence-based matrix for browser/PTY dimensions, physical input, disconnect, sleep, logout, restart, and separately for Windows, WSL, and Xubuntu when available.
 - **Acceptance:** Each tested case records environment, trigger, job outcome, and reconnect behavior; untested cases remain explicitly unknown. No survival through reboot or platform support is implied without evidence.
 - **Display observation (2026-11-04):** In an isolated Linux Chromium emulation at 1280×800 and device scale factor 1, the terminal canvas appeared undersized in both the unmodified baseline and the connection-recovery candidate. A scale factor 2 emulation displayed normally. The cause and behavior on physical devices remain unverified; this does not establish a candidate regression.
+- **Evidence (2026-11-04):** The [lifecycle matrix](docs/lifecycle-matrix.md) records isolated resize, browser reload and Linux UI restart results, including measured grid sizes, fixture job outcomes, reconnect limits and explicitly unknown platforms and lifecycle events. It does not claim physical device coverage or survival through host sleep, logout or reboot.
 
 ### WT-012: Assess dependency upgrades
 

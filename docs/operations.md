@@ -51,6 +51,8 @@ The candidate toolbar reports tmux scrollback or live mode only when it has a cu
 
 For the recorded ttyd 1.7.7 Mac bundle, historical fixture evidence found that applying line height before font size triggered a final fit and avoided clipping. This observation is version-specific and must be retested after a change or upgrade.
 
+Consult the [lifecycle matrix](lifecycle-matrix.md) before assuming that a session survives a resize, disconnect, restart, sleep, logout or reboot on a given platform.
+
 ## Rollback principles
 
 Restore only the exact component changed, using the captured prior configuration. Identify jobs before a restart, logout, removal, or process termination; preserve the tmux server and unrelated tunnels. Verify the restored access boundary and report any lost or unverified behavior. Do not delete retained uploads or other user data as part of routine cleanup; remove only owned disposable test artifacts.
