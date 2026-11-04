@@ -235,7 +235,7 @@ function confirmClose(name, opener) {
   const dismiss = document.querySelector('#close-dismiss');
   const hide = document.querySelector('#close-hide');
   let identity = null, closing = false;
-  title.textContent = label(name);
+  title.textContent = `${label(name)} (${name})`;
   error.textContent = '';
   confirm.disabled = true; cancel.disabled = false; dismiss.disabled = false; hide.disabled = false;
   const cancelDialog = () => { if (!closing) { dialog.close(); opener.focus(); } };

@@ -63,7 +63,7 @@ test('keyboard navigation keeps focus and hiding another view preserves the acti
 test('closing requires explicit confirmation; cancel leaves the session untouched', async () => {
   const f = fixture(); await flush();
   f.nodes.tabs.children[1].children[1].click(); await flush();
-  assert.equal(f.nodes['close-name'].textContent, 'Terminal aaaaaaaaaaaa');
+  assert.equal(f.nodes['close-name'].textContent, 'Terminal aaaaaaaaaaaa (web-aaaaaaaaaaaa)');
   f.nodes['close-dismiss'].click();
   assert.equal(f.nodes['close-dialog'].open, false);
   assert.equal(f.calls.some(call => call.method === 'POST'), false);
