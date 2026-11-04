@@ -24,9 +24,10 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-003: Diagnose Codex scrolling and expose scroll state
 
-- **Status:** Open
+- **Status:** Verified in isolated candidates; original live pane unresolved
 - **Scope:** Reproduce the recorded issue in a disposable equivalent session, determine mouse and alternate-screen behavior, and evaluate clear terminal/application scroll state and a return-to-latest control where supported. Preserve unknown state when it cannot be determined.
 - **Acceptance:** Document a reproducible cause or explicitly retain the unknown; verify any fix in shell, tmux copy mode, mouse-aware TUI, and the relevant Codex state. Do not modify drafts or submit commands. The original running pane is not considered fixed based on a separate fixture.
+- **Evidence (2026-11-04):** Isolated Mac and Linux fixtures reported tmux copy mode and returned to live without changing synthetic unsubmitted shell input. A browser wheel reached a disposable mouse-aware `less` session; Return to live did not send it input. A disposable Codex 0.166.0 session with networking disabled reproduced alternate-screen enabled and mouse capture disabled; a simulated wheel and Return to live left its synthetic unsubmitted draft intact. The indicator describes tmux only and keeps application scroll unknown. At a simulated 390-pixel viewport, the Mac toolbar requires horizontal scrolling to reach the control; mobile usability remains part of WT-008. The original pane's cause and transcript position remain unknown; the candidate has not been deployed, and physical trackpad and mobile behavior remain unverified.
 - **Evidence:** A 2026-11-04 Linux Chromium fixture exercised wheel scrollback, return to latest and `less --mouse`; it did not test the original Mac Codex pane, physical trackpad or mobile touch.
 
 ### WT-004: Make connection and recovery states clear

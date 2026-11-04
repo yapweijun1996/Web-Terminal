@@ -38,6 +38,7 @@ declare global {
             serverPid: string;
             windowIndex: string;
             paneIndex: string;
+            paneMode: string;
         };
         webTerminalConnectionState?: ConnectionState;
         webTerminalRetry?: () => void;
@@ -236,7 +237,7 @@ export class Xterm {
         register(
             terminal.onTitleChange(data => {
                 const match =
-                    /^__WEB_TERMINAL_TARGET__\|(view-[a-f0-9-]{36}-\d+)\|(\$\d+)\|(%\d+)\|(\d+)\|(\d+)\|(\d+)\|([\s\S]*)$/.exec(
+                    /^__WEB_TERMINAL_TARGET__\|(view-[a-f0-9-]{36}-\d+)\|(\$\d+)\|(%\d+)\|(\d+)\|(\d+)\|(\d+)\|([a-z0-9-]*)\|([\s\S]*)$/.exec(
                         data
                     );
                 const previous = window.webTerminalTarget;
@@ -248,6 +249,7 @@ export class Xterm {
                         serverPid: match[4],
                         windowIndex: match[5],
                         paneIndex: match[6],
+                        paneMode: match[7],
                     };
                 } else {
                     window.webTerminalTarget = undefined;
@@ -257,11 +259,12 @@ export class Xterm {
                     previous?.session !== current?.session ||
                     previous?.pane !== current?.pane ||
                     previous?.windowIndex !== current?.windowIndex ||
-                    previous?.paneIndex !== current?.paneIndex
+                    previous?.paneIndex !== current?.paneIndex ||
+                    previous?.paneMode !== current?.paneMode
                 ) {
                     window.dispatchEvent(new CustomEvent('web-terminal-target', { detail: current || null }));
                 }
-                const title = match ? match[7] : data;
+                const title = match ? match[8] : data;
                 if (title && title !== '' && !this.titleFixed) {
                     document.title = title + ' | ' + this.title;
                 }

@@ -2,6 +2,7 @@
 const tabs = document.querySelector('#tabs');
 const views = document.querySelector('#views');
 const status = document.querySelector('#status');
+const scrollStatus = document.querySelector('#scroll-status');
 const retry = document.querySelector('#retry');
 const restore = document.querySelector('#restore');
 const newTab = document.querySelector('#new-tab');
@@ -27,16 +28,17 @@ try {
 } catch {}
 let sessions = [], active = null, token = '';
 let copyGestureAt = 0, pendingCopy = null;
-let retryMode = null, loading = false, sessionReady = false, creating = false;
+let retryMode = null, loading = false, sessionReady = false, creating = false, returning = false;
 let renameTarget = null;
 const frames = new Map();
 const connections = new Map();
+const scrollModes = new Map();
 function label(name) { return names[name] || (name === 'shared' ? 'Existing terminal' : `Terminal ${name.slice(4)}`); }
 function saveHidden() { try { localStorage.setItem(storageKey, JSON.stringify([...hidden])); } catch {} }
 function saveNames() { try { localStorage.setItem(namesKey, JSON.stringify(names)); return true; } catch { return false; } }
 function updateControls() {
   newTab.disabled = !sessionReady || creating;
-  latest.disabled = !sessionReady || !active;
+  latest.disabled = !sessionReady || !active || returning;
   renameTab.disabled = !sessionReady || !active;
 }
 function showStatus(message, retryAction = null) {
@@ -48,14 +50,23 @@ function showStatus(message, retryAction = null) {
 }
 function showConnection(name) {
   const state = connections.get(name) || 'Connecting';
+  showScroll(name);
   if (state === 'Disconnected' || state === 'Connection error') return showStatus('Disconnected — retry or sign in', 'frame');
   showStatus(state);
+}
+function showScroll(name) {
+  const mode = connections.get(name) === 'Connected' ? scrollModes.get(name) : null;
+  const state = mode == null ? 'tmux scroll unknown' : /^copy-mode/.test(mode) ? 'tmux scrollback' : mode ? 'tmux mode unknown' : 'tmux live';
+  scrollStatus.textContent = `${state}; app scroll unknown`;
+  scrollStatus.title = 'This reports tmux mode only; the application may have its own scroll position.';
 }
 function activate(name, focusTab = false) {
   if (renameTarget && renameTarget !== name) { renameForm.hidden = true; renameTarget = null; renameError.textContent = ''; }
   if (name !== active) { copyGestureAt = 0; pendingCopy = null; copySelection.hidden = true; }
   active = name;
   if (!frames.has(name)) {
+    connections.set(name, 'Connecting');
+    scrollModes.delete(name);
     const iframe = document.createElement('iframe');
     iframe.src = `/terminal/${name}`; iframe.title = label(name);
     iframe.dataset.preserveTabFocus = String(focusTab);
@@ -278,12 +289,20 @@ newTab.addEventListener('click', async () => {
 });
 restore.addEventListener('click', event => { hidden.clear(); saveHidden(); renderTabs(); if (!active && sessions.length) activate(sessions[0], event.detail === 0); });
 latest.addEventListener('click', async () => {
-  if (!sessionReady || !active) return;
+  if (!sessionReady || !active || returning) return;
+  const name = active, iframe = frames.get(name);
+  const target = connections.get(name) === 'Connected' ? iframe?.contentWindow?.webTerminalTarget : null;
+  if (!target || target.session !== name) { scrollStatus.textContent = 'tmux scroll target unavailable; app scroll unknown'; return; }
+  returning = true; updateControls();
   try {
-    const response = await fetch(`/api/sessions/${active}/latest`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Terminal-Request': token }, body: '{}' });
+    const response = await fetch(`/api/sessions/${name}/latest`, { method: 'POST', headers: {
+      'Content-Type': 'application/json', 'X-Terminal-Request': token,
+      'X-Terminal-Session': target.session, 'X-Terminal-Session-Id': target.sessionId,
+      'X-Terminal-Pane': target.pane, 'X-Terminal-Server-Pid': target.serverPid,
+    }, body: '{}' });
     if (!response.ok) throw Error('Unable to return to latest output');
-    frames.get(active)?.contentWindow?.focus();
-  } catch { sessionReady = false; updateControls(); showStatus('Unable to return to latest output — check connection or sign in', 'load'); }
+  } catch { if (active === name) scrollStatus.textContent = 'tmux scroll unavailable; app scroll unknown'; }
+  finally { returning = false; updateControls(); }
 });
 window.addEventListener('message', event => {
   if (event.origin !== location.origin) return;
@@ -291,7 +310,11 @@ window.addEventListener('message', event => {
     if (event.source === iframe.contentWindow) {
       if (event.data?.type === 'terminal-connection' && ['Connecting', 'Connected', 'Disconnected', 'Connection error'].includes(event.data.state)) {
         connections.set(name, event.data.state);
+        if (event.data.state !== 'Connected') scrollModes.delete(name);
         if (name === active) showConnection(name);
+      } else if (event.data?.type === 'terminal-scroll' && (event.data.mode === null || (typeof event.data.mode === 'string' && /^[a-z0-9-]{0,64}$/.test(event.data.mode)))) {
+        scrollModes.set(name, event.data.mode);
+        if (name === active) showScroll(name);
       } else if (event.data?.type === 'terminal-clipboard' && name === active && typeof event.data.text === 'string' && event.data.text.length > 0 && event.data.text.length <= 1048576) {
         const selection = { name, text: event.data.text };
         pendingCopy = selection; copySelection.hidden = false;

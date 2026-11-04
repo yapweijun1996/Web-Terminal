@@ -42,6 +42,12 @@
     color: #d5e4f0;
     font-size: 12px;
 }
+#scroll-status, #scroll-notice {
+    flex: 0 0 auto;
+    color: #d5e4f0;
+    font-size: 12px;
+}
+#scroll-latest:disabled { opacity: .5; cursor: not-allowed; }
 #connection-retry[hidden] {
     display: none;
 }

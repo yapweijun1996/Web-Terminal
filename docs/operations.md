@@ -45,6 +45,8 @@ An interrupted HTTP response can be recovered for ten minutes while the same upl
 
 Inspect in order: browser viewport and terminal grid, ttyd/client resize, tmux pane and copy mode, then the foreground application's own alternate-screen and mouse modes. An alternate screen is not proof of mouse capture, and tmux history is not necessarily an application's transcript. Never translate all wheel events into arrow keys: that can alter a command or prompt.
 
+The candidate toolbar reports tmux scrollback or live mode only when it has a current pane identity. Application scroll position remains unknown. **Return to live** asks tmux to leave copy mode in that confirmed pane; it does not send keys to the application or move an application's own transcript. After reconnecting, verify the active pane before using it. A missing or stale pane identity prevents the request.
+
 For the recorded ttyd 1.7.7 Mac bundle, historical fixture evidence found that applying line height before font size triggered a final fit and avoided clipping. This observation is version-specific and must be retested after a change or upgrade.
 
 ## Rollback principles

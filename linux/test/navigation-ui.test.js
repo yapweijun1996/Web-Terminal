@@ -25,7 +25,7 @@ function fixture({ rejectStorage = false } = {}) {
     select() {}
     click() { if (!this.hidden && !this.disabled) this.listeners.click?.({ detail: 0 }); }
   }
-  const ids = ['tabs', 'views', 'status', 'retry', 'restore', 'new-tab', 'rename-tab', 'rename-form', 'rename-input', 'rename-cancel', 'rename-error', 'latest', 'image-results', 'image-notice', 'copy-selection'];
+  const ids = ['tabs', 'views', 'status', 'scroll-status', 'retry', 'restore', 'new-tab', 'rename-tab', 'rename-form', 'rename-input', 'rename-cancel', 'rename-error', 'latest', 'image-results', 'image-notice', 'copy-selection'];
   const nodes = Object.fromEntries(ids.map(id => [id, new Element()]));
   nodes['rename-form'].hidden = true;
   document = { activeElement: null, querySelector: selector => nodes[selector.slice(1)], createElement: tag => new Element(tag) };
