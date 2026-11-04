@@ -11,6 +11,9 @@ button:hover, button:focus-visible { background: #394356; outline: 2px solid #8c
 .tab button { border: 0; background: transparent; }
 .tab .hide { padding-left: 4px; }
 #status { color: #adb7c6; font-size: 12px; }
+#image-result { padding: 6px 10px; }
+#image-result label { display: inline-flex; align-items: center; gap: 6px; }
+#image-path { width: min(50vw, 450px); color: inherit; background: #252a35; border: 1px solid #454c5b; padding: 6px; }
 .connection { display: flex; align-items: center; gap: 6px; min-width: 0; }
 #retry[hidden] { display: none; }
 main { position: relative; flex: 1; min-height: 0; }
