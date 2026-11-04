@@ -137,6 +137,20 @@
     bar.insertBefore(displayControls.element, bar.children[1]);
     window.addEventListener('web-terminal-connection', e => { if (e.detail === 'connected') displayControls.apply(); });
     displayControls.apply();
+    const keyboardReturn = bar.querySelector('button[data-key="c"]');
+    keyboardReturn.setAttribute('aria-keyshortcuts', 'Control+Alt+Shift+T');
+    keyboardReturn.title = 'Press Control+Alt+Shift+T in the terminal to focus this toolbar.';
+    function labelTerminalInput() {
+        window.term?.textarea?.setAttribute('aria-label', 'Terminal input. Press Control Alt Shift T to focus toolbar.');
+    }
+    window.addEventListener('web-terminal-connection', e => { if (e.detail === 'connected') labelTerminalInput(); });
+    labelTerminalInput();
+    window.addEventListener('keydown', e => {
+        if (e.code !== 'KeyT' || !e.altKey || !e.shiftKey || !e.ctrlKey || e.metaKey || document.activeElement !== window.term?.textarea) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        keyboardReturn.focus();
+    }, true);
     bar.addEventListener('click', e => {
         const btn = e.target.closest('button[data-key]');
         if (!btn) return;

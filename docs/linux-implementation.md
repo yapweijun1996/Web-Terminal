@@ -21,6 +21,8 @@ The UI lists the existing shared session and its own named sessions. Each new ta
 
 The candidate displays connection state on desktop and narrow screens. When the session list or terminal connection fails, Retry reloads the session list or reconnects the active view to the same session; it does not create a session or submit input. A sign-in message is tentative because a failed connection can have other causes. Connection status does not report background-job health.
 
+The candidate gives the embedded terminal a generic page title so ttyd's normal title assignments do not announce internal target metadata or the launch command. The parent iframe keeps its browser-local view label. This is an accessibility and privacy measure, not an access-control boundary.
+
 ## Security boundary
 
 The UI and ttyd do **not** independently authenticate the browser or verify a Cloudflare Access JWT. The observed deployment places an Access-protected Cloudflare Tunnel in front of the private UI socket and configures cloudflared to require JWT validation for the application audience on the ingress route. The UI checks origin and a per-process request token for session mutations and checks WebSocket origin; these checks are not a replacement for Access authentication. Terminal execution has the full permissions of its OS user, and processes under that same user can access the private socket.

@@ -53,6 +53,8 @@ The experimental **Keys** bar is collapsed by default. Esc, Tab and arrow button
 
 The candidate **Display** controls adjust terminal font size and can request increased text contrast using xterm's `minimumContrastRatio`. Settings last for the current page; the Linux UI reapplies them to a newly active terminal view. A setting may be unavailable with a different embedded client. The contrast option is not proof of complete WCAG conformance, and terminal content with a screen reader remains unverified. See the [xterm option reference](https://xtermjs.org/docs/api/terminal/interfaces/iterminaloptions/).
 
+While the terminal input has focus, `Control+Alt+Shift+T` moves focus to the toolbar without sending the shortcut to the terminal. The input's accessible name announces this shortcut. An isolated Orca/Chromium test exercised keyboard navigation and Retry; it did not verify audio output or other assistive technology.
+
 For the recorded ttyd 1.7.7 Mac bundle, historical fixture evidence found that applying line height before font size triggered a final fit and avoided clipping. This observation is version-specific and must be retested after a change or upgrade.
 
 Consult the [lifecycle matrix](lifecycle-matrix.md) before assuming that a session survives a resize, disconnect, restart, sleep, logout or reboot on a given platform.

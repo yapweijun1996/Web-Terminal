@@ -117,6 +117,12 @@ function proxy(req, res, target, endpoint) {
       up.on('end', () => {
         const shim = `<script>
           (() => {
+            // The embedded ttyd client otherwise publishes its launch command
+            // and tmux title metadata to the browser's accessible page title.
+            document.title = 'Terminal view';
+            Object.defineProperty(document, 'title', {
+              configurable: true, get: () => 'Terminal view', set: () => {},
+            });
             const Native = window.WebSocket;
             window.WebSocket = class extends Native {
               constructor(...args) {
