@@ -105,7 +105,33 @@ function proxy(req, res, target, endpoint) {
       const chunks = []; let size = 0;
       up.on('data', chunk => { size += chunk.length; if (size > 2_000_000) upstream.destroy(); else chunks.push(chunk); });
       up.on('end', () => {
-        const shim = `<script>(()=>{const Native=window.WebSocket;window.WebSocket=class extends Native{constructor(...args){super(...args);for(const [event,state] of [['open','Connected'],['close','Disconnected'],['error','Connection error']])this.addEventListener(event,()=>window.parent.postMessage({type:'terminal-connection',state},window.location.origin));}};})();</script>`;
+        const shim = `<script>
+          (() => {
+            const Native = window.WebSocket;
+            window.WebSocket = class extends Native {
+              constructor(...args) {
+                super(...args);
+                const report = state => {
+                  if (window.term) window.term.options.disableStdin = state !== 'Connected';
+                  window.parent.postMessage({ type: 'terminal-connection', state }, window.location.origin);
+                  if (state === 'Disconnected' || state === 'Connection error') {
+                    setTimeout(() => {
+                      for (const node of document.querySelectorAll('.xterm div')) {
+                        if (node.childNodes.length === 1 && node.firstChild.nodeType === Node.TEXT_NODE && node.textContent === 'Press ⏎ to Reconnect') {
+                          node.textContent = 'Use Retry in the toolbar';
+                        }
+                      }
+                    }, 0);
+                  }
+                };
+                report('Connecting');
+                for (const [event, state] of [['open', 'Connected'], ['close', 'Disconnected'], ['error', 'Connection error']]) {
+                  this.addEventListener(event, () => report(state));
+                }
+              }
+            };
+          })();
+        </script>`;
         const html = Buffer.concat(chunks).toString('utf8').replace('<head>', `<head>${shim}<script src="/clipboard-bridge.js"></script>`);
         const responseHeaders = { ...up.headers, 'cache-control': 'no-store', 'content-length': Buffer.byteLength(html) };
         delete responseHeaders['transfer-encoding']; delete responseHeaders['content-encoding'];

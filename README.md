@@ -4,7 +4,7 @@ An owner-operated browser terminal for accessing a computer through Cloudflare A
 
 ## Repository status
 
-The repository contains a [Linux implementation snapshot](docs/linux-implementation.md) and a disposable integration test. The separate running Linux deployment is not automatically synchronized with this repository; this import does not change or deploy it. The Mac implementation remains separately maintained under `~/.local/share/mba-browser-terminal/` and has not been imported. This repository does not yet provide an installer or a reproducible build for the Mac implementation.
+The repository contains a [Linux implementation snapshot](docs/linux-implementation.md) and a reconstructed Mac development candidate in [client](client/README.md) and `runtime/`. The running Linux and Mac deployments are maintained separately and are not automatically synchronized with this repository. Importing these files did not deploy them; complete behavior parity remains unverified.
 
 On 2026-11-04, the observed Linux environment used Ubuntu 24.04 ARM64, ttyd 1.7.4, tmux 3.4, cloudflared 2026.10.0 and Node.js 22.23.3. The observed Mac environment used ttyd 1.7.7, tmux 3.6a and cloudflared 2025.11.1. These are observations, not repository-pinned dependencies. Windows and WSL remain unverified.
 
@@ -12,6 +12,7 @@ On 2026-11-04, the observed Linux environment used Ubuntu 24.04 ARM64, ttyd 1.7.
 
 - [Task backlog and acceptance criteria](TASK.md)
 - [Architecture and trust boundaries](docs/architecture.md)
+- [Mac source inventory and reconstruction](docs/source-inventory.md)
 - [Linux source inventory and evidence](docs/linux-implementation.md)
 - [Operations and verification](docs/operations.md)
 - [Improvement roadmap and research](docs/improvement-roadmap.md)

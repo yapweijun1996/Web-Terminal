@@ -1,0 +1,45 @@
+#remote-toolbar {
+    height: 56px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: #17212c;
+    color: #eef5fb;
+    font:
+        600 14px system-ui,
+        sans-serif;
+    overflow-x: auto;
+    white-space: nowrap;
+}
+#remote-toolbar button {
+    min-height: 44px;
+    padding: 0 12px;
+    border: 1px solid #71849a;
+    border-radius: 7px;
+    background: #26374a;
+    color: #fff;
+    font: inherit;
+    cursor: pointer;
+}
+#remote-toolbar button:focus-visible {
+    outline: 3px solid #99d1ff;
+    outline-offset: 2px;
+}
+#remote-toolbar .primary {
+    background: #a0dbbf;
+    color: #12241b;
+    border-color: #a0dbbf;
+}
+#connection-status {
+    flex: 0 0 auto;
+    color: #d5e4f0;
+    font-size: 12px;
+}
+#connection-retry[hidden] {
+    display: none;
+}
+#terminal-container {
+    height: calc(100dvh - 56px) !important;
+}

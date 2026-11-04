@@ -1,9 +1,9 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; width: 100%; height: 100%; background: #101218; color: #e8eaf0; font: 14px system-ui, sans-serif; }
 body { display: flex; flex-direction: column; }
-header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; min-height: 46px; border-bottom: 1px solid #30343e; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 10px; min-height: 46px; border-bottom: 1px solid #30343e; }
 header strong { margin-right: 4px; }
-nav { display: flex; gap: 4px; overflow-x: auto; flex: 1; }
+nav { display: flex; gap: 4px; overflow-x: auto; flex: 1; min-width: 0; }
 button { color: inherit; background: #252a35; border: 1px solid #454c5b; border-radius: 6px; padding: 6px 10px; cursor: pointer; white-space: nowrap; }
 button:hover, button:focus-visible { background: #394356; outline: 2px solid #8cbcff; outline-offset: 1px; }
 .tab { display: flex; border-radius: 6px; background: #252a35; }
@@ -14,7 +14,9 @@ button:hover, button:focus-visible { background: #394356; outline: 2px solid #8c
 #image-result { padding: 6px 10px; }
 #image-result label { display: inline-flex; align-items: center; gap: 6px; }
 #image-path { width: min(50vw, 450px); color: inherit; background: #252a35; border: 1px solid #454c5b; padding: 6px; }
+.connection { display: flex; align-items: center; gap: 6px; min-width: 0; }
+#retry[hidden] { display: none; }
 main { position: relative; flex: 1; min-height: 0; }
 iframe { position: absolute; width: 100%; height: 100%; inset: 0; border: 0; visibility: hidden; }
 iframe.active { visibility: visible; }
-@media (max-width: 600px) { header { gap: 4px; padding: 4px; } header strong { display: none; } #status { font-size: 10px; } }
+@media (max-width: 600px) { header { gap: 4px; padding: 4px; } header strong { display: none; } .connection { flex: 1 0 100%; } }
