@@ -84,9 +84,10 @@ Status values: **Open** = not completed; **In progress** = actively being worked
 
 ### WT-012: Assess dependency upgrades
 
-- **Status:** Open
+- **Status:** In progress
 - **Scope:** Compare installed and candidate dependency versions and their configuration and path-handling behavior against vendor documentation before an upgrade.
 - **Acceptance:** Record versions and relevant compatibility differences; test route protection and reconnect in isolation and prepare a verified rollback before any authorized live upgrade.
+- **Evidence (2026-11-04):** See the [dependency assessment](docs/dependency-assessment.md) for Cloudflare's security recommendation, dated vendor sources, offline ingress comparisons, and an isolated Node LTS build and test. Access enforcement and reconnect with the candidate connector and a verified rollback remain untested; no live upgrade has been made.
 
 ## Working order
 
