@@ -47,6 +47,12 @@ An interrupted HTTP response can be recovered for ten minutes while the same upl
 
 ## Scroll and display triage
 
+The Linux and Mac candidates share `linux/ui/touch-scroll.js`. A single-finger vertical drag scrolls through xterm mouse-wheel reporting when tmux or an application requests mouse events; otherwise it scrolls the local xterm buffer. It does not synthesize arrow keys. Taps, long presses, existing selections and multi-touch gestures are left to the browser. Refresh an existing page to load a changed client.
+
+Run `node --test linux/test/*.test.js` and `node --test tests/*.test.js` for regression coverage. After the pinned client build, the opt-in `PLAYWRIGHT_MODULE=/path/to/playwright node tests/browser/touch-scroll.e2e.cjs` creates disposable ttyd/tmux origins and checks touch in both the Linux embedded client and built Mac client, including both scroll directions, mouse-aware `less`, unsubmitted draft and pane preservation. `TOUCH_SCROLL_BASELINE=1` disables the Linux adapter to reproduce the original missing touch scroll. These browser tests run on Linux; they do not establish physical iOS/Android or native macOS behavior.
+
+The Mac runtime's wheel condition nests the binary tmux `||` operator. A three-argument `||` evaluated true even with all three flags zero on tmux 3.4, forwarding the first shell wheel event instead of entering copy mode. Test the first wheel gesture as well as subsequent gestures when changing this binding.
+
 Inspect in order: browser viewport and terminal grid, ttyd/client resize, tmux pane and copy mode, then the foreground application's own alternate-screen and mouse modes. An alternate screen is not proof of mouse capture, and tmux history is not necessarily an application's transcript. Never translate all wheel events into arrow keys: that can alter a command or prompt.
 
 The candidate toolbar reports tmux scrollback or live mode only when it has a current pane identity. Application scroll position remains unknown. **Return to live** asks tmux to leave copy mode in that confirmed pane; it does not send keys to the application or move an application's own transcript. After reconnecting, verify the active pane before using it. A missing or stale pane identity prevents the request.
