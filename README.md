@@ -12,6 +12,7 @@ On 2026-11-04, the observed Linux environment used Ubuntu 24.04 ARM64, ttyd 1.7.
 
 - [Task backlog and acceptance criteria](TASK.md)
 - [Architecture and trust boundaries](docs/architecture.md)
+- [Shared terminal MCP control](docs/shared-terminal-mcp.md)
 - [Mac source inventory and reconstruction](docs/source-inventory.md)
 - [Linux source inventory and evidence](docs/linux-implementation.md)
 - [Operations and verification](docs/operations.md)

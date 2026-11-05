@@ -2,3 +2,6 @@ client/node_modules/
 client/.yarn/cache/
 client/.yarn/install-state.gz
 client/dist/
+
+mcp/node_modules/
+mcp-auth/node_modules/

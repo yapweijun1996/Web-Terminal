@@ -1,0 +1,1 @@
+{"name":"web-terminal-mcp-auth","version":"1.0.0","private":true,"type":"module","scripts":{"test":"node --test *.test.mjs","start":"node server.mjs"},"dependencies":{"jose":"^6.1.3"}}
