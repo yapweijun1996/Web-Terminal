@@ -83,6 +83,7 @@ export function createGateway(config, verifyOwner) {
     reset = Date.now() + 60000;
   const metadata = {
     issuer,
+    authorization_response_iss_parameter_supported: true,
     authorization_endpoint: issuer + "/oauth/authorize",
     token_endpoint: issuer + "/oauth/token",
     registration_endpoint: issuer + "/oauth/register",
@@ -341,6 +342,8 @@ export function createGateway(config, verifyOwner) {
       if (!record || record.csrf !== q.get("csrf")) return fail(res);
       pending.delete(q.get("request"));
       const location = new URL(record.redirect);
+      // RFC 9207 issuer binding enables ChatGPT's stable callback URI.
+      location.searchParams.set("iss", issuer);
       if (record.state !== null)
         location.searchParams.set("state", record.state);
       if (q.get("decision") === "allow") {

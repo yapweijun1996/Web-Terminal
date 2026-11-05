@@ -33,7 +33,7 @@ Official callback sources checked 2026-11-05:
 - [Anthropic](https://support.anthropic.com/en/articles/11503834-building-custom-integrations-via-remote-mcp-servers): `https://claude.ai/api/mcp/auth_callback`.
 - [MCP authorization](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-11-25/basic/authorization.mdx).
 
-Allowlist callbacks exactly; never wildcard. Clients must pass `resource` equal to `MCP_PUBLIC_URL` during authorization and exchange.
+The authorization metadata advertises RFC 9207 issuer identification, and both approval and denial redirects return the exact issuer as `iss`. ChatGPT then uses its stable callback rather than a callback-ID-specific URI. Allowlist callbacks exactly; never wildcard. Clients must pass `resource` equal to `MCP_PUBLIC_URL` during authorization and exchange.
 
 ## Verification
 

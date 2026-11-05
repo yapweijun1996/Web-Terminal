@@ -96,6 +96,12 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     ).status,
     400,
   );
+  const metadata = await publicCall("/.well-known/oauth-authorization-server");
+  assert.equal(
+    JSON.parse(metadata.body).authorization_response_iss_parameter_supported,
+    true,
+  );
+  assert.equal(JSON.parse(metadata.body).issuer, origin);
   const registered = await publicCall(
     "/oauth/register",
     "POST",
@@ -180,6 +186,10 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     hdr,
   );
   assert.equal(decision.status, 302);
+  assert.equal(
+    new URL(decision.headers.location).searchParams.get("iss"),
+    origin,
+  );
   const code = new URL(decision.headers.location).searchParams.get("code");
   assert.equal(
     new URL(decision.headers.location).searchParams.get("state"),
@@ -205,7 +215,7 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     ).status,
     400,
   );
-  const freshCode = async () => {
+  const freshCode = async (decision = "allow") => {
     const fresh = await publicCall("/oauth/authorize?" + query);
     const url = new URL(fresh.headers.location);
     const page = await call(
@@ -238,12 +248,19 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
       new URLSearchParams({
         request: url.searchParams.get("request"),
         csrf,
-        decision: "allow",
+        decision,
       }).toString(),
       hdr,
     );
-    return new URL(allowed.headers.location).searchParams.get("code");
+    const returned = new URL(allowed.headers.location);
+    assert.equal(returned.searchParams.get("iss"), origin);
+    if (decision === "deny") {
+      assert.equal(returned.searchParams.get("error"), "access_denied");
+      assert.equal(returned.searchParams.has("code"), false);
+    }
+    return returned.searchParams.get("code");
   };
+  await freshCode("deny");
   for (const [key, value] of [
     ["code_verifier", "x".repeat(43)],
     ["resource", origin + "/wrong"],
