@@ -151,7 +151,7 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     "test-owner": "yes",
   });
   assert.equal(consent.status, 200);
-  assert.match(consent.body, /Allow terminal control/);
+  assert.match(consent.body, /Share your terminal/);
   const id = new URL(start.headers.location).searchParams.get("request"),
     csrf = /name="csrf" value="([^"]+)"/.exec(consent.body)[1];
   const form = new URLSearchParams({
@@ -341,7 +341,7 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     ).body,
   ).access_token;
   try {
-    Date.now = () => realNow() + 3600001;
+    Date.now = () => realNow() + 2592000001;
     assert.equal(
       (
         await publicCall("/mcp", "POST", "{}", {

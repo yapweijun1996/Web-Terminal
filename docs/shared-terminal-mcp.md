@@ -33,7 +33,11 @@ A dedicated launchd user agent should invoke a private wrapper loading an owner-
 
 SDK reference: https://github.com/modelcontextprotocol/typescript-sdk/tree/v1.x
 
-## Deployment evidence, 2026-11-05
+## Current connection authorization
+
+The consent page now offers owner-selected authorization duration and a protected connected-app management page. Approved client registrations and grants persist across OAuth gateway restarts; revocation remains explicit. See [the authorization contract](../mcp-auth/README.md) for duration, storage, expiry and migration rules, and [UI verification](consent-ui-verification.md) for browser evidence. Upgrading from the initial in-memory release requires connecting the app again once.
+
+## Initial deployment evidence, 2026-11-05
 
 The owner-authorized Mac deployment adds separate MCP and OAuth user services. The existing terminal, upload service and tmux server remain in place. The terminal URL remains `https://terminal.gmb01.xyz/`; the remote MCP connection URL is `https://terminal-mcp.gmb01.xyz/mcp`. Approval returns to the existing Access-protected terminal hostname. Tunnel configuration and original pane process identities were backed up privately before deployment.
 
