@@ -179,7 +179,7 @@ function proxy(req, res, target, endpoint) {
             };
           })();
         </script>`;
-        const html = Buffer.concat(chunks).toString('utf8').replace('<head>', `<head>${shim}<script src="/clipboard-bridge.js"></script>`);
+        const html = Buffer.concat(chunks).toString('utf8').replace('<head>', `<head>${shim}<script src="/clipboard-bridge.js"></script><script src="/touch-scroll.js"></script>`);
         const responseHeaders = { ...up.headers, 'cache-control': 'no-store', 'content-length': Buffer.byteLength(html) };
         delete responseHeaders['transfer-encoding']; delete responseHeaders['content-encoding'];
         res.writeHead(200, responseHeaders); res.end(html);
@@ -197,6 +197,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/') return file(res, 'index.html', 'text/html; charset=utf-8');
     if (req.method === 'GET' && req.url === '/app.js') return file(res, 'app.js', 'text/javascript; charset=utf-8');
     if (req.method === 'GET' && req.url === '/clipboard-bridge.js') return file(res, 'clipboard-bridge.js', 'text/javascript; charset=utf-8');
+    if (req.method === 'GET' && req.url === '/touch-scroll.js') return file(res, 'touch-scroll.js', 'text/javascript; charset=utf-8');
     if (req.method === 'GET' && req.url === '/mobile-keys.js') return file(res, 'mobile-keys.js', 'text/javascript; charset=utf-8');
     if (req.method === 'GET' && req.url === '/mobile-keys.css') return file(res, 'mobile-keys.css', 'text/css; charset=utf-8');
     if (req.method === 'GET' && req.url === '/display-controls.js') return file(res, 'display-controls.js', 'text/javascript; charset=utf-8');
