@@ -320,7 +320,7 @@ export function createGateway(config, verifyOwner) {
         "Content-Security-Policy":
           "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
         "X-Frame-Options": "DENY",
-        "Referrer-Policy": "no-referrer",
+        "Referrer-Policy": "same-origin",
       };
       if (req.method === "GET") {
         if (pageUrl.searchParams.get("view") === "connections") {
@@ -373,9 +373,24 @@ export function createGateway(config, verifyOwner) {
           pageHeaders,
         );
       }
+      const formError = (message) =>
+        send(
+          res,
+          400,
+          renderError({
+            title: "Unable to confirm this request",
+            message,
+            retryUrl: approval.pathname + "?view=connections",
+            retryLabel: "Manage connections",
+          }),
+          pageHeaders,
+        );
+      if (req.method === "POST" && req.headers.origin !== approval.origin)
+        return formError(
+          "Return to your app and connect again. This form could not be verified.",
+        );
       if (
         req.method !== "POST" ||
-        req.headers.origin !== approval.origin ||
         !(req.headers["content-type"] || "").startsWith(
           "application/x-www-form-urlencoded",
         )
@@ -391,7 +406,9 @@ export function createGateway(config, verifyOwner) {
           q.get("action") !== "revoke" ||
           !/^[A-Za-z0-9_-]{43}$/.test(q.get("grantId") || "")
         )
-          return fail(res);
+          return formError(
+            "Refresh connected apps and try again. This request has expired or could not be verified.",
+          );
         management.delete(csrf);
         store.revokeGrant(q.get("grantId"));
         return send(res, 303, "", {
@@ -416,7 +433,9 @@ export function createGateway(config, verifyOwner) {
         record.csrf !== q.get("csrf") ||
         !["allow", "deny"].includes(q.get("decision"))
       )
-        return fail(res);
+        return formError(
+          "Return to your app and connect again. This form has expired or could not be verified.",
+        );
       const duration = q.get("duration") ?? DEFAULT_DURATION;
       if (!DURATIONS.some((option) => option.value === duration))
         return fail(res);

@@ -13,3 +13,11 @@ Real Chrome checks covered widths 390, 768 and 1440 pixels. Document width match
 Ignored evidence is under `artifacts/consent/`: before.png, after-390.png, after-768.png, after-1440.png, long-expanded-390.png, connections-long390.png, connections-pending390.png, connections-empty390.png, expired390.png and metrics.json. Parent review also captured desktop-parent.png and mobile-parent.png.
 
 This verifies local SSR layout and form presentation. It does not prove native mobile hardware, screen-reader audio, browser zoom behavior, or live ChatGPT/Claude authorization acceptance. Live authenticated owner consent was not exercised by the fixture.
+
+## Native form regression boundary
+
+The production consent form previously failed despite passing visual and hand-built HTTP checks: `Referrer-Policy: no-referrer` made Chrome send `Origin: null` for native form POSTs, which the gateway correctly rejected. The fix uses `same-origin`; exact Origin matching, Access JWT verification and CSRF checks remain required. The rendering-only fixture does not establish this security-header contract.
+
+Run `PLAYWRIGHT_MODULE=/absolute/path/to/playwright node mcp-auth/browser/native-consent.e2e.cjs`. This opt-in test uses the real gateway and server-rendered forms over isolated loopback HTTPS, with test-only owner verification and a disposable TLS certificate. Certificate-error tolerance exists only in the disposable test browser and HTTPS request helper; production certificate validation is unchanged. The regression first reproduces the old policy's null-Origin rejection, then clicks native Deny, Allow and Revoke buttons with the current production headers. It does not use fetch, spoof Origin or issue live grants.
+
+For future OAuth changes, require this native form test in addition to unit tests and screenshots. A working consent GET or a synthetic POST that supplies Origin is insufficient evidence of a working browser authorization flow. This project-specific prevention rule belongs here rather than in a new global skill.

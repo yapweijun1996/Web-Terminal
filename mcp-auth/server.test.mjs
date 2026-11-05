@@ -177,6 +177,18 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     ).status,
     400,
   );
+  assert.equal(consent.headers["referrer-policy"], "same-origin");
+  const nullOrigin = await call(
+    owner,
+    "terminal.example.test",
+    "/__terminal_mcp/authorize",
+    "POST",
+    form,
+    { ...hdr, origin: "null" },
+  );
+  assert.equal(nullOrigin.status, 400);
+  assert.match(nullOrigin.headers["content-type"], /text\/html/);
+  assert.match(nullOrigin.body, /Unable to confirm this request/);
   const decision = await call(
     owner,
     "terminal.example.test",
@@ -240,6 +252,8 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
       hdr,
     );
     assert.equal(wrong.status, 400);
+    assert.match(wrong.headers["content-type"], /text\/html/);
+    assert.match(wrong.body, /Unable to confirm this request/);
     const allowed = await call(
       owner,
       "terminal.example.test",

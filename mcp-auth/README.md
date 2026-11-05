@@ -50,3 +50,15 @@ The authorization metadata advertises RFC 9207 issuer identification, and both a
 ## Verification
 
 Run `npm test`. Disposable fixtures cover OAuth consent and negative boundaries, signed Access JWT verification, and bearer proxy isolation. They do not touch live terminals. Production acceptance additionally requires a real user sign-in and connector approval, then same-window listing and harmless input in a disposable visible terminal. Fixture success does not prove actual ChatGPT/Claude UI behavior or production identity policy. Revocation rejects subsequent requests; already forwarded input cannot be undone.
+
+## Native browser form regression
+
+Consent and connected-app pages use `Referrer-Policy: same-origin`. This keeps cross-origin referrers private while allowing native same-origin POST forms to send their real Origin. `no-referrer` makes native Chrome form navigation send the literal `Origin: null`, which the strict origin check correctly rejects. Do not accept null or missing origins to work around a page-policy error. Access JWT, CSRF and exact Origin checks still apply. Authenticated form verification failures show reconnect guidance; unauthorized requests remain denied.
+
+Run the opt-in native Chrome regression with an existing Playwright installation:
+
+```sh
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright node mcp-auth/browser/native-consent.e2e.cjs
+```
+
+It creates a disposable HTTPS loopback fixture with a self-signed certificate (ignored only in its isolated browser context), synthetic owner verification and no live grants or terminal access. Native Allow, Deny and Revoke button clicks use the actual gateway-rendered forms and headers, with no fetch calls or rewritten Origin headers. The old no-referrer policy is reproduced as null-Origin rejection; current same-origin pages must send the real matching Origin and succeed. Node, OpenSSL and installed Google Chrome are required; override `PLAYWRIGHT_BROWSER_CHANNEL` for another installed Playwright channel. Fixture credentials and files are removed afterward. HTTP tests also prove literal null and foreign origins remain rejected and CSRF failures cannot issue a grant. This fixture does not prove a real user's Cloudflare identity or ChatGPT callback completion.
