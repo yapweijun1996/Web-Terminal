@@ -23,12 +23,17 @@ test("shared workspace input, selection and stale targets", async () => {
     tmux("new-session", "-d", "-t", "workspace", "-s", "view-test");
     const ctl = new TerminalController({ server, session: "workspace" }),
       [t] = await ctl.list();
-    await ctl.type(t, "VISIBLE_AGENT_TEXT");
+    await ctl.type(t, "  VISIBLE_AGENT_TEXT");
     await wait(100);
     assert.match(
       tmux("capture-pane", "-p", "-t", "view-test:"),
       /VISIBLE_AGENT_TEXT/,
     );
+    for (const limit of [1, 20]) {
+      const text = await ctl.read(t, limit);
+      assert.match(text, /^  VISIBLE_AGENT_TEXT/);
+      assert.ok(text.split("\n").length <= limit);
+    }
     await assert.rejects(ctl.type(t, "bad\nsubmit"));
     await assert.rejects(ctl.type({ ...t, serverPid: "1" }, "bad"));
     await assert.rejects(ctl.key(t, "C-z"));

@@ -121,18 +121,18 @@ export class TerminalController {
   async read(t, lines = 100) {
     if (!Number.isInteger(lines) || lines < 1 || lines > 500)
       throw Error("Read limit is 1–500");
-    // Capture from the screen bottom so the total output has a fixed line bound.
-    return this.guarded(
+    // Fresh panes have unused empty screen rows below the cursor. Omit only
+    // those rows before bounding the meaningful tail; keep content whitespace.
+    const text = await this.guarded(
       t,
       `capture-pane -p -t ${t.paneId} -S -${lines}`,
       true,
-    ).then((text) =>
-      text
-        .split("\n")
-        .slice(-lines - 1)
-        .join("\n"),
     );
+    const rows = text.split("\n");
+    while (rows.length && rows[rows.length - 1] === "") rows.pop();
+    return rows.slice(-lines).join("\n");
   }
+
   async type(t, text) {
     if (
       typeof text !== "string" ||

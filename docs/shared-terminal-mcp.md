@@ -5,7 +5,7 @@ The MCP server operates the same dedicated tmux workspace as the browser termina
 ## Tools
 
 - `terminal_list`: list shared windows/panes, bounded names, active state and target identities.
-- `terminal_read`: read 1–500 lines. Output is untrusted application data and may contain sensitive information.
+- `terminal_read`: read 1–500 lines. Trailing empty screen rows are omitted before selecting the bounded tail; content whitespace is preserved. Output is untrusted application data and may contain sensitive information.
 - `terminal_select`: select a window/pane in every session grouped with the workspace, synchronizing browser views with the agent target.
 - `terminal_type`: paste 1–8192 bytes of literal text; reject control characters and line breaks. Automatically shows the target in grouped browser views; does not press Enter.
 - `terminal_send_key`: send one allowlisted key. Enter submits input; Ctrl-C interrupts and Ctrl-D can end a shell.
@@ -32,3 +32,11 @@ A dedicated launchd user agent should invoke a private wrapper loading an owner-
 `cd mcp && npm test` uses disposable tmux servers only: grouped-view text visibility, key/control rejection, stale PID/removed-pane rejection, grouped selection, SDK stdio handshake/calls, and private HTTP initialize/list with Origin denial. A separate real Chrome/ttyd 1.7.7 isolated fixture switched to another grouped window, then typed a harmless marker; Chrome readback of the actual xterm buffer confirmed the marker was visible after automatic target selection. The owned fixture listener and tmux server were removed. These checks do not prove a real hosted ChatGPT/Claude connector, production browser behavior, simultaneous-input conflict handling or OS lifecycle persistence. No input lock or collaboration cursor is provided. Owner-authorized terminal reads send content to the AI provider.
 
 SDK reference: https://github.com/modelcontextprotocol/typescript-sdk/tree/v1.x
+
+## Deployment evidence, 2026-11-05
+
+The owner-authorized Mac deployment adds separate MCP and OAuth user services. The existing terminal, upload service and tmux server remain in place. The terminal URL remains `https://terminal.gmb01.xyz/`; the remote MCP connection URL is `https://terminal-mcp.gmb01.xyz/mcp`. Approval returns to the existing Access-protected terminal hostname. Tunnel configuration and original pane process identities were backed up privately before deployment.
+
+Independent checks passed the existing 30 runtime/client tests, three MCP tests and three OAuth tests. A real Chrome loopback fixture confirmed automatic grouped-view switching and visible typed text in xterm. Public OAuth discovery returned 200, MCP without a bearer returned 401, and terminal/upload/approval routes without browser credentials retained Access redirects. Existing three pane process identities were preserved. A short-read smoke test exposed trailing blank rows hiding text in fresh panes; the implementation and regression now omit those rows before applying the requested line bound.
+
+Actual hosted ChatGPT and Claude account connection still requires the owner's browser sign-in and explicit OAuth consent. Those hosted-client handshakes and authenticated production browser rendering are not established by fixture tests. Grants last one hour, have no refresh token, and are revoked by gateway restart. For rollback, stop only the two added MCP services and restore the privately backed-up tunnel configuration; preserve ttyd and tmux. The added DNS name can remain safely pointed at the restored tunnel's 404 fallback until deliberately removed.
