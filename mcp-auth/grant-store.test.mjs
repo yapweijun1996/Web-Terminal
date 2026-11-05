@@ -230,3 +230,31 @@ test("anonymous registration churn cannot evict owner-approved clients or block 
     store.close();
   }
 });
+
+test("unissued pending grants expire with the shared authorization-code deadline", async (t) => {
+  const { AUTH_CODE_TTL_MS } = await import("./grant-policy.mjs");
+  const config = fixture(t),
+    store = new GrantStore(config);
+  try {
+    const { id } = grant(store),
+      second = grant(store).id,
+      token = random();
+    store.bindToken(second, token);
+    const clock = Date.now,
+      issued = store.list().find((value) => value.grantId === id);
+    try {
+      Date.now = () => issued.grantedAt + AUTH_CODE_TTL_MS;
+      store.prune();
+      assert.equal(
+        store.list().some((value) => value.grantId === id),
+        false,
+      );
+      assert.equal(store.validToken(token), true);
+      assert.throws(() => store.bindToken(id, random()), /unavailable/);
+    } finally {
+      Date.now = clock;
+    }
+  } finally {
+    store.close();
+  }
+});

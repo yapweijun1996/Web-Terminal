@@ -10,7 +10,11 @@ import {
   renderConnections,
   renderError,
 } from "./consent-ui.mjs";
-import { GRANT_DURATIONS, DEFAULT_GRANT_SECONDS } from "./grant-policy.mjs";
+import {
+  GRANT_DURATIONS,
+  DEFAULT_GRANT_SECONDS,
+  AUTH_CODE_TTL_MS,
+} from "./grant-policy.mjs";
 export const DURATIONS = GRANT_DURATIONS;
 export const DEFAULT_DURATION = String(DEFAULT_GRANT_SECONDS);
 const random = () => crypto.randomBytes(32).toString("base64url");
@@ -38,6 +42,18 @@ function validHttps(value) {
   if (u.protocol !== "https:" || u.username || u.password || u.hash)
     throw Error("HTTPS URL required");
   return u;
+}
+// CSP ignores query strings; application redirect checks still match the full registered URL.
+// Encode path punctuation that could otherwise become a CSP directive delimiter.
+export function callbackFormSource(redirect) {
+  const url = validHttps(redirect);
+  return (
+    url.origin +
+    url.pathname.replace(
+      /[;'"\s]/g,
+      (char) => "%" + char.charCodeAt(0).toString(16).toUpperCase(),
+    )
+  );
 }
 export function createAccessVerifier(config, keys) {
   const accessIssuer = validHttps(config.accessIssuer).origin;
@@ -80,10 +96,11 @@ export function createGateway(config, verifyOwner) {
   });
   const pending = new Map(),
     codes = new Map(),
-    management = new Map();
+    management = new Map(),
+    handled = new Map();
   const prune = () => {
     store.prune();
-    for (const map of [pending, codes, management])
+    for (const map of [pending, codes, management, handled])
       for (const [k, v] of map) if (v.expires <= Date.now()) map.delete(k);
   };
   let budget = 0,
@@ -370,7 +387,15 @@ export function createGateway(config, verifyOwner) {
             defaultDuration: DEFAULT_DURATION,
             manageUrl: approval.pathname + "?view=connections",
           }),
-          pageHeaders,
+          {
+            ...pageHeaders,
+            "Content-Security-Policy": pageHeaders[
+              "Content-Security-Policy"
+            ].replace(
+              "form-action 'self'",
+              "form-action 'self' " + callbackFormSource(record.redirect),
+            ),
+          },
         );
       }
       const formError = (message) =>
@@ -415,6 +440,20 @@ export function createGateway(config, verifyOwner) {
           Location: approval.pathname + "?view=connections&revoked=1",
         });
       }
+      const completed = handled.get(q.get("request"));
+      if (completed && completed.csrf === q.get("csrf"))
+        return send(
+          res,
+          409,
+          renderError({
+            title: "Connection request already handled",
+            message:
+              "This request has already been sent back to your app. Return to ChatGPT or Claude. If it did not connect, start a new connection request; allowing again will not resend the previous authorization.",
+            retryUrl: approval.pathname + "?view=connections",
+            retryLabel: "Manage connections",
+          }),
+          pageHeaders,
+        );
       const record = pending.get(q.get("request"));
       if (!record)
         return send(
@@ -460,10 +499,15 @@ export function createGateway(config, verifyOwner) {
           ...record,
           grantId,
           grantExpires,
-          expires: Date.now() + 60000,
+          expires: grantedAt + AUTH_CODE_TTL_MS,
         });
         location.searchParams.set("code", code);
       } else location.searchParams.set("error", "access_denied");
+      if (handled.size >= 100) handled.delete(handled.keys().next().value);
+      handled.set(q.get("request"), {
+        csrf: record.csrf,
+        expires: Date.now() + 300000,
+      });
       return send(res, 302, "", { Location: location.href });
     } catch {
       return fail(res, 401);

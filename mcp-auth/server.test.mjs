@@ -202,6 +202,30 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     new URL(decision.headers.location).searchParams.get("iss"),
     origin,
   );
+  assert.match(
+    consent.headers["content-security-policy"],
+    /form-action 'self' https:\/\/client\.example\.test\/callback;/,
+  );
+  const replayed = await call(
+    owner,
+    "terminal.example.test",
+    "/__terminal_mcp/authorize",
+    "POST",
+    form,
+    hdr,
+  );
+  assert.equal(replayed.status, 409);
+  assert.match(replayed.body, /already handled/i);
+  assert.equal(replayed.headers.location, undefined);
+  const invalidReplay = await call(
+    owner,
+    "terminal.example.test",
+    "/__terminal_mcp/authorize",
+    "POST",
+    form,
+    { ...hdr, origin: "null" },
+  );
+  assert.equal(invalidReplay.status, 400);
   const code = new URL(decision.headers.location).searchParams.get("code");
   assert.equal(
     new URL(decision.headers.location).searchParams.get("state"),
@@ -585,4 +609,21 @@ test("OAuth gateway reaches actual MCP SDK and the same disposable tmux view", a
     tmux("kill-server");
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("callback CSP sources cannot inject directives and omit queries", async () => {
+  const { callbackFormSource } = await import("./server.mjs");
+  assert.equal(
+    callbackFormSource("https://client.example.test/callback?fixed=1"),
+    "https://client.example.test/callback",
+  );
+  assert.equal(
+    callbackFormSource(
+      "https://client.example.test/cb;script-src'unsafe-inline'",
+    ),
+    "https://client.example.test/cb%3Bscript-src%27unsafe-inline%27",
+  );
+  assert.throws(() =>
+    callbackFormSource("http://client.example.test/callback"),
+  );
 });

@@ -296,6 +296,16 @@ test("duration boundaries, durable gateway restart and protected owner revocatio
     { owner: "yes" },
   );
   assert.equal(management.status, 200);
+  assert.match(
+    management.headers["content-security-policy"],
+    /form-action 'self';/,
+  );
+  assert.equal(
+    management.headers["content-security-policy"].includes(
+      "client.example.test",
+    ),
+    false,
+  );
   assert.equal(management.body.includes(token.access_token), false);
   const csrf = hidden(management.body, "csrf"),
     grantId = hidden(management.body, "grantId");

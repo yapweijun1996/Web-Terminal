@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { MAX_GRANT_SECONDS } from "./grant-policy.mjs";
+import { MAX_GRANT_SECONDS, AUTH_CODE_TTL_MS } from "./grant-policy.mjs";
 const label = "web-terminal-mcp-store/v1";
 const hex = /^[a-f0-9]{64}$/;
 function privatePath(file, directory = false) {
@@ -285,7 +285,11 @@ export class GrantStore {
         changed = true;
       }
     for (const [id, grant] of this.grants)
-      if (grant.expires <= Date.now()) {
+      if (
+        grant.expires <= Date.now() ||
+        (grant.tokenDigest === null &&
+          grant.grantedAt + AUTH_CODE_TTL_MS <= Date.now())
+      ) {
         this.grants.delete(id);
         changed = true;
       }
@@ -303,7 +307,7 @@ export class GrantStore {
     return id;
   }
   bindToken(id, token) {
-    this.ready();
+    this.prune();
     const grant = this.grants.get(id);
     if (!grant || grant.expires <= Date.now() || grant.tokenDigest !== null)
       throw Error("Grant unavailable");
