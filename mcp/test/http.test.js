@@ -70,7 +70,7 @@ test("private HTTP MCP initialize and tools list; browser Origin denied", async 
       params: {},
     });
     assert.equal(list.status, 200);
-    assert.equal(JSON.parse(list.text).result.tools.length, 6);
+    assert.equal(JSON.parse(list.text).result.tools.length, 11);
     assert.equal(
       (
         await request(

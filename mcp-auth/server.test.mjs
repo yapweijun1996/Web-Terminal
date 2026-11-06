@@ -453,7 +453,7 @@ test("signed Access JWT pins issuer, audience, signature, expiry and optional ow
   }
 });
 
-test("OAuth gateway reaches actual MCP SDK and the same disposable tmux view", async () => {
+for (const mode of ["normal", "emergency", "unavailable"]) test(`OAuth gateway reaches actual MCP SDK (${mode})`, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "terminal-e2e-"));
   fs.chmodSync(dir, 0o700);
   const pub = path.join(dir, "public.sock"),
@@ -462,15 +462,20 @@ test("OAuth gateway reaches actual MCP SDK and the same disposable tmux view", a
   const tmuxName = "auth-e2e-" + crypto.randomUUID();
   const tmux = (...args) =>
     execFileSync("tmux", ["-L", tmuxName, ...args], { encoding: "utf8" });
-  tmux("new-session", "-d", "-s", "workspace", "/bin/cat");
-  tmux("new-session", "-d", "-t", "workspace", "-s", "view-fixture");
+  if (mode === "normal") {
+    tmux("new-session", "-d", "-s", "workspace", "/bin/cat");
+    tmux("new-session", "-d", "-t", "workspace", "-s", "view-fixture");
+  }
   const child = spawn(
     process.execPath,
     [fileURLToPath(new URL("../mcp/server.js", import.meta.url))],
     {
       env: {
         ...process.env,
+        NODE_OPTIONS: `--import=${fileURLToPath(new URL("../mcp/test/fake-statfs.js", import.meta.url))}`,
+        FIXTURE_STATFS: mode,
         WEB_TERMINAL_MCP_SOCKET: up,
+        WEB_TERMINAL_JOB_DIR: path.join(dir, "jobs"),
         WEB_TERMINAL_TMUX_SERVER: tmuxName,
         WEB_TERMINAL_MCP_SESSION: "workspace",
       },
@@ -582,7 +587,48 @@ test("OAuth gateway reaches actual MCP SDK and the same disposable tmux view", a
       ).serverInfo.name,
       "web-terminal",
     );
-    assert.equal((await rpc("tools/list", {})).tools.length, 6);
+    const tools = (await rpc("tools/list", {})).tools;
+    assert.equal(tools.length, 11);
+    assert.ok(tools.some((tool) => tool.name === "terminal_exec"));
+    if (mode !== "normal") {
+      const marker = path.join(dir, "never-created");
+      for (const name of ["terminal_exec", "terminal_job_start"]) {
+        const args = { executable: process.execPath, args: ["-e", "require('fs').writeFileSync(process.argv[1], 'bad')", marker], cwd: dir };
+        if (name === "terminal_job_start") args.storage_class = "light";
+        const response = await rpc("tools/call", { name, arguments: args });
+        const result = JSON.parse(response.content[0].text);
+        assert.equal(result.error.code, "STORAGE_ADMISSION_DENIED");
+        assert.equal(result.error.reason, mode === "emergency" ? "EMERGENCY" : "UNAVAILABLE");
+        assert.equal(fs.existsSync(marker), false);
+      }
+      return;
+    }
+    const startedJob = await rpc("tools/call", { name: "terminal_job_start", arguments: { executable: process.execPath, args: ["-e", "process.stdout.write('oauth-job')"], cwd: dir } });
+    const jobId = JSON.parse(startedJob.content[0].text).job_id;
+    let jobStatus;
+    for (let i = 0; i < 100; i++) {
+      jobStatus = JSON.parse((await rpc("tools/call", { name: "terminal_job_status", arguments: { job_id: jobId } })).content[0].text);
+      if (!["starting", "running"].includes(jobStatus.status)) break;
+      await new Promise(r => setTimeout(r, 20));
+    }
+    assert.equal(jobStatus.status, "success");
+    const jobLogs = JSON.parse((await rpc("tools/call", { name: "terminal_job_logs", arguments: { job_id: jobId } })).content[0].text);
+    assert.equal(Buffer.from(jobLogs.data_base64, "base64").toString(), "oauth-job");
+    const output = "literal $HOME; $(echo untouched)";
+    const executed = await rpc("tools/call", {
+      name: "terminal_exec",
+      arguments: {
+        executable: process.execPath,
+        args: ["-e", "process.stdout.write(process.argv[1])", output],
+        cwd: dir,
+      },
+    });
+    assert.equal(executed.isError, undefined);
+    assert.equal(executed.content[0].type, "text");
+    const execution = JSON.parse(executed.content[0].text);
+    assert.equal(execution.status, "success");
+    assert.equal(execution.exit_code, 0);
+    assert.equal(execution.stdout, output);
     const listed = await rpc("tools/call", {
       name: "terminal_list",
       arguments: {},
@@ -592,9 +638,9 @@ test("OAuth gateway reaches actual MCP SDK and the same disposable tmux view", a
       name: "terminal_type",
       arguments: { target, text: "OAUTH_SAME_VIEW" },
     });
-    assert.equal(typed.isError, undefined);
+    assert.equal(typed.isError, true);
     await new Promise((r) => setTimeout(r, 100));
-    assert.match(
+    assert.doesNotMatch(
       tmux("capture-pane", "-p", "-t", "view-fixture:"),
       /OAUTH_SAME_VIEW/,
     );
@@ -606,7 +652,7 @@ test("OAuth gateway reaches actual MCP SDK and the same disposable tmux view", a
         (s) => new Promise((r) => s.close(r)),
       ),
     );
-    tmux("kill-server");
+    if (mode === "normal") tmux("kill-server");
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
