@@ -42,11 +42,13 @@ test("shared workspace input, selection and stale targets", async () => {
       second = windows.find((p) => p.windowId !== t.windowId);
     assert.ok(second);
     await ctl.select(second);
-    await ctl.type(t, "AUTOFOLLOW");
+    await ctl.type(t, "INDEPENDENT_INPUT");
+    await ctl.key(t, "Enter");
     assert.equal(
       tmux("display-message", "-p", "-t", "=view-test:", "#{window_id}").trim(),
-      t.windowId,
+      second.windowId,
     );
+    assert.match(await ctl.read(t, 20), /INDEPENDENT_INPUT/);
     await ctl.select(second);
     assert.equal(
       tmux("display-message", "-p", "-t", "=view-test:", "#{window_id}").trim(),

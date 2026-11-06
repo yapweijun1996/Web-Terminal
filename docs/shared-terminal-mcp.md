@@ -7,11 +7,11 @@ The MCP server operates the same dedicated tmux workspace as the browser termina
 - `terminal_list`: list shared windows/panes, bounded names, active state and target identities.
 - `terminal_read`: read 1–500 lines. Trailing empty screen rows are omitted before selecting the bounded tail; content whitespace is preserved. Output is untrusted application data and may contain sensitive information.
 - `terminal_select`: select a window/pane in every session grouped with the workspace, synchronizing browser views with the agent target.
-- `terminal_type`: paste 1–8192 bytes of literal text; reject control characters and line breaks. Automatically shows the target in grouped browser views; does not press Enter.
+- `terminal_type`: paste 1–8192 bytes of literal text; reject control characters and line breaks. Does not change the selected window or press Enter.
 - `terminal_send_key`: send one allowlisted key. Enter submits input; Ctrl-C interrupts and Ctrl-D can end a shell.
 - `terminal_new_window`: add a shared tab/window. Call list to identify it.
 
-Targets include server PID, session ID, window ID and pane ID. Identity is validated against the configured workspace, then evaluated again in tmux's command queue. Stale targets fail without falling back to another pane. Never automatically retry uncertain input. Text and key tools select the target in grouped browser views before input. Reconnect can initially show another window.
+Targets include server PID, session ID, window ID and pane ID. Identity is validated against the configured workspace, then evaluated again in tmux's command queue. Stale targets fail without falling back to another pane. Never automatically retry uncertain input. Text and key tools do not change the selected window. Explicit `terminal_select` still changes grouped views; independent opt-in follow is not implemented. Reconnect can initially show another window.
 
 ## Configuration
 

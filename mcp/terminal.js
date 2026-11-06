@@ -143,7 +143,6 @@ export class TerminalController {
       throw Error("Text must be 1–8192 bytes without controls; use send_key");
     const buffer = `web-terminal-mcp-${randomUUID()}`;
     try {
-      await this.select(t);
       await this.run(["set-buffer", "-b", buffer, "--", text]);
       await this.guarded(t, `paste-buffer -p -d -b ${buffer} -t ${t.paneId}`);
       return { sent: true, submitted: false };
@@ -167,7 +166,6 @@ export class TerminalController {
       ].includes(key)
     )
       throw Error("Unsupported key");
-    await this.select(t);
     await this.guarded(t, `send-keys -t ${t.paneId} ${key}`);
     return { sent: true, submitted: key === "Enter" };
   }
