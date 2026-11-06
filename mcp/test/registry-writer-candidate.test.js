@@ -15,6 +15,21 @@ test("bounded closed protocol rejects delete, evidence and malformed frames", ()
   for (const input of [Buffer.alloc(MAX_REQUEST_BYTES + 1), Buffer.from([255]), Buffer.from("{"), encode({ ...request, type: "delete" }), encode({ ...request, stdout: "done" }), encode({ ...request, version: 2 }), encode({ ...request, job_id: 42 })]) assert.throws(() => parseRequest(input));
   assert.deepEqual(parseRequest(encode(request)), request);
 });
+test('duplicate decoded keys and malformed frames are rejected without confusing quoted strings', () => {
+  const valid = JSON.stringify(request);
+  for (const key of ['version', 'type', 'job_id']) {
+    const duplicate = valid.replace('{', `{${JSON.stringify(key)}:${JSON.stringify(request[key])},`);
+    assert.throws(() => parseRequest(Buffer.from(duplicate)), { code:'INVALID_JSON' });
+  }
+  assert.throws(() => parseRequest(Buffer.from(valid.replace('"version":1', '"vers\\u0069on":1,"version":1'))), { code:'INVALID_JSON' });
+  for (const value of ['{}{}', valid + 'x', valid.replace('"outcome"', '"outcome",'), valid.replace('"outcome"', '{}'), '\ufeff' + valid]) assert.throws(() => parseRequest(Buffer.from(value)));
+  assert.throws(() => parseRequest(encode({ ...request, type:'a "job_id": value' })), { code:'INVALID_REQUEST' });
+});
+test('simulation rejects malformed event shape, sequence, nonce and UUID', () => {
+  const state = { job_id:job, instance_id:instance, sequence:0, phase:'running', nonces:[] };
+  const event = { job_id:job, instance_id:instance, sequence:1, nonce:'b'.repeat(64), phase:'terminal' };
+  for (const bad of [{ ...event, extra:true }, { ...event, sequence:'1' }, { ...event, sequence:0 }, { ...event, nonce:'x'.repeat(64) }, { ...event, job_id:'-'.repeat(36) }]) assert.throws(() => simulateTransition(state, bad), { code:'INVALID_EVENT' });
+});
 test("simulation rejects replay, stale nonce, conflicting supervisor and unknown-to-terminal transition", () => {
   const initial = { job_id: job, instance_id: instance, sequence: 0, phase: "running", nonces: [] };
   const event = { job_id: job, instance_id: instance, sequence: 1, nonce: "b".repeat(64), phase: "unknown" };

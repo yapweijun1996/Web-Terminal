@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 
 const hash = x => crypto.createHash('sha256').update(x).digest('hex');
 const hex = /^[a-f0-9]{64}$/;
-const id = /^[a-f0-9-]{36}$/;
+const id = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const MAX = 128;
 const minted = new WeakSet();
 const fail = code => { const e = new Error(code); e.code = code; throw e; };
@@ -23,13 +23,22 @@ export function createSyntheticLifecycleSource() {
 }
 function checkedFile(file) {
   const s = fs.lstatSync(file);
-  if (!s.isFile() || s.isSymbolicLink() || (s.mode & 0o777) !== 0o600 || s.nlink !== 1 || s.size > 65536) fail('UNSAFE_FILE');
+  if (!s.isFile() || s.isSymbolicLink() || s.uid !== process.getuid() || (s.mode & 0o7777) !== 0o600 || s.nlink !== 1 || s.size > 65536) fail('UNSAFE_FILE');
   return s;
 }
 function read(file) {
-  checkedFile(file);
+  const initial = checkedFile(file);
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-  try { const s = fs.fstatSync(fd); if (!s.isFile() || (s.mode & 0o777) !== 0o600 || s.nlink !== 1 || s.size > 65536) fail('UNSAFE_FILE'); return fs.readFileSync(fd, 'utf8'); } finally { fs.closeSync(fd); }
+  try {
+    const check = s => {
+      if (!s.isFile() || s.uid !== process.getuid() || (s.mode & 0o7777) !== 0o600 || s.nlink !== 1 || s.size > 65536 || s.dev !== initial.dev || s.ino !== initial.ino || s.size !== initial.size || s.mtimeMs !== initial.mtimeMs || s.ctimeMs !== initial.ctimeMs) fail('UNSAFE_FILE');
+    };
+    check(fs.fstatSync(fd));
+    const buffer = Buffer.alloc(initial.size + 1); let offset = 0;
+    while (offset < buffer.length) { const n = fs.readSync(fd, buffer, offset, buffer.length - offset, offset); if (!n) break; offset += n; }
+    check(fs.fstatSync(fd)); if (offset !== initial.size) fail('UNSAFE_FILE');
+    try { return new TextDecoder('utf-8', { fatal:true, ignoreBOM:true }).decode(buffer.subarray(0, offset)); } catch { fail('CORRUPT_STATE'); }
+  } finally { fs.closeSync(fd); }
 }
 function validate(s) {
   if (!s || Object.keys(s).sort().join(',') !== 'checksum,events,instance,job,version' || s.version !== 1 || typeof s.job !== 'string' || !id.test(s.job) || typeof s.instance !== 'string' || !id.test(s.instance) || !Array.isArray(s.events) || s.events.length > MAX || typeof s.checksum !== 'string') fail('CORRUPT_STATE');
@@ -58,7 +67,7 @@ function atomic(dir, name, data, fault = () => {}) {
 function directory(dir) {
   const real = fs.realpathSync(dir), tmp = fs.realpathSync(os.tmpdir());
   const s = fs.lstatSync(dir);
-  if (real !== path.resolve(dir) || path.dirname(real) !== tmp || !path.basename(real).startsWith('registry-writer-sim-') || !s.isDirectory() || s.isSymbolicLink() || (s.mode & 0o777) !== 0o700) fail('UNSAFE_DIRECTORY');
+  if (real !== path.resolve(dir) || path.dirname(real) !== tmp || !path.basename(real).startsWith('registry-writer-sim-') || !s.isDirectory() || s.isSymbolicLink() || s.uid !== process.getuid() || (s.mode & 0o7777) !== 0o700) fail('UNSAFE_DIRECTORY');
   return real;
 }
 export function createOfflineJournal(dir, { job, instance } = {}) {
