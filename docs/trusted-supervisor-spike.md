@@ -1,0 +1,28 @@
+# Trusted supervisor security spike
+
+Status: PARTIAL / NOT VERIFIED. This is an isolated candidate, not a release or production-safe implementation. Release is blocked on the P0 items below.
+
+## Run and evidence
+
+From the repository root on a default macOS host with Node.js and a C compiler:
+
+```sh
+node --test tests/spikes/trusted-supervisor-*.test.js
+```
+
+The test compiles the native executable into a fresh private `/tmp` directory, uses one-shot AF_UNIX sockets, and removes fixtures. It creates no IP listener or tmux session. On 2026-11-06, MBA-Terminal `terminal_exec` returned exit 0: 7 tests passed, 0 failed; the native `getpeereid` reported `uid=501 gid=20`, matching the actual test process. This is same-UID peer-credential plumbing only. The Codex sandbox run returned exit 1: 2 passed, 5 failed (including the parent test) because bind/listen returned `EPERM`; native helper returned 70, `ERR_LISTEN: Operation not permitted`. It did not establish a security failure on the default host. The mismatch case uses a different configured allowlist UID, not a second OS principal. A denied connection may reset before the client receives the error; the test verifies the server exit and log.
+
+Helper exit codes: 0 accepted `echo`; 64 invalid invocation; 65 invalid directory; 70 socket/listen/accept failure; 71 kernel credential failure; 72 UID policy denial; 73 invalid frame; 77 unsupported platform. The only accepted frame is exactly `echo\n`; no identity field exists in the protocol. The UID allowlist is a server launch argument in this fixture, not a caller message. The parent must be owned by the server UID and mode 0700, the endpoint owned by that UID and mode 0600. The fixture is deliberately one-shot; it has no production robustness, bounded read timeout, endpoint cleanup protocol, or defense against a hostile same-UID process racing filesystem checks. Unsupported non-macOS builds take the explicit exit-77 path; this branch has not been executed on Windows or Linux in this run.
+
+## Lifecycle contract and evidence limits
+
+`supervisor.js` is an offline fail-closed model, not a durable supervisor. Its versioned journal envelope records fixture server, session, window, pane, PID, process-start identity, generation, journal version, and SHA-256 integrity. The digest detects accidental modification but is unkeyed and is not proof against a writer. Recovery always returns `QUARANTINED` and `authorized: false`, including a matching record. Invalid, missing, old, tampered or symlinked journals, unknown expected identity, stale generation/version and reused PID with changed start identity cannot authorize restore. No stale lock is removed. The actual SIGKILL test leaves another fixture process alive and checks the lock remains; the recorded start identity and target names are fixture values, not kernel-derived process identity or real tmux reconciliation. It does not prove recovery of a real watcher or a safe automatic restoration path. There is no positive restore path in this spike.
+
+## P0 release blockers and proposed boundary
+
+1. **NOT_VERIFIED: separate OS principal.** Same UID processes are not isolated. Arrange an independently authorized second existing account in a future controlled environment; do not create accounts as part of this spike. Prove the intended allowed and denied accounts against actual kernel credentials, and prove untrusted same-UID processes cannot impersonate the supervisor. Until then no untrusted caller is allowed by this design.
+2. The trusted supervisor and its durable state must be owned and writable only by a distinct trusted principal. Design a private directory, endpoint ownership and narrowly scoped ACL/group access allowing the intended client to connect without granting state write access; verify traversal, endpoint access, ownership, inherited ACLs, symlink behavior and effective permissions with both principals. The 0700/0600 fixture deliberately grants no second-principal access. Test actual macOS semantics before choosing an ACL design.
+3. Implement trusted journal creation and persistence with protected directory/file descriptors, atomic replacement, fsync and rollback-resistant trusted generation/version storage. Establish a kernel-backed PID plus process-start identity and independently verify server/session/window/pane targets and watcher liveness. Any unknown, ambiguous or mismatched identity stays quarantined. Resolve filesystem and process TOCTOU races with host-enforced isolation and reviewed descriptor-based operations; a same-UID hash or PID check cannot prevent ABA.
+4. Specify and test a complete crash-reconciliation protocol, stale lock fencing, concurrent supervisors, crash points and authorized manual recovery. Never delete a stale lock simply because its PID appears absent. A real target and surviving watchers must be independently reconciled before any restore.
+
+Proposed future lifecycle: `STARTING -> RUNNING -> QUARANTINED` on crash, uncertain ownership or restart. Only independently verified trusted process and target evidence, a protected monotonic fence and an explicit reviewed recovery protocol may allow a later transition. This candidate does not implement that transition. Provisioning/service management and ACL changes require a separate authorized change, threat review, and two-principal tests. Rollback for any future deployment should first stop new access, preserve journal and process evidence, quarantine active targets, and revert the service and ACL changes through a reviewed plan without killing or adopting unknown processes. No production integration, user creation, service installation or rollback was performed here.
