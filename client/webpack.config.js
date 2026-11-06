@@ -45,6 +45,7 @@ const baseConfig = {
                 { from: './connection-lifecycle.js', to: '.' },
                 { from: './toolbar.css', to: '.' },
                 { from: './toolbar.js', to: '.' },
+                { from: './window-tabs.js', to: '.' },
                 { from: './upload.css', to: '.' },
                 { from: './upload.js', to: '.' },
                 { from: '../../linux/ui/mobile-keys.js', to: '.' },
