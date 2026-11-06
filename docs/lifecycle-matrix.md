@@ -14,12 +14,23 @@ Reviewed 2026-11-04. These are observations of the named disposable fixtures, no
 
 ## Unknown or unavailable cases
 
+On 2026-11-06, the separate [native Windows adapter](../windows/README.md) passed
+real PowerShell integration with Node.js 25.2.1, node-pty 1.1.0 and xterm 6.0.0.
+An ephemeral loopback HTTP/WebSocket fixture resized the headless terminal to
+90 columns by 26 rows, disconnected during `Start-Sleep`, reattached to the same
+PowerShell PID, observed completion, and retained a draft until explicit Enter.
+Ending another fixture shell terminated its PowerShell without replacing the
+original shell. These are API/native-process checks. The owner later supplied
+a Chrome screenshot and confirmed successful public terminal operation, covering
+basic authenticated browser input/output separately. Full browser lifecycle,
+live revocation, host sleep, logout and reboot remain unverified.
+
 | Case | Status |
 | --- | --- |
 | Physical phone, tablet, touch keyboard, trackpad and assistive input | Unknown. Emulation and synthetic wheel events do not establish real device behavior. |
 | Host sleep and wake, OS-user logout, reboot, power loss and tmux-server termination | Unknown for each platform. A UI-process restart is a different event. Do not interrupt a live job to infer these results. |
 | Browser or OS restart, expired or revoked Access session, and an already-open WebSocket | Unknown for the candidate and actual authorization boundary; see WT-001. |
-| Windows, WSL and Xubuntu | Unknown. No equivalent physical or virtual environment was available for the listed checks. |
+| Windows browser/host lifecycle, WSL and Xubuntu | Unknown. Native Windows API/process fixture evidence is scoped above; it does not establish browser or operating-system lifecycle behavior. WSL and Xubuntu were not deployed or tested. |
 | Other browser versions, scale factors, fonts and long-running connections | Unknown. An earlier Linux 1280×800 scale-1 emulation appeared undersized in both the baseline and candidate; the cause and physical-device behavior were not established. |
 | Current live deployments | Unknown unless separately rechecked. The repository candidates are not automatically deployed. |
 
