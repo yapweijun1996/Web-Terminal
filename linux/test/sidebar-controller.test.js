@@ -317,11 +317,12 @@ test('narrow menu preserves action identity, keyboard activation and focus acros
   assert.equal(nodes.retry.parentElement, nodes.connection);
 });
 
-test('initial narrow layout includes retry and view controls in menu keyboard navigation', () => {
+test('initial narrow layout keeps retry beside the status and puts view controls in menu keyboard navigation', () => {
   const { document, nodes } = controllerFixture();
   nodes['menu-summary'].dispatch('keydown', { key: 'ArrowDown' });
   assert.equal(document.activeElement, nodes['new-session']);
-  for (const id of ['reconnect', 'retry', 'keys-toggle']) {
+  assert.equal(nodes.retry.parentElement, nodes.connection, 'a dropped connection must show Retry without opening the menu');
+  for (const id of ['reconnect', 'keys-toggle']) {
     document.activeElement.dispatch('keydown', { key: 'ArrowDown' });
     assert.equal(document.activeElement, nodes[id]);
   }

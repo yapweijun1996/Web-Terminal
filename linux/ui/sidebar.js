@@ -75,18 +75,16 @@ const TerminalSidebar = (() => {
       const sessionActions = document.getElementById('session-actions');
       const viewActions = document.getElementById('view-actions');
       const latest = document.getElementById('latest');
-      const retry = document.getElementById('retry');
       if (!panel || !sessionActions || !viewActions || !latest) return;
       const focused = document.activeElement;
-      const movingFocus = sessionActions.contains(focused) || viewActions.contains(focused) || focused === retry;
+      const movingFocus = sessionActions.contains(focused) || viewActions.contains(focused);
       if (narrow?.matches) {
         panel.prepend(sessionActions, viewActions);
-        if (retry) sessionActions.append(retry);
+        // Retry stays beside the status text: on a dropped connection it must be visible without opening the menu.
         if (movingFocus) menu.open = true;
       } else {
         menu.before(sessionActions);
         latest.before(viewActions);
-        if (retry) document.querySelector('.connection')?.append(retry);
       }
       if (movingFocus) focused.focus();
     }
