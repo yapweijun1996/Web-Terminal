@@ -16,6 +16,8 @@ const input = {
 };
 test("default30days, explicit maximum and distinct allow/deny actions", () => {
   const html = renderConsent(input);
+  assert.deepEqual([...html.matchAll(/<option value="(\d+)"/g)].map((match) => match[1]),
+    ["3600", "86400", "604800", "2592000", "31536000"]);
   assert.match(html, /<label for="duration">Allow access for<\/label>/);
   assert.match(
     html,

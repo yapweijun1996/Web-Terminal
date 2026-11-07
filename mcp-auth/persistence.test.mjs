@@ -168,6 +168,8 @@ test("duration boundaries, durable gateway restart and protected owner revocatio
     "-1",
     "31536001",
     "63072000",
+    "7776000",
+    "15552000",
     "1e6",
     "2592000.0",
     "",
