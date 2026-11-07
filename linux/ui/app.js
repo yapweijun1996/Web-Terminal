@@ -69,7 +69,7 @@ const mobileKeys = window.createMobileKeys({
     return target ? [target.session, target.sessionId, target.pane, target.serverPid].join('|') : null;
   },
 });
-latest.before(mobileKeys.toggle);
+document.querySelector('#view-actions').append(mobileKeys.toggle);
 views.before(mobileKeys.panel);
 const displayControls = window.createTerminalDisplayControls({
   getTerminal: () => active && connections.get(active) === 'Connected' ? frames.get(active)?.contentWindow?.term : null,
@@ -78,7 +78,7 @@ const displayControls = window.createTerminalDisplayControls({
     if (win) win.dispatchEvent(new win.Event('resize'));
   },
 });
-latest.before(displayControls.element);
+document.querySelector('#view-actions').append(displayControls.element);
 function label(name) { return names[name] || (name === 'shared' ? 'Existing terminal' : `Terminal ${name.slice(4)}`); }
 function saveHidden() { try { localStorage.setItem(storageKey, JSON.stringify([...hidden])); } catch {} }
 function saveNames() { try { localStorage.setItem(namesKey, JSON.stringify(names)); return true; } catch { return false; } }
@@ -258,7 +258,7 @@ function removeView(name) {
     active = null; detailView.textContent = 'Unknown'; showStatus('No visible terminals', null, 'Unknown');
     renameTarget = null; renameForm.hidden = true; renameError.textContent = '';
     renderTabs(); updateControls(); sidebar.closeDrawer(false);
-    if (!restore.hidden) document.querySelector('#toolbar-menu').open = true;
+    if (!restore.hidden || sidebar.isNarrow()) document.querySelector('#toolbar-menu').open = true;
     (restore.hidden ? newSession : restore).focus();
   }
 }
