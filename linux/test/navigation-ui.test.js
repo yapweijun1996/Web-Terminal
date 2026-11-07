@@ -41,12 +41,18 @@ function fixture({ rejectStorage = false, narrow = false } = {}) {
   document = { activeElement: null, querySelector: selector => selector === 'header' ? header : nodes[selector.slice(1)], createElement: tag => new Element(tag) };
   const store = {}, calls = [], timers = new Map(), documentListeners = {}, windowListeners = {};
   let sessionList = ['shared', 'web-aaaaaaaaaaaa', 'web-bbbbbbbbbbbb'], timerId = 0;
-  let pollStatus = 200, command = 'bash', drawerOpen = narrow;
+  let pollStatus = 200, command = 'bash', drawerOpen = narrow, splitStatus = 200;
+  let identity = { sessionId: '$1', serverPid: '123' }, identityWait = null;
   const localStorage = { getItem: key => store[key] ?? null, setItem: (key, value) => { if (rejectStorage) throw Error('Storage denied'); store[key] = value; } };
   const fetch = async (url, options = {}) => {
     calls.push({ url, method: options.method || 'GET' });
     if (url === '/api/sessions' && !options.method && pollStatus !== 200) return { ok: false, status: pollStatus };
-    return { ok: true, json: async () => url.endsWith('/identity') ? ({ sessionId: '$1', serverPid: '123' }) : ({
+    if (url.endsWith('/identity')) {
+      if (identityWait) await identityWait;
+      return { ok: true, json: async () => identity };
+    }
+    if (url.includes('/split/')) return { ok: splitStatus === 200, status: splitStatus };
+    return { ok: true, json: async () => ({
       sessions: [...sessionList], details: Object.fromEntries(sessionList.map(name => [name, { command }])), token: 'fixture-token',
     }) };
   };
@@ -73,6 +79,10 @@ function fixture({ rejectStorage = false, narrow = false } = {}) {
     setSessions: list => { sessionList = list; },
     setPollStatus: value => { pollStatus = value; },
     setCommand: value => { command = value; },
+    setIdentity: value => { identity = value; },
+    setSplitStatus: value => { splitStatus = value; },
+    delayIdentity: () => { let resolve; identityWait = new Promise(done => { resolve = done; }); return resolve; },
+    message: (frame, data) => windowListeners.message({ origin: 'http://fixture.test', source: frame.contentWindow, data }),
     connect: frame => windowListeners.message({ origin: 'http://fixture.test', source: frame.contentWindow, data: { type: 'terminal-connection', state: 'Connected' } }),
     drawerOpen: () => drawerOpen,
     search: value => { nodes['session-search'].value = value; sidebarOptions.onSearch(); },
@@ -283,4 +293,76 @@ test('dialog cancellation returns to a visible drawer control when its opener be
   f.nodes['close-cancel'].click();
   assert.equal(f.document.activeElement, f.nodes['sidebar-toggle']);
   assert.equal(f.calls.some(call => call.method === 'POST'), false);
+});
+
+test('splits require a connected active session with valid identity metadata', async () => {
+  const f = fixture(); await flush();
+  const frame = f.nodes.views.children[0];
+  const buttons = [f.nodes['split-right'], f.nodes['split-down']];
+  const disabled = expected => {
+    for (const button of buttons) {
+      assert.equal(button.disabled, expected);
+      if (expected) assert.match(button.title, /known session identity/);
+    }
+  };
+  disabled(true);
+  f.connect(frame);
+  disabled(true);
+  for (const target of [
+    { session: 'shared', sessionId: 'bad', serverPid: '123' },
+    { session: 'shared', sessionId: '$1', serverPid: 'bad' },
+    { session: 'web-aaaaaaaaaaaa', sessionId: '$1', serverPid: '123' },
+    { session: 'shared', sessionId: '$1', serverPid: '123' },
+  ]) {
+    frame.contentWindow.webTerminalTarget = target;
+    f.message(frame, { type: 'terminal-scroll', mode: '' });
+    disabled(target.session !== 'shared' || target.sessionId !== '$1' || target.serverPid !== '123');
+  }
+  f.message(frame, { type: 'terminal-connection', state: 'Disconnected' });
+  disabled(true);
+  assert.equal(f.calls.some(call => call.method === 'POST'), false);
+});
+
+test('split conflicts are announced without replacing the frame; successful splits refocus it', async () => {
+  const f = fixture(); await flush();
+  const frame = f.nodes.views.children[0];
+  let focused = 0;
+  frame.contentWindow.term = { focus() { focused++; } };
+  frame.contentWindow.webTerminalTarget = { session: 'shared', sessionId: '$1', serverPid: '123' };
+  f.connect(frame);
+  f.setSplitStatus(409);
+  f.nodes['split-right'].click(); await flush();
+  assert.equal(f.nodes.status.textContent, 'Split unavailable: session changed or pane limit reached');
+  assert.equal(focused, 0);
+  assert.equal(f.nodes.views.children[0], frame);
+  assert.equal(f.nodes['split-right'].disabled, false);
+  f.setSplitStatus(200);
+  f.nodes['split-down'].click();
+  f.nodes['split-right'].click(); // Both controls remain disabled while the action is pending.
+  await flush();
+  assert.equal(focused, 1);
+  assert.equal(f.nodes.views.children[0], frame);
+  assert.equal(f.nodes.views.children.length, 1);
+  assert.equal(f.nodes.status.textContent, 'Connected');
+  assert.deepEqual(f.calls.filter(call => call.method === 'POST').map(call => call.url), [
+    '/api/sessions/shared/split/horizontal', '/api/sessions/shared/split/vertical',
+  ]);
+});
+
+test('split identity refresh rejects a replacement session and a delayed action after switching views', async () => {
+  const f = fixture(); await flush();
+  const frame = f.nodes.views.children[0];
+  frame.contentWindow.webTerminalTarget = { session: 'shared', sessionId: '$1', serverPid: '123' };
+  f.connect(frame);
+  f.setIdentity({ sessionId: '$2', serverPid: '123' });
+  f.nodes['split-right'].click(); await flush();
+  assert.equal(f.nodes.status.textContent, 'Split unavailable: session changed or pane limit reached');
+  assert.equal(f.calls.some(call => call.method === 'POST'), false);
+  f.setIdentity({ sessionId: '$1', serverPid: '123' });
+  const release = f.delayIdentity();
+  f.nodes['split-down'].click();
+  rows(f.nodes)[1].children[0].click();
+  release(); await flush();
+  assert.equal(f.calls.some(call => call.method === 'POST'), false);
+  assert.equal(f.nodes['split-down'].disabled, true, 'the new view has no connected identity');
 });

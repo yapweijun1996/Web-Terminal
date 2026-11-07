@@ -25,7 +25,7 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-fixture-'));
   const socket = path.join(directory, 'ui.sock');
   const tmuxSocket = `wt-test-${process.pid}-${Date.now()}`;
-  const tmux = (...args) => execFileSync('tmux', ['-f', '/dev/null', '-L', tmuxSocket, ...args], { encoding: 'utf8' }).trim();
+  const tmux = (...args) => execFileSync('tmux', ['-f', '/dev/null', '-L', tmuxSocket, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
   let server;
   const start = () => {
     server = spawn(process.execPath, [path.join(__dirname, '../ui/server.js')], {
@@ -137,8 +137,10 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     assert.ok(bound.target, 'a valid pane in the requested session is captured');
     const boundUpload = JSON.parse((await request('POST', '/api/images', { ...imageHeaders, 'x-image-receipt': bound.ticket }, image)).body);
     const shellCommand = tmux('display-message', '-p', '-t', targetInfo[1], '#{pane_current_command}');
-    const otherPane = tmux('split-window', '-h', '-d', '-P', '-F', '#{pane_id}', '-t', 'shared:', 'sleep 60');
-    tmux('select-pane', '-t', otherPane);
+    assert.deepEqual(await request('POST', '/api/sessions/shared/split/horizontal', targetHeaders), { status: 200, body: '{"ok":true}' });
+    const otherPane = tmux('display-message', '-p', '-t', 'shared:', '#{pane_id}');
+    assert.notEqual(otherPane, targetInfo[1], 'the split API activates the new pane');
+    tmux('send-keys', '-t', otherPane, 'sleep 60', 'Enter');
     const sharedCommand = async () => JSON.parse((await request('GET', '/api/sessions')).body).details.shared.command;
     let activeCommand = await until(sharedCommand, command => command === 'sleep');
     assert.equal(activeCommand, 'sleep', 'session details follow the active pane foreground command without arguments');
@@ -263,6 +265,178 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     assert.ok(!remainingList.sessions.includes(name));
     assert.equal(Object.hasOwn(remainingList.details, name), false, 'closed sessions leave no stale command details');
     assert.ok(remainingList.sessions.includes('shared'), 'another session is preserved');
+  } finally {
+    if (server && server.exitCode === null) {
+      server.kill('SIGTERM');
+      await new Promise(resolve => server.once('exit', resolve));
+    }
+    try { tmux('kill-server'); } catch {}
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('split API binds identity and pane limits to the active target window', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-split-'));
+  const socket = path.join(directory, 'ui.sock');
+  const tmuxSocket = `wt-split-${process.pid}-${Date.now()}`;
+  const tmux = (...args) => execFileSync('tmux', ['-f', '/dev/null', '-L', tmuxSocket, ...args], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+  let server;
+  const request = (method, url, headers = {}, body) => new Promise((resolve, reject) => {
+    const req = http.request({ socketPath: socket, method, path: url, headers: { host: 'fixture.test', ...headers } }, res => {
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
+  const name = 'web-123456abcdef';
+  const route = `/api/sessions/${name}/split`;
+  const panes = session => tmux('list-panes', '-s', '-t', `=${session}`, '-F', '#{window_id}|#{pane_id}|#{pane_active}');
+  const active = () => {
+    const values = tmux('display-message', '-p', '-t', `=${name}:`,
+      '#{window_id}|#{pane_id}|#{window_panes}|#{pane_current_path}|#{pane_left}|#{pane_top}|#{pane_width}|#{pane_height}').split('|');
+    return { window: values[0], pane: values[1], count: Number(values[2]), cwd: values[3],
+      left: Number(values[4]), top: Number(values[5]), width: Number(values[6]), height: Number(values[7]) };
+  };
+  try {
+    // Quotes and tmux-looking punctuation must remain cwd data, never command syntax.
+    const cwd = path.join(directory, 'cwd \' " ; #[split]');
+    fs.mkdirSync(cwd, { mode: 0o700 });
+    tmux('new-session', '-d', '-s', 'shared', '-x', '160', '-y', '50');
+    tmux('new-session', '-d', '-s', name, '-x', '160', '-y', '50');
+    const inactiveWindow = tmux('display-message', '-p', '-t', `=${name}:`, '#{window_id}');
+    const activeWindow = tmux('new-window', '-P', '-F', '#{window_id}', '-t', `=${name}:`, '-c', cwd);
+    tmux('select-window', '-t', activeWindow);
+    tmux('set-option', '-t', name, 'default-command', 'sleep 60');
+    const unchangedOther = panes('shared');
+    server = spawn(process.execPath, [path.join(__dirname, '../ui/server.js')], {
+      env: { ...process.env, TERMINAL_RUNTIME: directory, TERMINAL_TMUX_SOCKET: tmuxSocket,
+        TERMINAL_TEST_HTTP: '1', TERMINAL_UPLOAD_DIR: path.join(directory, 'uploads') },
+      stdio: 'ignore',
+    });
+    await until(() => {
+      assert.equal(server.exitCode, null, 'split fixture server remains running');
+      return fs.existsSync(socket);
+    }, Boolean);
+    assert.ok(fs.existsSync(socket), 'split fixture socket appears');
+    const listing = await request('GET', '/api/sessions');
+    assert.equal(listing.status, 200);
+    const identityResponse = await request('GET', `/api/sessions/${name}/identity`);
+    assert.equal(identityResponse.status, 200);
+    const identity = JSON.parse(identityResponse.body);
+    const sharedIdentity = JSON.parse((await request('GET', '/api/sessions/shared/identity')).body);
+    const headers = { origin: 'http://fixture.test', 'content-type': 'application/json',
+      'x-terminal-request': JSON.parse(listing.body).token,
+      'x-terminal-session-id': identity.sessionId, 'x-terminal-server-pid': identity.serverPid };
+    const unchanged = () => {
+      assert.equal(panes('shared'), unchangedOther, 'no pane in another session changes');
+      assert.equal(tmux('display-message', '-p', '-t', inactiveWindow, '#{window_panes}'), '1',
+        'the target session inactive window is not split');
+    };
+    const rejected = async (changedHeaders, status, error, body, url = `${route}/horizontal`, method = 'POST') => {
+      const before = panes(name);
+      const response = await request(method, url, changedHeaders, body);
+      assert.deepEqual(response, { status, body: JSON.stringify({ error }) },
+        'rejections return only the generic JSON error, never tmux output');
+      assert.equal(panes(name), before, 'rejected requests cannot change any target panes');
+      unchanged();
+    };
+    for (const changed of [
+      { origin: 'http://other.test' }, { 'x-terminal-request': 'invalid' },
+      { 'content-type': 'text/plain' }, { 'content-type': 'application/json; charset=utf-8' },
+    ]) await rejected({ ...headers, ...changed }, 403, 'Forbidden');
+    for (const missing of ['origin', 'x-terminal-request', 'content-type']) {
+      const changed = { ...headers };
+      delete changed[missing];
+      await rejected(changed, 403, 'Forbidden');
+    }
+    await rejected({ ...headers, 'content-length': '2' }, 400, 'Unexpected body', '{}');
+    await rejected({ ...headers, 'transfer-encoding': 'chunked' }, 400, 'Unexpected body');
+    for (const changed of [
+      { 'x-terminal-session-id': 'invalid' }, { 'x-terminal-session-id': '$1; split-window' },
+      { 'x-terminal-server-pid': 'invalid' }, { 'x-terminal-server-pid': '-1' },
+    ]) await rejected({ ...headers, ...changed }, 409, 'Session changed');
+    for (const missing of ['x-terminal-session-id', 'x-terminal-server-pid']) {
+      const changed = { ...headers };
+      delete changed[missing];
+      await rejected(changed, 409, 'Session changed');
+    }
+    await rejected({ ...headers, 'x-terminal-session-id': '$999999999' }, 409, 'Session changed or unavailable');
+    await rejected({ ...headers, 'x-terminal-session-id': sharedIdentity.sessionId }, 409, 'Session changed or unavailable');
+    await rejected({ ...headers, 'x-terminal-server-pid': String(Number(identity.serverPid) + 1) }, 409, 'Session changed or unavailable');
+    for (const url of [`${route}/diagonal`, `${route}/horizontal/`, `${route}/horizontal?extra=1`,
+      '/api/sessions/invalid/split/horizontal']) {
+      await rejected(headers, 404, 'Not found', undefined, url);
+    }
+    await rejected(headers, 404, 'Not found', undefined, `${route}/horizontal`, 'GET');
+
+    const split = async orientation => {
+      const before = active();
+      assert.deepEqual(await request('POST', `${route}/${orientation}`, headers), { status: 200, body: '{"ok":true}' },
+        'successful splits return only generic JSON');
+      const after = active();
+      assert.equal(after.count, before.count + 1);
+      assert.equal(after.window, activeWindow, 'the current window is split, not the session first window');
+      assert.notEqual(after.pane, before.pane, 'the new pane is active');
+      assert.equal(after.cwd, before.cwd, 'the new pane inherits the old active pane cwd');
+      assert.equal(after.cwd, cwd, 'cwd punctuation survives tmux command parsing');
+      const old = tmux('display-message', '-p', '-t', before.pane,
+        '#{pane_left}|#{pane_top}|#{pane_width}|#{pane_height}').split('|').map(Number);
+      if (orientation === 'horizontal') {
+        assert.equal(after.left, old[0] + old[2] + 1, 'horizontal creates a pane to the right');
+        assert.equal(after.top, old[1]);
+        assert.equal(after.height, old[3]);
+      } else {
+        assert.equal(after.top, old[1] + old[3] + 1, 'vertical creates a pane below');
+        assert.equal(after.left, old[0]);
+        assert.equal(after.width, old[2]);
+      }
+      unchanged();
+    };
+    const beforeSplitMetadata = JSON.parse((await request('GET', '/api/sessions')).body);
+    assert.notEqual(beforeSplitMetadata.details[name].command, 'sleep', 'prime the cache with the old active shell command');
+    await split('horizontal');
+    assert.equal(await until(() => tmux('display-message', '-p', '-t', `=${name}:`, '#{pane_current_command}'),
+      command => command === 'sleep'), 'sleep');
+    const metadata = JSON.parse((await request('GET', '/api/sessions')).body);
+    assert.deepEqual(metadata.details[name], { command: 'sleep' },
+      'splitting invalidates cached metadata and reports the new foreground executable without arguments');
+    await split('vertical');
+    const beforeRace = active();
+    const racing = await Promise.all(['horizontal', 'vertical'].map(orientation => request('POST', `${route}/${orientation}`, headers)));
+    assert.deepEqual(racing.map(result => result.status).sort(), [200, 409],
+      'two requests at three panes cannot both pass the limit');
+    assert.deepEqual(racing.find(result => result.status === 200), { status: 200, body: '{"ok":true}' });
+    assert.deepEqual(racing.find(result => result.status === 409), { status: 409, body: '{"error":"Pane limit reached"}' });
+    assert.equal(active().count, 4);
+    assert.notEqual(active().pane, beforeRace.pane);
+    assert.equal(active().cwd, beforeRace.cwd);
+    unchanged();
+    await rejected(headers, 409, 'Pane limit reached');
+    await rejected(headers, 409, 'Pane limit reached', undefined, `${route}/vertical`);
+    await rejected({ ...headers, 'x-terminal-server-pid': String(Number(identity.serverPid) + 1) },
+      409, 'Session changed or unavailable', undefined, `${route}/vertical`);
+    assert.deepEqual(await request('POST', `/api/sessions/${name}/close`, headers), { status: 200, body: '{"ok":true}' });
+    const remaining = JSON.parse((await request('GET', '/api/sessions')).body);
+    assert.deepEqual(remaining.sessions, ['shared'], 'closing a split session removes all its windows and panes');
+    assert.equal(Object.hasOwn(remaining.details, name), false);
+    assert.equal(panes('shared'), unchangedOther);
+
+    tmux('new-session', '-d', '-s', name, '-c', cwd);
+    const replacementBefore = panes(name);
+    assert.deepEqual(await request('POST', `${route}/horizontal`, headers),
+      { status: 409, body: '{"error":"Session changed or unavailable"}' },
+      'an old identity cannot split a replacement with the same name');
+    assert.equal(panes(name), replacementBefore);
+    const replacement = JSON.parse((await request('GET', `/api/sessions/${name}/identity`)).body);
+    assert.notEqual(replacement.sessionId, identity.sessionId);
+    assert.deepEqual(await request('POST', `/api/sessions/${name}/close`, { ...headers,
+      'x-terminal-session-id': replacement.sessionId, 'x-terminal-server-pid': replacement.serverPid }),
+    { status: 200, body: '{"ok":true}' });
+    assert.equal(panes('shared'), unchangedOther);
   } finally {
     if (server && server.exitCode === null) {
       server.kill('SIGTERM');
