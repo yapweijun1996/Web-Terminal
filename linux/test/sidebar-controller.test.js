@@ -121,6 +121,8 @@ function controllerFixture({ narrow = true } = {}) {
   add('summary', 'menu-summary', menu);
   const panel = add('div', 'toolbar-menu-panel', menu);
   add('button', 'rename-tab', panel);
+  add('button', 'split-right', panel);
+  add('button', 'split-down', panel);
   add('select', 'theme', panel); add('input', 'menu-input', panel); add('textarea', 'menu-textarea', panel);
   const viewActions = add('div', 'view-actions', main);
   add('button', 'keys-toggle', viewActions);
@@ -329,4 +331,23 @@ test('initial narrow layout keeps retry beside the status and puts view controls
   nodes['keys-toggle'].dispatch('keydown', { key: 'Escape' });
   assert.equal(document.activeElement, nodes['menu-summary']);
   assert.equal(nodes['toolbar-menu'].open, false);
+});
+
+test('toolbar keyboard navigation includes split actions and skips them when unavailable', () => {
+  for (const narrow of [false, true]) {
+    const { document, nodes } = controllerFixture({ narrow });
+    nodes['toolbar-menu'].open = true;
+    nodes['rename-tab'].focus();
+    nodes['rename-tab'].dispatch('keydown', { key: 'ArrowDown' });
+    assert.equal(document.activeElement, nodes['split-right']);
+    nodes['split-right'].dispatch('keydown', { key: 'ArrowDown' });
+    assert.equal(document.activeElement, nodes['split-down']);
+    nodes['split-down'].dispatch('keydown', { key: 'ArrowUp' });
+    assert.equal(document.activeElement, nodes['split-right']);
+    nodes['split-right'].disabled = true;
+    nodes['split-down'].disabled = true;
+    nodes['rename-tab'].focus();
+    nodes['rename-tab'].dispatch('keydown', { key: 'ArrowDown' });
+    assert.equal(document.activeElement, nodes.theme);
+  }
 });

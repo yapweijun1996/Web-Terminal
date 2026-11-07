@@ -14,6 +14,8 @@ const currentName = document.querySelector('#current-name');
 const currentSecondary = document.querySelector('#current-secondary');
 const searchResults = document.querySelector('#search-results');
 const renameTab = document.querySelector('#rename-tab');
+const splitRight = document.querySelector('#split-right');
+const splitDown = document.querySelector('#split-down');
 renameTab.setAttribute('aria-keyshortcuts', 'Control+Alt+Shift+T');
 renameTab.title = 'Press Control+Alt+Shift+T in the terminal to focus this toolbar.';
 const renameForm = document.querySelector('#rename-form');
@@ -40,6 +42,7 @@ let copyGestureAt = 0, pendingCopy = null;
 let retryMode = null, loading = false, sessionReady = false, creating = false, returning = false;
 let renameTarget = null;
 let closeSequence = 0;
+let splitting = false;
 const frames = new Map();
 const connections = new Map();
 let sessionDetails = {};
@@ -82,12 +85,21 @@ document.querySelector('#view-actions').append(displayControls.element);
 function label(name) { return names[name] || (name === 'shared' ? 'Existing terminal' : `Terminal ${name.slice(4)}`); }
 function saveHidden() { try { localStorage.setItem(storageKey, JSON.stringify([...hidden])); } catch {} }
 function saveNames() { try { localStorage.setItem(namesKey, JSON.stringify(names)); return true; } catch { return false; } }
+function splitTarget() {
+  const target = active && connections.get(active) === 'Connected' ? frames.get(active)?.contentWindow?.webTerminalTarget : null;
+  return target?.session === active && /^\$\d+$/.test(target.sessionId) && /^\d+$/.test(target.serverPid) ? target : null;
+}
 function updateControls() {
   newTab.disabled = !sessionReady || creating;
   newSession.disabled = newTab.disabled;
   reconnect.disabled = loading || (!active && retryMode !== 'load');
   latest.disabled = !sessionReady || !active || returning;
   renameTab.disabled = !sessionReady || !active;
+  const splitReason = splitting ? 'Split in progress' : !sessionReady || !splitTarget() ? 'Connect a terminal with a known session identity to split' : '';
+  for (const button of [splitRight, splitDown]) {
+    button.disabled = Boolean(splitReason);
+    button.title = splitReason;
+  }
   currentName.textContent = active ? label(active) : 'No session';
   const foreground = foregroundStatus(active);
   currentSecondary.textContent = foregroundText(foreground);
@@ -532,6 +544,36 @@ restore.addEventListener('click', event => {
   hidden.clear(); saveHidden(); renderTabs();
   if (!active && sessions.length) activate(sessions[0], event.detail === 0);
 });
+async function splitSession(direction) {
+  const target = splitTarget();
+  if (!sessionReady || splitting || !target) return;
+  const name = active, iframe = frames.get(name);
+  const sessionId = target.sessionId, serverPid = target.serverPid;
+  splitting = true; updateControls(); sidebar.closeMenu();
+  const unavailable = () => { if (active === name) showStatus('Split unavailable: session changed or pane limit reached'); };
+  try {
+    const response = await fetch(`/api/sessions/${name}/identity`, { cache: 'no-store', redirect: 'manual' });
+    if (!response.ok) { unavailable(); return; }
+    const identity = await response.json();
+    // Never split a replacement session or send a delayed action to another view.
+    if (identity.sessionId !== sessionId || identity.serverPid !== serverPid) { unavailable(); return; }
+    if (active !== name || frames.get(name) !== iframe || splitTarget()?.sessionId !== sessionId || splitTarget()?.serverPid !== serverPid) return;
+    const result = await fetch(`/api/sessions/${name}/split/${direction}`, { method: 'POST', redirect: 'manual', headers: {
+      'Content-Type': 'application/json', 'X-Terminal-Request': token,
+      'X-Terminal-Session-Id': identity.sessionId, 'X-Terminal-Server-Pid': identity.serverPid,
+    } });
+    if (result.status === 409) { unavailable(); return; }
+    if (!result.ok) throw Error('Split unavailable');
+    if (active === name && frames.get(name) === iframe && connections.get(name) === 'Connected') {
+      showConnection(name);
+      iframe.contentWindow?.term?.focus();
+    }
+  } catch {
+    if (active === name) showStatus('Split unavailable: check connection or sign in');
+  } finally { splitting = false; updateControls(); }
+}
+splitRight.addEventListener('click', () => splitSession('horizontal'));
+splitDown.addEventListener('click', () => splitSession('vertical'));
 latest.addEventListener('click', async () => {
   if (!sessionReady || !active || returning) return;
   const name = active, iframe = frames.get(name);
@@ -564,6 +606,7 @@ window.addEventListener('message', event => {
       } else if (event.data?.type === 'terminal-scroll' && (event.data.mode === null || (typeof event.data.mode === 'string' && /^[a-z0-9-]{0,64}$/.test(event.data.mode)))) {
         scrollModes.set(name, event.data.mode);
         if (name === active) mobileKeys.resetIfTargetChanged();
+        if (name === active) updateControls();
         if (name === active) showScroll(name);
       } else if (event.data?.type === 'terminal-clipboard' && name === active && typeof event.data.text === 'string' && event.data.text.length > 0 && event.data.text.length <= 1048576) {
         const selection = { name, text: event.data.text };

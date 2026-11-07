@@ -265,6 +265,26 @@ const server = http.createServer(async (req, res) => {
       if (child) { children.delete(close[1]); child.kill('SIGTERM'); }
       return send(res, 200, '{"ok":true}');
     }
+    const split = /^\/api\/sessions\/(shared|web-[a-f0-9]{12})\/split\/(horizontal|vertical)$/.exec(req.url);
+    if (req.method === 'POST' && split) {
+      if (!allowedMutation(req)) return send(res, 403, '{"error":"Forbidden"}');
+      if (req.headers['transfer-encoding'] || Number(req.headers['content-length'] || 0) !== 0) return send(res, 400, '{"error":"Unexpected body"}');
+      const sessionId = req.headers['x-terminal-session-id'], serverPid = req.headers['x-terminal-server-pid'];
+      if (!/^\$\d+$/.test(sessionId || '') || !/^\d+$/.test(serverPid || '')) return send(res, 409, '{"error":"Session changed"}');
+      try {
+        // Both identity and pane-limit checks run in the split's tmux command queue.
+        // A session target with ':' selects its current window and active pane;
+        // -c expands in that pane's context, and omitting -d activates the new pane.
+        const result = tmux(['if-shell', '-F', '-t', sessionId,
+          `#{&&:#{==:#{session_name},${split[1]}},#{==:#{pid},${serverPid}}}`,
+          `if-shell -F -t '${sessionId}' '#{<:#{window_panes},4}' { split-window ${split[2] === 'horizontal' ? '-h' : '-v'} -t '${sessionId}:' -c '#{pane_current_path}' } { display-message -p LIMIT }`,
+          'display-message -p STALE']).trim();
+        if (result === 'LIMIT') return send(res, 409, '{"error":"Pane limit reached"}');
+        if (result === 'STALE') throw new Error('Session changed');
+      } catch { return send(res, 409, '{"error":"Session changed or unavailable"}'); }
+      cachedSessionMetadata = null;
+      return send(res, 200, '{"ok":true}');
+    }
     if (req.method === 'POST' && ['/api/images/prepare', '/api/images/result', '/api/images/insert'].includes(req.url)) {
       if (!allowedMutation(req)) return send(res, 403, '{"error":"Forbidden"}');
       if (req.headers['transfer-encoding'] || Number(req.headers['content-length'] || 0) !== 0) return send(res, 400, '{"error":"Unexpected body"}');
