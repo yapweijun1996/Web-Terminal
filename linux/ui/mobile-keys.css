@@ -1,8 +1,8 @@
-.mobile-keys:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 8px; background: #17212c; color: #eef5fb; font: 14px system-ui, sans-serif; }
+.mobile-keys:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 8px; background: var(--panel); color: var(--text); font: 14px system-ui, sans-serif; }
 .mobile-keys-toggle { min-height: 44px; min-width: 44px; }
-.mobile-keys button, .mobile-keys select { min-height: 44px; min-width: 44px; color: inherit; background: #252a35; border: 1px solid #71849a; border-radius: 6px; padding: 4px 8px; font: inherit; }
+.mobile-keys button, .mobile-keys select { min-height: 44px; min-width: 44px; color: inherit; background: var(--control); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font: inherit; }
 .mobile-keys button { flex: 0 0 auto; }
-.mobile-keys button:focus-visible, .mobile-keys select:focus-visible { outline: 2px solid #99d1ff; outline-offset: 1px; }
+.mobile-keys button:focus-visible, .mobile-keys select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .mobile-keys label { flex: 0 0 auto; white-space: nowrap; }
 .mobile-keys select { margin-left: 4px; }
 .mobile-keys-notice { flex: 0 0 auto; max-width: 18rem; white-space: normal; }

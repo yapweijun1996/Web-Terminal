@@ -8,6 +8,11 @@ const scrollStatus = document.querySelector('#scroll-status');
 const retry = document.querySelector('#retry');
 const restore = document.querySelector('#restore');
 const newTab = document.querySelector('#new-tab');
+const newSession = document.querySelector('#new-session');
+const reconnect = document.querySelector('#reconnect');
+const currentName = document.querySelector('#current-name');
+const currentSecondary = document.querySelector('#current-secondary');
+const searchResults = document.querySelector('#search-results');
 const renameTab = document.querySelector('#rename-tab');
 renameTab.setAttribute('aria-keyshortcuts', 'Control+Alt+Shift+T');
 renameTab.title = 'Press Control+Alt+Shift+T in the terminal to focus this toolbar.';
@@ -37,6 +42,25 @@ let renameTarget = null;
 let closeSequence = 0;
 const frames = new Map();
 const connections = new Map();
+let sessionDetails = {};
+let metadataStale = false, tabViewKey = null;
+const missingPolls = new Map();
+function foregroundStatus(name) {
+  return metadataStale ? { state: 'Status unavailable', command: '' }
+    : window.TerminalSidebar.sessionStatus(sessions.includes(name) && !missingPolls.has(name), connections.get(name), sessionDetails[name]?.command);
+}
+function foregroundText(foreground) {
+  return `${foreground.state}${foreground.state === 'Running' && foreground.command ? ` · ${foreground.command}` : ''}`;
+}
+const sidebar = window.TerminalSidebar.create({
+  getFrames: () => frames.values(),
+  refit: () => {
+    const win = frames.get(active)?.contentWindow;
+    if (win) win.dispatchEvent(new win.Event('resize'));
+  },
+  onSearch: () => renderTabs(),
+  onPrefsChange: () => renderTabs(),
+});
 const scrollModes = new Map();
 const mobileKeys = window.createMobileKeys({
   getTerminal: () => active && connections.get(active) === 'Connected' && frames.get(active)?.contentWindow?.webTerminalTarget ? frames.get(active)?.contentWindow?.term : null,
@@ -60,8 +84,13 @@ function saveHidden() { try { localStorage.setItem(storageKey, JSON.stringify([.
 function saveNames() { try { localStorage.setItem(namesKey, JSON.stringify(names)); return true; } catch { return false; } }
 function updateControls() {
   newTab.disabled = !sessionReady || creating;
+  newSession.disabled = newTab.disabled;
+  reconnect.disabled = loading || (!active && retryMode !== 'load');
   latest.disabled = !sessionReady || !active || returning;
   renameTab.disabled = !sessionReady || !active;
+  currentName.textContent = active ? label(active) : 'No session';
+  const foreground = foregroundStatus(active);
+  currentSecondary.textContent = foregroundText(foreground);
 }
 function showStatus(message, retryAction = null, link = message) {
   status.textContent = message;
@@ -103,6 +132,8 @@ function activate(name, focusTab = false) {
   showConnection(name);
   displayControls.apply();
   renderTabs(focusTab ? name : null);
+  sidebar.applyTheme();
+  sidebar.refit();
   updateControls();
 }
 function installClipboard(iframe, name) {
@@ -110,7 +141,7 @@ function installClipboard(iframe, name) {
   win.addEventListener('pointerup', () => { if (name === active) copyGestureAt = Date.now(); }, true);
   win.addEventListener('keydown', event => {
     if (name === active && frames.get(name) === iframe && event.code === 'KeyT' && event.altKey && event.shiftKey && event.ctrlKey && !event.metaKey) {
-      event.preventDefault(); event.stopImmediatePropagation(); renameTab.focus(); return;
+      event.preventDefault(); event.stopImmediatePropagation(); document.querySelector('#toolbar-menu').open = true; renameTab.focus(); return;
     }
     if (name === active && event.ctrlKey && event.key.toLowerCase() === 'c') copyGestureAt = Date.now();
     if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 'v') event.stopImmediatePropagation();
@@ -223,7 +254,13 @@ function removeView(name) {
   frames.get(name)?.remove(); frames.delete(name); connections.delete(name); scrollModes.delete(name);
   const next = active && sessions.includes(active) && !hidden.has(active) ? active : sessions.find(n => !hidden.has(n));
   if (next) activate(next, true);
-  else { active = null; detailView.textContent = 'Unknown'; showStatus('No visible terminals', null, 'Unknown'); renameTarget = null; renameForm.hidden = true; renameError.textContent = ''; renderTabs(); updateControls(); (restore.hidden ? newTab : restore).focus(); }
+  else {
+    active = null; detailView.textContent = 'Unknown'; showStatus('No visible terminals', null, 'Unknown');
+    renameTarget = null; renameForm.hidden = true; renameError.textContent = '';
+    renderTabs(); updateControls(); sidebar.closeDrawer(false);
+    if (!restore.hidden) document.querySelector('#toolbar-menu').open = true;
+    (restore.hidden ? newSession : restore).focus();
+  }
 }
 function confirmClose(name, opener) {
   const sequence = ++closeSequence;
@@ -238,7 +275,16 @@ function confirmClose(name, opener) {
   title.textContent = `${label(name)} (${name})`;
   error.textContent = '';
   confirm.disabled = true; cancel.disabled = false; dismiss.disabled = false; hide.disabled = false;
-  const cancelDialog = () => { if (!closing) { dialog.close(); opener.focus(); } };
+  const cancelDialog = () => {
+    if (closing) return;
+    dialog.close();
+    if (opener.isConnected !== false && opener.getClientRects().length) opener.focus();
+    else {
+      const fallback = ['#sidebar-close', '#sidebar-toggle'].map(selector => document.querySelector(selector))
+        .find(element => element?.getClientRects().length);
+      fallback?.focus();
+    }
+  };
   cancel.onclick = cancelDialog; dismiss.onclick = cancelDialog;
   dialog.oncancel = event => { event.preventDefault(); cancelDialog(); };
   hide.onclick = () => {
@@ -272,29 +318,89 @@ function confirmClose(name, opener) {
 }
 function renderTabs(focusName = null) {
   let focusTarget = null;
-  tabs.replaceChildren();
-  const visible = sessions.filter(n => !hidden.has(n));
-  for (const name of visible) {
-    const group = document.createElement('div'); group.className = `tab${name === active ? ' active' : ''}`;
-    const open = document.createElement('button'); open.type = 'button'; open.textContent = label(name);
-    open.setAttribute('aria-pressed', String(name === active)); open.addEventListener('click', event => activate(name, event.detail === 0));
-    open.addEventListener('keydown', event => {
-      const index = visible.indexOf(name);
-      const next = event.key === 'ArrowRight' ? visible[(index + 1) % visible.length]
-        : event.key === 'ArrowLeft' ? visible[(index - 1 + visible.length) % visible.length]
-          : event.key === 'Home' ? visible[0] : event.key === 'End' ? visible[visible.length - 1] : null;
-      if (next) { event.preventDefault(); activate(next, true); }
-    });
-    if (name === focusName) focusTarget = open;
-    const hide = document.createElement('button'); hide.type = 'button'; hide.className = 'hide'; hide.textContent = '×';
-    hide.setAttribute('aria-label', `Close ${label(name)}`); hide.title = 'Close or hide terminal';
-    hide.addEventListener('click', () => confirmClose(name, hide));
-    group.append(open, hide); tabs.append(group);
-  }
+  // Polls must not replace the keyboard user's focused sidebar control.
+  const focused = document.activeElement;
+  const focusSession = focused?.dataset?.session;
+  const focusAction = focused?.dataset?.action;
+  const focusRow = target => {
+    if (!target) return;
+    if (sidebar.isNarrow() && !sidebar.isDrawerOpen()) status.focus();
+    else { target.focus(); target.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+  };
+  const pins = sidebar.prefs.pins;
+  const query = document.querySelector('#session-search').value || '';
+  const visible = window.TerminalSidebar.orderSessions(sessions.filter(n => !hidden.has(n)), pins, label, query);
+  const view = visible.map(name => [name, label(name), foregroundText(foregroundStatus(name)), pins.includes(name)]);
+  const key = JSON.stringify([view, active, sidebar.prefs.collapsed, query]);
   restore.hidden = !sessions.some(n => hidden.has(n));
-  if (focusTarget) { focusTarget.focus(); focusTarget.scrollIntoView({ block: 'nearest', inline: 'center' }); }
+  updateControls();
+  if (key === tabViewKey) {
+    if (focusName) focusRow(tabs.querySelector(`[data-session="${focusName}"][data-action="open"]`));
+    return;
+  }
+  tabViewKey = key;
+  tabs.replaceChildren();
+  const resultCount = `${visible.length} ${visible.length === 1 ? 'session' : 'sessions'} found`;
+  if (searchResults.textContent !== resultCount) searchResults.textContent = resultCount;
+  const navigable = visible.filter(name => query || !sidebar.prefs.collapsed[pins.includes(name) ? 'Pinned' : 'Sessions']);
+  for (const section of ['Pinned', 'Sessions']) {
+    const members = visible.filter(name => pins.includes(name) === (section === 'Pinned'));
+    if (!members.length) continue;
+    const heading = document.createElement('button');
+    heading.type = 'button'; heading.className = 'session-group';
+    heading.textContent = section;
+    heading.dataset.session = section; heading.dataset.action = 'group';
+    heading.setAttribute('aria-expanded', String(Boolean(query) || !sidebar.prefs.collapsed[section]));
+    heading.addEventListener('click', () => {
+      sidebar.prefs.collapsed[section] = !sidebar.prefs.collapsed[section];
+      sidebar.save(); sidebar.refit();
+    });
+    tabs.append(heading);
+    if (focusSession === section && focusAction === 'group') focusTarget = heading;
+    for (const name of members) {
+      const group = document.createElement('div'); group.className = `tab${name === active ? ' active' : ''}`;
+      group.hidden = !query && Boolean(sidebar.prefs.collapsed[section]);
+      const open = document.createElement('button'); open.type = 'button'; open.className = 'session-open';
+      open.textContent = label(name);
+      open.dataset.session = name; open.dataset.action = 'open';
+      open.setAttribute('aria-pressed', String(name === active));
+      open.addEventListener('click', event => {
+        activate(name, event.detail === 0 || sidebar.isDrawerOpen());
+        sidebar.closeDrawer();
+      });
+      open.addEventListener('keydown', event => {
+        const index = navigable.indexOf(name);
+        const next = ['ArrowRight', 'ArrowDown'].includes(event.key) ? navigable[(index + 1) % navigable.length]
+          : ['ArrowLeft', 'ArrowUp'].includes(event.key) ? navigable[(index - 1 + navigable.length) % navigable.length]
+            : event.key === 'Home' ? navigable[0] : event.key === 'End' ? navigable[navigable.length - 1] : null;
+        if (next) { event.preventDefault(); activate(next, true); }
+      });
+      const foreground = foregroundStatus(name);
+      const state = document.createElement('span'); state.className = `session-state ${metadataStale ? 'stale' : foreground.state.toLowerCase()}`;
+      state.textContent = foregroundText(foreground);
+      const stateId = `session-state-${name}`; state.id = stateId;
+      open.setAttribute('aria-describedby', stateId);
+      const pin = document.createElement('button'); pin.type = 'button'; pin.className = 'pin';
+      pin.textContent = pins.includes(name) ? '◆' : '◇';
+      pin.dataset.session = name; pin.dataset.action = 'pin';
+      pin.setAttribute('aria-label', `Pin ${label(name)}`); pin.setAttribute('aria-pressed', String(pins.includes(name)));
+      pin.addEventListener('click', () => {
+        sidebar.prefs.pins = pins.includes(name) ? pins.filter(id => id !== name) : [...pins, name];
+        sidebar.save();
+      });
+      const close = document.createElement('button'); close.type = 'button'; close.className = 'hide'; close.textContent = '×';
+      close.dataset.session = name; close.dataset.action = 'close';
+      close.setAttribute('aria-label', `Close ${label(name)}`); close.title = 'Close or hide terminal';
+      close.addEventListener('click', () => confirmClose(name, close));
+      group.append(open, pin, close, state); tabs.append(group);
+      if (name === focusName) focusTarget = open;
+      else if (!focusName && name === focusSession) focusTarget = group.hidden ? heading : focusAction === 'pin' ? pin : focusAction === 'close' ? close : open;
+    }
+  }
+  focusRow(focusTarget);
 }
 renameTab.addEventListener('click', () => {
+  document.querySelector('#toolbar-menu').open = false;
   if (!active) return;
   renameTarget = active;
   renameInput.value = names[active] || '';
@@ -303,7 +409,11 @@ renameTab.addEventListener('click', () => {
   renameForm.hidden = false;
   renameInput.focus(); renameInput.select();
 });
-function cancelRename() { renameForm.hidden = true; renameTarget = null; renameError.textContent = ''; renameTab.focus(); }
+function cancelRename() {
+  renameForm.hidden = true; renameTarget = null; renameError.textContent = '';
+  document.querySelector('#toolbar-menu').open = true;
+  renameTab.focus();
+}
 renameCancel.addEventListener('click', cancelRename);
 renameForm.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); cancelRename(); } });
 renameForm.addEventListener('submit', event => {
@@ -336,13 +446,66 @@ async function load() {
     authRequired = response.status === 401 || response.status === 403 || response.type === 'opaqueredirect' || response.redirected;
     if (authRequired) throw Error('Authentication may be required');
     if (!response.ok) throw Error('Unable to load terminals');
-    const data = await response.json(); sessions = data.sessions; token = data.token; sessionReady = true;
+    const data = await response.json(); sessions = data.sessions; sessionDetails = data.details || {}; token = data.token; sessionReady = true;
+    metadataStale = false; missingPolls.clear();
     const first = sessions.includes(active) && !hidden.has(active) ? active : sessions.find(n => !hidden.has(n));
     if (first) activate(first); else renderTabs();
     if (!first) { detailView.textContent = 'Unknown'; showStatus('No visible terminals', null, 'Unknown'); updateControls(); }
   } catch { showStatus(authRequired ? 'Sign-in may be required' : 'Connection unavailable — retry or sign in', 'load'); }
-  finally { loading = false; }
+  finally { loading = false; updateControls(); }
 }
+// Poll metadata without reconnecting, moving terminal focus or changing copy mode.
+let pollTimer = null, polling = false;
+async function pollSessions() {
+  if (document.hidden || loading || polling || creating) return;
+  polling = true;
+  const previousSessions = sessions;
+  try {
+    const response = await fetch('/api/sessions', { cache: 'no-store', redirect: 'manual' });
+    if (!response.ok || response.redirected || response.type === 'opaqueredirect') throw Error('Status unavailable');
+    const data = await response.json();
+    if (sessions !== previousSessions || creating) return;
+    const reported = new Set(data.sessions);
+    const retained = [];
+    for (const name of sessions) {
+      if (reported.has(name)) { missingPolls.delete(name); continue; }
+      const misses = (missingPolls.get(name) || 0) + 1;
+      if (misses < 2) { missingPolls.set(name, misses); retained.push(name); }
+      else missingPolls.delete(name);
+    }
+    const details = data.details || {};
+    for (const name of retained) details[name] = sessionDetails[name] || { command: '' };
+    sessions = [...data.sessions, ...retained]; sessionDetails = details; token = data.token; metadataStale = false;
+    for (const name of frames.keys()) {
+      if (!sessions.includes(name)) {
+        frames.get(name).remove(); frames.delete(name); connections.delete(name); scrollModes.delete(name);
+      }
+    }
+    if (active && !sessions.includes(active)) {
+      active = null;
+      const next = sessions.find(name => !hidden.has(name));
+      if (next) activate(next, true);
+      else { detailView.textContent = 'Unknown'; showStatus('No visible terminals', null, 'Unknown'); renderTabs(); }
+    } else renderTabs();
+  } catch {
+    // Metadata availability is separate from the live iframe connection.
+    if (sessions === previousSessions && !creating) { metadataStale = true; renderTabs(); }
+  }
+  finally { polling = false; }
+}
+function schedulePoll() {
+  window.clearInterval(pollTimer);
+  pollTimer = document.hidden ? null : window.setInterval(pollSessions, 5000);
+}
+document.addEventListener('visibilitychange', () => {
+  schedulePoll();
+  if (!document.hidden) void pollSessions();
+});
+newSession.addEventListener('click', () => newTab.click());
+reconnect.addEventListener('click', () => {
+  if (!active || retryMode === 'load') { void load(); return; }
+  retryMode = 'frame'; retry.click();
+});
 retry.addEventListener('click', () => {
   status.focus();
   if (retryMode === 'load') { void load(); return; }
@@ -357,13 +520,18 @@ retry.addEventListener('click', () => {
 newTab.addEventListener('click', async () => {
   if (!sessionReady || creating) return;
   creating = true; updateControls();
+  const drawerOpen = sidebar.isDrawerOpen();
   try {
     const response = await fetch('/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Terminal-Request': token }, body: '{}' });
     if (!response.ok) throw Error('Unable to create terminal');
-    const data = await response.json(); sessions.push(data.name); activate(data.name);
+    const data = await response.json(); sessions = [...sessions, data.name]; activate(data.name, drawerOpen); sidebar.closeDrawer();
   } catch { sessionReady = false; showStatus('Unable to create terminal — check connection or sign in', 'load', connections.get(active) || 'Unknown'); } finally { creating = false; updateControls(); }
 });
-restore.addEventListener('click', event => { hidden.clear(); saveHidden(); renderTabs(); if (!active && sessions.length) activate(sessions[0], event.detail === 0); });
+restore.addEventListener('click', event => {
+  sidebar.closeMenu();
+  hidden.clear(); saveHidden(); renderTabs();
+  if (!active && sessions.length) activate(sessions[0], event.detail === 0);
+});
 latest.addEventListener('click', async () => {
   if (!sessionReady || !active || returning) return;
   const name = active, iframe = frames.get(name);
@@ -388,6 +556,8 @@ window.addEventListener('message', event => {
         connections.set(name, event.data.state);
         if (event.data.state !== 'Connected') scrollModes.delete(name);
         if (event.data.state === 'Connected') iframe.contentWindow?.term?.textarea?.setAttribute('aria-label', 'Terminal input. Press Control Alt Shift T to focus toolbar.');
+        sidebar.applyTheme();
+        renderTabs();
         if (name === active && event.data.state !== 'Connected') mobileKeys.reset();
         if (name === active && event.data.state === 'Connected') displayControls.apply();
         if (name === active) showConnection(name);
@@ -406,3 +576,4 @@ window.addEventListener('message', event => {
   }
 });
 load();
+schedulePoll();

@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { test } = require('node:test');
 const vm = require('node:vm');
+const { installSidebarFixture, rows } = require('./sidebar-fixture');
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
@@ -44,6 +45,7 @@ test('session auth failure and iframe disconnect offer safe explicit recovery', 
   };
   const localStorage = { getItem: () => null, setItem() {} };
   const source = fs.readFileSync(path.join(__dirname, '../ui/app.js'), 'utf8');
+  installSidebarFixture(window, document, nodes, Element);
   vm.runInNewContext(source, { document, window, location, localStorage, fetch, console });
   await flush();
   assert.equal(nodes.status.textContent, 'Sign-in may be required');
@@ -87,7 +89,7 @@ test('session auth failure and iframe disconnect offer safe explicit recovery', 
   assert.equal(nodes.status.textContent, 'Connected');
   assert.equal(nodes.retry.hidden, true);
   listeners.message({ source: second.contentWindow, origin: location.origin, data: { type: 'terminal-scroll', mode: '' } });
-  nodes.tabs.children[0].children[1].click();
+  rows(nodes)[0].children.find(child => child.dataset.action === 'close').click();
   nodes['close-hide'].click();
   assert.equal(nodes['detail-view'].textContent, 'Unknown');
   assert.equal(nodes['detail-link'].textContent, 'Unknown');
@@ -109,6 +111,7 @@ test('terminal clipboard requests need the active view and support a manual retr
   const navigator = { clipboard: { writeText: async text => { if (deny) throw Error('denied'); writes.push(text); } } };
   const fetch = async () => ({ ok: true, json: async () => ({ sessions: ['shared', 'web-123456789abc'], token: 'fixture' }) });
   const localStorage = { getItem: () => null, setItem() {} };
+  installSidebarFixture(window, document, nodes, Element);
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../ui/app.js'), 'utf8'), { document, window, location, localStorage, fetch, navigator, console });
   await flush();
   const iframe = nodes.views.children[0];
@@ -129,7 +132,7 @@ test('terminal clipboard requests need the active view and support a manual retr
   assert.deepEqual(writes, ['fixture 中文']);
   assert.equal(nodes['copy-selection'].hidden, true);
   message(iframe.contentWindow, 'stale selection');
-  nodes.tabs.children[1].children[0].listeners.click({ detail: 1 });
+  rows(nodes)[1].children[0].listeners.click({ detail: 1 });
   assert.equal(nodes['copy-selection'].hidden, true, 'switching tabs clears the pending selection');
   message(iframe.contentWindow, 'inactive');
   assert.equal(nodes['copy-selection'].hidden, true, 'inactive frames cannot offer a copy');
