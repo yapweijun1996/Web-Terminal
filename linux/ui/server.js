@@ -38,6 +38,19 @@ function sessions() {
   try { return tmux(['list-sessions', '-F', '#{session_name}']).trim().split('\n').filter(s => sessionPattern.test(s)).sort(); }
   catch { return []; }
 }
+function sessionDetails(names) {
+  const details = {};
+  for (const name of names) {
+    let command = '';
+    try {
+      // Read only the active pane's executable name, never its arguments or title.
+      command = path.basename(tmux(['display-message', '-p', '-t', `=${name}:`, '#{pane_current_command}']).trim())
+        .replace(/[^A-Za-z0-9._+-]/g, '').slice(0, 24);
+    } catch { /* A session may disappear after the list was captured. */ }
+    details[name] = { command };
+  }
+  return details;
+}
 function send(res, status, body, contentType = 'application/json; charset=utf-8') {
   res.writeHead(status, { 'Content-Type': contentType, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
   res.end(body);
@@ -202,8 +215,13 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/mobile-keys.css') return file(res, 'mobile-keys.css', 'text/css; charset=utf-8');
     if (req.method === 'GET' && req.url === '/display-controls.js') return file(res, 'display-controls.js', 'text/javascript; charset=utf-8');
     if (req.method === 'GET' && req.url === '/display-controls.css') return file(res, 'display-controls.css', 'text/css; charset=utf-8');
+    if (req.method === 'GET' && req.url === '/sidebar.js') return file(res, 'sidebar.js', 'text/javascript; charset=utf-8');
+    if (req.method === 'GET' && req.url === '/sidebar.css') return file(res, 'sidebar.css', 'text/css; charset=utf-8');
     if (req.method === 'GET' && req.url === '/style.css') return file(res, 'style.css', 'text/css; charset=utf-8');
-    if (req.method === 'GET' && req.url === '/api/sessions') return send(res, 200, JSON.stringify({ sessions: sessions(), token }));
+    if (req.method === 'GET' && req.url === '/api/sessions') {
+      const names = sessions();
+      return send(res, 200, JSON.stringify({ sessions: names, details: sessionDetails(names), token }));
+    }
     const identity = /^\/api\/sessions\/(shared|web-[a-f0-9]{12})\/identity$/.exec(req.url);
     if (req.method === 'GET' && identity) {
       try {

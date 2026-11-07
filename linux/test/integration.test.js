@@ -61,10 +61,13 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     assert.equal(fs.statSync(socket).mode & 0o777, 0o600);
     const index = await request('GET', '/');
     assert.equal(index.status, 200);
-    assert.match(index.body, /Terminal tabs/);
 
     const list = JSON.parse((await request('GET', '/api/sessions')).body);
     assert.deepEqual(list.sessions, ['shared']);
+    assert.deepEqual(Object.keys(list.details), ['shared']);
+    assert.deepEqual(Object.keys(list.details.shared), ['command']);
+    assert.match(list.details.shared.command, /^[A-Za-z0-9._+-]{0,24}$/);
+    assert.match(list.token, /^[a-f0-9]{64}$/);
     const headers = { origin: 'http://fixture.test', 'content-type': 'application/json', 'x-terminal-request': list.token };
     const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl6sAAAAASUVORK5CYII=', 'base64');
     const imageHeaders = { ...headers, 'content-type': 'application/octet-stream', 'content-length': image.length };
@@ -124,6 +127,8 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     assert.equal((await request('GET', '/mobile-keys.css')).status, 200);
     assert.equal((await request('GET', '/display-controls.js')).status, 200);
     assert.equal((await request('GET', '/display-controls.css')).status, 200);
+    assert.equal((await request('GET', '/sidebar.js')).status, 200);
+    assert.equal((await request('GET', '/sidebar.css')).status, 200);
     const targetInfo = tmux('display-message', '-p', '-t', 'shared:', '#{session_id}|#{pane_id}|#{pid}').split('|');
     const targetHeaders = { ...headers, 'x-terminal-session': 'shared', 'x-terminal-session-id': targetInfo[0], 'x-terminal-pane': targetInfo[1], 'x-terminal-server-pid': targetInfo[2] };
     const mismatch = JSON.parse((await request('POST', '/api/images/prepare', { ...targetHeaders, 'x-terminal-session-id': '$999999' })).body);
@@ -131,7 +136,20 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     const bound = JSON.parse((await request('POST', '/api/images/prepare', targetHeaders)).body);
     assert.ok(bound.target, 'a valid pane in the requested session is captured');
     const boundUpload = JSON.parse((await request('POST', '/api/images', { ...imageHeaders, 'x-image-receipt': bound.ticket }, image)).body);
-    const otherPane = tmux('split-window', '-h', '-d', '-P', '-F', '#{pane_id}', '-t', 'shared:', 'sh');
+    const shellCommand = tmux('display-message', '-p', '-t', targetInfo[1], '#{pane_current_command}');
+    const otherPane = tmux('split-window', '-h', '-d', '-P', '-F', '#{pane_id}', '-t', 'shared:', 'sleep 60');
+    tmux('select-pane', '-t', otherPane);
+    let activeCommand;
+    for (let i = 0; i < 100; i++) {
+      activeCommand = JSON.parse((await request('GET', '/api/sessions')).body).details.shared.command;
+      if (activeCommand === 'sleep') break;
+      await sleep(20);
+    }
+    assert.equal(activeCommand, 'sleep', 'session details follow the active pane foreground command without arguments');
+    tmux('select-pane', '-t', targetInfo[1]);
+    assert.equal(JSON.parse((await request('GET', '/api/sessions')).body).details.shared.command,
+      path.basename(shellCommand).replace(/[^A-Za-z0-9._+-]/g, '').slice(0, 24),
+      'selecting another pane updates the command rather than retaining the inactive sleep');
     tmux('select-pane', '-t', otherPane);
     assert.equal((await request('POST', '/api/images/insert', { ...headers, 'x-image-receipt': bound.ticket })).status, 200);
     let oldPaneOutput = '';
@@ -219,6 +237,10 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
       command = tmux('display-message', '-p', '-t', name, '#{pane_current_command}');
     }
     assert.equal(command, 'sleep');
+    const runningList = JSON.parse((await request('GET', '/api/sessions')).body);
+    assert.deepEqual(runningList.sessions, ['shared', name].sort());
+    assert.deepEqual(Object.keys(runningList.details).sort(), runningList.sessions);
+    assert.deepEqual(runningList.details[name], { command: 'sleep' });
     server.kill('SIGTERM');
     await new Promise(resolve => server.once('exit', resolve));
     start();
@@ -226,6 +248,7 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     assert.equal(tmux('display-message', '-p', '-t', name, '#{pane_current_command}'), 'sleep');
     assert.ok(JSON.parse((await request('GET', '/api/sessions')).body).sessions.includes(name));
     const currentList = JSON.parse((await request('GET', '/api/sessions')).body);
+    assert.deepEqual(currentList.details[name], { command: 'sleep' }, 'UI restart preserves and reports the foreground job');
     const closeHeaders = { origin: 'http://fixture.test', 'content-type': 'application/json', 'x-terminal-request': currentList.token };
     const identity = JSON.parse((await request('GET', `/api/sessions/${name}/identity`)).body);
     const target = { ...closeHeaders, 'x-terminal-session-id': identity.sessionId, 'x-terminal-server-pid': identity.serverPid };
@@ -246,8 +269,10 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     assert.equal((await request('POST', `/api/sessions/${name}/close`, { ...target, 'x-terminal-session-id': replacement.sessionId, 'x-terminal-server-pid': replacement.serverPid })).status, 200);
     for (let i = 0; i < 100 && fs.existsSync(`/proc/${childPid}`); i++) await sleep(10);
     assert.equal(fs.existsSync(`/proc/${childPid}`), false, 'ending the session also stops its ttyd');
-    assert.ok(!JSON.parse((await request('GET', '/api/sessions')).body).sessions.includes(name));
-    assert.ok(JSON.parse((await request('GET', '/api/sessions')).body).sessions.includes('shared'), 'another session is preserved');
+    const remainingList = JSON.parse((await request('GET', '/api/sessions')).body);
+    assert.ok(!remainingList.sessions.includes(name));
+    assert.equal(Object.hasOwn(remainingList.details, name), false, 'closed sessions leave no stale command details');
+    assert.ok(remainingList.sessions.includes('shared'), 'another session is preserved');
   } finally {
     if (server && server.exitCode === null) {
       server.kill('SIGTERM');

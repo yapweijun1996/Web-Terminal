@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { test } = require('node:test');
 const vm = require('node:vm');
+const { installSidebarFixture } = require('./sidebar-fixture');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 class Element {
@@ -44,6 +45,7 @@ function fixture() {
     return { ok: true };
   };
   const context = vm.createContext({ document, window, location, fetch, localStorage: { getItem: () => null, setItem() {} }, navigator: { clipboard: { writeText: async () => {} } }, console });
+  installSidebarFixture(window, document, nodes, Element);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../ui/app.js'), 'utf8'), context);
   return { nodes, listeners, calls, context, location, ticket, release: () => releaseUpload() };
 }

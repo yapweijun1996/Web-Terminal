@@ -27,6 +27,13 @@ The candidate displays connection state on desktop and narrow screens. When the 
 
 The candidate attempts to give the embedded terminal a generic page title so ttyd's normal title assignments do not announce internal target metadata or the launch command. This worked in the isolated Chromium check; if a browser rejects the override, terminal operation continues and title privacy is not established. The parent iframe keeps its browser-local view label. This is an accessibility and privacy measure, not an access-control boundary.
 
+### Session sidebar candidate
+
+The Linux UI replaces the horizontal strip with a resizable session sidebar, browser-local pins and collapsible groups, name search, and a mobile drawer. Width (200–320px), pins, groups and Dark/Light/System theme preferences stay in browser storage; unavailable storage does not prevent terminal use. The main toolbar retains reconnect, scroll state, display/mobile keys, clipboard and diagnostics controls; fullscreen targets the main area.
+
+`GET /api/sessions` retains `sessions` and `token` and adds `details[name].command`: only the active pane's sanitized executable basename, capped at 24 characters. Metadata polls every five seconds while visible. Connected shell panes are Idle; other foreground commands are Running, not a health assertion. Non-connected or missing views are Disconnected. Isolated Linux tests and Chromium fixtures cover sidebar behavior and terminal/tmux refits; this candidate is not deployed.
+
+
 ## Security boundary
 
 The UI and ttyd do **not** independently authenticate the browser or verify a Cloudflare Access JWT. The observed deployment places an Access-protected Cloudflare Tunnel in front of the private UI socket and configures cloudflared to require JWT validation for the application audience on the ingress route. The UI checks origin and a per-process request token for session mutations and checks WebSocket origin; these checks are not a replacement for Access authentication. Terminal execution has the full permissions of its OS user, and processes under that same user can access the private socket.
