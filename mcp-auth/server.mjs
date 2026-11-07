@@ -87,6 +87,13 @@ export function createGateway(config, verifyOwner) {
     config.redirectUris.map((value) => validHttps(value).href),
   );
   if (!redirects.size) throw Error("Redirect allowlist required");
+  if (config.maxGrantSeconds !== undefined &&
+      !DURATIONS.some((option) => option.value === String(config.maxGrantSeconds)))
+    throw Error("Grant maximum must be an allowed duration");
+  const durations = DURATIONS.filter((option) =>
+    config.maxGrantSeconds === undefined || Number(option.value) <= Number(config.maxGrantSeconds));
+  const defaultDuration = durations.some((option) => option.value === DEFAULT_DURATION)
+    ? DEFAULT_DURATION : durations.at(-1).value;
   if (!verifyOwner) verifyOwner = createAccessVerifier(config);
   const store = new GrantStore({
     stateDir: config.stateDir,
@@ -128,8 +135,23 @@ export function createGateway(config, verifyOwner) {
     send(res, status, {
       error: status === 401 ? "invalid_token" : "invalid_request",
     });
+  // Never log queries, bodies, headers, identities or credentials.
+  const observe = (req, res, surface) => {
+    if (!config.onRequest) return;
+    const pathname = new URL(req.url, issuer).pathname;
+    const route = [
+      "/.well-known/oauth-authorization-server",
+      "/.well-known/oauth-protected-resource",
+      "/.well-known/oauth-protected-resource/mcp",
+      "/oauth/register", "/oauth/authorize", "/oauth/token", "/oauth/revoke",
+      "/mcp", approval.pathname,
+    ].includes(pathname) ? pathname : "other";
+    const method = ["GET", "POST", "DELETE", "OPTIONS", "HEAD"].includes(req.method) ? req.method : "other";
+    res.once("finish", () => config.onRequest({ surface, route, method, status: res.statusCode }));
+  };
   const publicServer = http.createServer(async (req, res) => {
     try {
+      observe(req, res, "public");
       prune();
       if (Date.now() > reset) {
         budget = 0;
@@ -324,6 +346,7 @@ export function createGateway(config, verifyOwner) {
   });
   const approvalServer = http.createServer(async (req, res) => {
     try {
+      observe(req, res, "approval");
       prune();
       if (
         req.headers.host !== approval.host ||
@@ -383,8 +406,8 @@ export function createGateway(config, verifyOwner) {
             redirectUri: record.redirect,
             requestId: id,
             csrf: record.csrf,
-            durations: DURATIONS,
-            defaultDuration: DEFAULT_DURATION,
+            durations,
+            defaultDuration,
             manageUrl: approval.pathname + "?view=connections",
           }),
           {
@@ -475,8 +498,8 @@ export function createGateway(config, verifyOwner) {
         return formError(
           "Return to your app and connect again. This form has expired or could not be verified.",
         );
-      const duration = q.get("duration") ?? DEFAULT_DURATION;
-      if (!DURATIONS.some((option) => option.value === duration))
+      const duration = q.get("duration") ?? defaultDuration;
+      if (!durations.some((option) => option.value === duration))
         return fail(res);
       pending.delete(q.get("request"));
       const location = new URL(record.redirect);
@@ -562,6 +585,10 @@ if (
     accessIssuer: env.ACCESS_ISSUER,
     accessAudience: env.ACCESS_AUDIENCE,
     ownerEmail: env.ACCESS_OWNER_EMAIL,
+    maxGrantSeconds: env.MCP_GRANT_MAX_SECONDS,
+    onRequest: env.MCP_AUTH_LOG_REQUESTS === "1"
+      ? (event) => console.error(JSON.stringify({ event: "oauth_http", ...event }))
+      : undefined,
   });
   listenPrivate(gateway.publicServer, env.MCP_AUTH_SOCKET);
   listenPrivate(gateway.approvalServer, env.MCP_APPROVAL_SOCKET);

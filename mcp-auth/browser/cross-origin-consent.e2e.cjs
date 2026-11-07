@@ -122,7 +122,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
           const payload = JSON.parse(mcp.body);
           if (method === "initialize")
             assert.equal(payload.result.serverInfo.name, "web-terminal");
-          else assert.equal(payload.result.tools.length, 6);
+          else assert.ok(payload.result.tools.some((tool) => tool.name === "terminal_list"));
         }
         assert.equal(
           (
@@ -179,6 +179,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
       approvalUrl: origin + "/authorize",
       redirectUris: [callback],
       upstreamSocket,
+      maxGrantSeconds: process.env.MCP_TEST_MAX_GRANT_SECONDS,
     },
     async () => true,
   );

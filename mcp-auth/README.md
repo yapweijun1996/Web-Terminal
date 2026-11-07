@@ -27,6 +27,8 @@ MCP_REDIRECT_URIS=["https://chatgpt.com/connector_platform_oauth_redirect","http
 
 `ACCESS_OWNER_EMAIL` is optional. Actual deployment values belong in private service configuration outside the repository. Never print bearer tokens or Access JWTs. Existing sockets are refused; graceful shutdown removes owned sockets. Inspect stale paths before removal after a crash.
 
+`MCP_GRANT_MAX_SECONDS` optionally lowers the deployment's maximum grant duration to one of the supported duration values. Both the displayed options and backend validation enforce it. The default becomes the longest permitted option when the normal 30-day default exceeds the limit. The Linux deployment uses `3600` to preserve its existing one-hour access policy; leaving the setting unset preserves the normal 30-day default and one-year maximum.
+
 Route the MCP hostname to the public socket. Route the exact approval path on the terminal hostname to the approval socket before the terminal catch-all, preserving existing origin-side Access validation. The MCP hostname uses application OAuth and must not require interactive Access login for metadata/token/MCP requests. Preserve terminal/upload protection. Back up and validate ingress before changing it. Do not restart ttyd or tmux.
 
 ## Durable connections and revocation
@@ -46,6 +48,10 @@ Official callback sources checked 2026-11-05:
 - [MCP authorization](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-11-25/basic/authorization.mdx).
 
 The authorization metadata advertises RFC 9207 issuer identification, and both approval and denial redirects return the exact issuer as `iss`. ChatGPT then uses its stable callback rather than a callback-ID-specific URI. Allowlist callbacks exactly; never wildcard. Clients must pass `resource` equal to `MCP_PUBLIC_URL` during authorization and exchange.
+
+The gateway advertises RFC 9207 issuer identification and returns its exact `issuer` as `iss` in both successful and denied authorization callbacks. This enables ChatGPT's stable callback URI above; without issuer identification, new ChatGPT connections use callback-specific URIs instead. See the current [OpenAI authentication documentation](https://developers.openai.com/plugins/build/auth).
+
+For connection diagnosis, `MCP_AUTH_LOG_REQUESTS=1` enables request summaries containing only the surface, allowlisted route, normalized HTTP method and response status. Queries, request bodies, headers and identities are omitted. Logging is disabled by default.
 
 ## Verification
 

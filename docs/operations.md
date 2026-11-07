@@ -1,5 +1,7 @@
 # Operations and verification
 
+For MCP deployments and connection failures, use the [MCP connection runbook](mcp-connection-runbook.md). A healthy service or metadata HTTP 200 does not prove a hosted-client connection.
+
 These procedures are a checklist, not a deployment recipe. Confirm the target device, account, approved identities, configuration owner, and maintenance window before any service or access change. Never collect credentials, cookies, private terminal contents, or personal file names as routine evidence.
 
 ## Before a change

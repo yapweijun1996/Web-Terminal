@@ -3,13 +3,14 @@ import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 const exec = promisify(execFile);
 export class TerminalController {
-  constructor({ server, session, tmux = process.env.TMUX_BIN || "tmux" }) {
+  constructor({ server, session, layout = "grouped", tmux = process.env.TMUX_BIN || "tmux" }) {
     if (
       !/^[A-Za-z0-9_-]{1,100}$/.test(server || "") ||
-      !/^[A-Za-z0-9_-]{1,100}$/.test(session || "")
+      (layout === "grouped" && !/^[A-Za-z0-9_-]{1,100}$/.test(session || "")) ||
+      !["grouped", "linux-tabs"].includes(layout)
     )
       throw Error("Dedicated tmux server and session required");
-    Object.assign(this, { server, session, tmux });
+    Object.assign(this, { server, session, layout, tmux });
   }
   async run(args) {
     return (
@@ -22,11 +23,9 @@ export class TerminalController {
   async list() {
     const data = await this.run([
       "list-panes",
-      "-s",
-      "-t",
-      `=${this.session}`,
+      ...(this.layout === "linux-tabs" ? ["-a"] : ["-s", "-t", `=${this.session}`]),
       "-F",
-      "#{pid}\t#{session_id}\t#{window_id}\t#{pane_id}\t#{window_index}\t#{pane_index}\t#{window_active}\t#{pane_active}\t#{pane_in_mode}",
+      "#{pid}\t#{session_id}\t#{window_id}\t#{pane_id}\t#{window_index}\t#{pane_index}\t#{window_active}\t#{pane_active}\t#{pane_in_mode}\t#{session_name}",
     ]);
     const panes = data
       .trim()
@@ -43,6 +42,7 @@ export class TerminalController {
           wa,
           pa,
           mode,
+          sessionName,
         ] = line.split("\t");
         return {
           serverPid,
@@ -53,8 +53,10 @@ export class TerminalController {
           paneIndex: Number(paneIndex),
           active: wa === "1" && pa === "1",
           inMode: mode === "1",
+          ...(this.layout === "linux-tabs" ? { sessionName } : {}),
         };
-      });
+      })
+      .filter((pane) => this.layout !== "linux-tabs" || /^(shared|web-[a-f0-9]{12})$/.test(pane.sessionName));
     const names = new Map();
     for (const pane of panes)
       if (!names.has(pane.windowId))
@@ -84,23 +86,22 @@ export class TerminalController {
       !/^%\d+$/.test(t.paneId)
     )
       throw Error("Invalid target");
-    if (
-      !(await this.list()).some((p) =>
-        ["serverPid", "sessionId", "windowId", "paneId"].every(
-          (k) => p[k] === t[k],
-        ),
-      )
-    )
-      throw Error("Target changed");
+    const current = (await this.list()).find((p) =>
+      ["serverPid", "sessionId", "windowId", "paneId"].every((k) => p[k] === t[k]),
+    );
+    if (!current) throw Error("Target changed");
+    return current;
   }
   async guarded(t, command, allowMode = false) {
-    await this.validate(t);
+    const current = await this.validate(t);
     const checks = [
       `#{==:#{pid},${t.serverPid}}`,
       `#{==:#{session_id},${t.sessionId}}`,
       `#{==:#{window_id},${t.windowId}}`,
       `#{==:#{pane_id},${t.paneId}}`,
     ];
+    if (this.layout === "linux-tabs")
+      checks.push(`#{==:#{session_name},${current.sessionName}}`);
     if (!allowMode) checks.push("#{==:#{pane_in_mode},0}");
     const cond = checks.reduce((a, b) => `#{&&:${a},${b}}`);
     const result = await this.run([
@@ -173,6 +174,10 @@ export class TerminalController {
   }
   async select(t) {
     await this.validate(t);
+    if (this.layout === "linux-tabs") {
+      await this.guarded(t, `select-window -t ${t.sessionId}:${t.windowId} ; select-pane -t ${t.paneId}`, true);
+      return { selected: true, views: 1, sessionName: (await this.list()).find((p) => p.sessionId === t.sessionId)?.sessionName };
+    }
     const group = (
       await this.run([
         "display-message",
@@ -203,7 +208,14 @@ export class TerminalController {
   async newWindow() {
     const [first] = await this.list();
     if (!first) throw Error("Workspace unavailable");
-    await this.guarded(first, `new-window -d -t ${first.sessionId}:`, true);
+    if (this.layout === "linux-tabs") {
+      if (new Set((await this.list()).map((p) => p.sessionId)).size >= 20)
+        throw Error("Terminal limit reached");
+      const name = `web-${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+      await this.guarded(first, `new-session -d -e PI_CLIPBOARD_OSC52=1 -s ${name}`, true);
+    } else {
+      await this.guarded(first, `new-window -d -t ${first.sessionId}:`, true);
+    }
     return this.list();
   }
 }

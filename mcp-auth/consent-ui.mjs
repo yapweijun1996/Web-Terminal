@@ -394,11 +394,12 @@ export function renderConsent({
     clientName,
   )}</div><div class="caption">Wants access to your Web Terminal</div></div></div>`;
   const permissions = `<ul class="permission-list"><li><span class="check" aria-hidden="true">✓</span><div><strong>Read your terminal screen</strong><p>See the windows, panes and output you share.</p></div></li><li><span class="check" aria-hidden="true">✓</span><div><strong>Type and run commands</strong><p>Enter text, press keys and submit commands in your visible terminal.</p></div></li><li><span class="check" aria-hidden="true">✓</span><div><strong>Work in shared tabs</strong><p>Switch panes and create tabs alongside your existing work.</p></div></li></ul>`;
+  const maximum = durations.at(-1)?.label || "the selected duration";
   const form = `<form method="post"><input type="hidden" name="request" value="${escape(
     requestId,
   )}"><input type="hidden" name="csrf" value="${escape(
     csrf,
-  )}"><div class="field"><label for="duration">Allow access for</label><select id="duration" name="duration" aria-describedby="duration-hint">${options}</select><p id="duration-hint" class="hint">Starts when you allow access. Choose up to 1 year (365 days).</p></div><div class="actions"><button class="primary" name="decision" value="allow">Allow access</button><button class="secondary" name="decision" value="deny">Deny</button></div></form><p class="footnote">Access ends automatically after the selected duration. You can revoke it anytime in connected apps.</p><details class="details"><summary>Connection details</summary><p class="caption">After authorization, return to:</p><p class="callback">${escape(
+  )}"><div class="field"><label for="duration">Allow access for</label><select id="duration" name="duration" aria-describedby="duration-hint">${options}</select><p id="duration-hint" class="hint">Starts when you allow access. Maximum: ${escape(maximum)}.</p></div><div class="actions"><button class="primary" name="decision" value="allow">Allow access</button><button class="secondary" name="decision" value="deny">Deny</button></div></form><p class="footnote">Access ends automatically after the selected duration. You can revoke it anytime in connected apps.</p><details class="details"><summary>Connection details</summary><p class="caption">After authorization, return to:</p><p class="callback">${escape(
     redirectUri,
   )}</p></details>`;
   return page(

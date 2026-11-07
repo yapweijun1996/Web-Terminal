@@ -80,6 +80,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
       approvalUrl: origin + "/authorize",
       redirectUris: [origin + "/fixture/callback"],
       upstreamSocket: path.join(dir, "unused.sock"),
+      maxGrantSeconds: process.env.MCP_TEST_MAX_GRANT_SECONDS,
     },
     async () => true,
   );
@@ -156,6 +157,16 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
     );
     if (process.env.BASELINE_ONLY === "1") return;
     policyOverride = undefined;
+    if (process.env.MCP_CONSENT_SCREENSHOT_DIR) {
+      fs.mkdirSync(process.env.MCP_CONSENT_SCREENSHOT_DIR, { recursive: true });
+      for (const width of [390, 768, 1440]) {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.goto(await start());
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+        assert.ok((await page.getByRole("button", { name: "Allow access", exact: true }).boundingBox()).height >= 44);
+        await page.screenshot({ path: path.join(process.env.MCP_CONSENT_SCREENSHOT_DIR, `consent-${width}.png`), fullPage: true });
+      }
+    }
     for (const decision of ["Deny", "Allow access"]) {
       await page.goto(await start());
       await page.getByRole("button", { name: decision, exact: true }).click();

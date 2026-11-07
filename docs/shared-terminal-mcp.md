@@ -1,5 +1,15 @@
 # Shared terminal MCP
 
+For target identification, DNS checks and the difference between service health and real connector acceptance, read the [MCP connection runbook](mcp-connection-runbook.md).
+
+## Linux independent tabs
+
+The Linux deployment uses `WEB_TERMINAL_MCP_LAYOUT=linux-tabs` with its existing dedicated tmux server. Listings expose only `shared` and `web-<12 hexadecimal digits>` sessions and include `sessionName`. The owner switches browser tabs manually and refreshes to discover a newly created session. Other sessions on the same server remain excluded.
+
+Linux OAuth uses the shared styled consent and recovery pages, exact Origin and CSRF validation, RFC 9207 issuer identification and durable grant storage. `MCP_GRANT_MAX_SECONDS=3600` preserves the Linux one-hour authorization policy. Changing the gateway from the earlier in-memory release requires reconnecting once; subsequent registered clients and issued grants survive gateway restart. An unfinished authorization request remains short-lived and must be restarted from the client.
+
+The repository's newer MCP runtime has additional tools and deliberately disables direct tmux input. The Linux runtime deployed before this OAuth-only update remains on its separate six-tool release. Do not deploy all of `main` as part of an OAuth page update or infer runtime capabilities from the source tree.
+
 The MCP server can view the dedicated tmux workspace used by the browser terminal. MCP clients cannot type into it; the owner retains direct browser and tmux controls.
 
 ## Tools
