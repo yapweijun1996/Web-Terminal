@@ -188,5 +188,6 @@ try {
   await stop(ui);
   if (proxy) { proxy.closeAllConnections(); proxy.close(); }
   spawnSync('tmux', ['-L', tmuxSocket, 'kill-server'], { env });
+  fs.rmSync(path.join(process.env.TMUX_TMPDIR || os.tmpdir(), `tmux-${process.getuid()}`, tmuxSocket), { force: true });
   fs.rmSync(directory, { recursive: true, force: true });
 }
