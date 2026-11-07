@@ -1,12 +1,12 @@
 # Web Terminal
 
-An owner-operated browser terminal for accessing a computer through Cloudflare Access and Tunnel. Its implementations use ttyd and tmux to provide terminal views and reconnectable sessions.
+An owner-operated browser terminal for accessing a computer through Cloudflare Access and Tunnel. The Mac and Linux implementations use ttyd and tmux; the native Windows adapter uses ConPTY and persistent per-shell worker processes.
 
 ## Repository status
 
 The repository contains a [Linux implementation snapshot](docs/linux-implementation.md) and a reconstructed Mac development candidate in [client](client/README.md) and `runtime/`. The running Linux and Mac deployments are maintained separately and are not automatically synchronized with this repository. Importing these files did not deploy them; complete behavior parity remains unverified.
 
-On 2026-11-04, the observed Linux environment used Ubuntu 24.04 ARM64, ttyd 1.7.4, tmux 3.4, cloudflared 2026.10.0 and Node.js 22.23.3. The observed Mac environment used ttyd 1.7.7, tmux 3.6a and cloudflared 2025.11.1. These are observations, not repository-pinned dependencies. Windows and WSL remain unverified.
+On 2026-11-04, the observed Linux environment used Ubuntu 24.04 ARM64, ttyd 1.7.4, tmux 3.4, cloudflared 2026.10.0 and Node.js 22.23.3. The observed Mac environment used ttyd 1.7.7, tmux 3.6a and cloudflared 2025.11.1. These are observations, not repository-pinned dependencies. A separate [native Windows adapter](windows/README.md) has local PowerShell and Access fixture verification, verified public Access redirects and owner-confirmed basic browser terminal operation. Full browser lifecycle, revocation and logon-startup acceptance remain pending. WSL deployment remains unverified.
 
 ## Documentation
 

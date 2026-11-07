@@ -1,0 +1,28 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #101216; color: #e6e8ec; }
+* { box-sizing: border-box; }
+body { margin: 0; height: 100dvh; display: flex; flex-direction: column; }
+header { min-height: 54px; display: flex; align-items: center; flex-wrap: wrap; gap: 14px; padding: 9px 16px; border-bottom: 1px solid #2b3039; background: #171a20; }
+header strong { font-size: 15px; }
+#connection { color: #a8b2c5; font-size: 12px; }
+.actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+button { font: inherit; font-size: 12px; color: inherit; background: #242a34; border: 1px solid #394151; border-radius: 5px; padding: 7px 10px; cursor: pointer; }
+button:hover { background: #343d4c; }
+button:focus-visible { outline: 2px solid #83b8ff; outline-offset: 2px; }
+button:disabled { opacity: .45; cursor: default; }
+.danger { color: #f7aaa6; }
+#tabs { display: flex; min-height: 40px; flex-shrink: 0; overflow-x: auto; gap: 2px; background: #171a20; }
+.tab { display: flex; align-items: stretch; border-bottom: 2px solid transparent; }
+.tab.active { border-color: #83b8ff; background: #252b35; }
+.tab button { border: 0; border-radius: 0; background: transparent; white-space: nowrap; }
+.tab .hide { padding-left: 5px; padding-right: 9px; }
+#workspace { flex: 1; min-height: 0; position: relative; margin: 8px 10px; }
+.terminal-view { position: absolute; inset: 0; }
+.terminal-view[hidden] { display: none; }
+.xterm { height: 100%; }
+footer { padding: 6px 12px; color: #8b97aa; font-size: 11px; border-top: 1px solid #2b3039; }
+#empty { padding: 12px; color: #a8b2c5; }
+dialog { width: min(92vw, 480px); border: 1px solid #394151; border-radius: 10px; background: #171a20; padding: 22px; }
+dialog::backdrop { background: #0009; }
+dialog h2 { margin-top: 0; font-size: 18px; }
+#session-list { display: grid; gap: 8px; margin-bottom: 18px; }
+@media (max-width: 650px) { header { gap: 8px; padding: 9px; } .actions { width: 100%; margin: 0; } footer { font-size: 10px; } }

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MBA collaboration local demo</title>
+<style>
+body { background:#10151c; color:#e3eaf2; font:16px system-ui; margin:24px auto; padding:0 16px; max-width:1000px }
+button,input { font:inherit; padding:10px; margin:4px; border-radius:5px } button { cursor:pointer }
+button[aria-pressed=true] { background:#84d3fa } button:disabled { cursor:default; opacity:.5 }
+pre { background:#060a10; border:1px solid #536071; padding:12px; min-height:360px; max-height:60vh; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere }
+.warning { color:#ffce81 } #text { width:min(65%,600px) }
+</style>
+<h1>MBA-Terminal collaboration MVP</h1>
+<p class="warning">LOCAL DEMO NOT AUTHENTICATED PRODUCTION — LOCAL EXPERIMENTAL</p>
+<p id="mode">Disposable /bin/cat fixtures. Selection belongs to this browser view. Output is a plain streaming transcript.</p>
+<nav aria-label="Local pane selection">
+<button data-pane="1" aria-pressed="false">Pane 1</button>
+<button data-pane="2" aria-pressed="false">Pane 2</button>
+</nav>
+<p id="state" role="status">Connecting; watch-only by default</p>
+<pre id="output" aria-label="Live read-only output"></pre>
+<button id="claim" disabled>Claim writer lease</button>
+<button id="release" disabled>Release lease</button>
+<form id="input"><input id="text" aria-label="Text for selected disposable pane" maxlength="1000" autocomplete="off" disabled><button id="send" disabled>Send text + Enter</button></form>
+<p id="notice" role="status"></p>
+<script src="/client.js" defer></script>
+</html>

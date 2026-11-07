@@ -87,6 +87,58 @@ function createUploadTargets(server, tmux = 'tmux') {
         '#{||:#{==:#{pane_mode},copy-mode},#{==:#{pane_mode},copy-mode-vi}}',
         `send-keys -X -t ${record.target.pane} cancel`);
     },
+    async windows(view, session, sessionId, pane, serverPid, action = 'list', windowId, browserTabs = false) {
+      const captured = await this.capture(view, session, sessionId, pane, serverPid);
+      const record = lookup(captured.ticket);
+      tickets.delete(captured.ticket);
+      if (!record?.target) throw new Error('Target unavailable');
+      if (!['list', 'native', 'select', 'close'].includes(action)) throw new Error('Window action unavailable');
+      const setViewStatus = async value => {
+        // Session-local option: other grouped views and workspace stay unchanged.
+        const condition = `#{&&:#{==:#{pid},${serverPid}},#{==:#{session_id},${sessionId}}}`;
+        const output = await command('if-shell', '-F', '-t', `${sessionId}:`, condition,
+          `set-option -t ${sessionId} status ${value} ; display-message -p WT_STATUS_OK`,
+          'display-message -p WT_STATUS_UNAVAILABLE');
+        if (output.trim() !== 'WT_STATUS_OK') throw new Error('View unavailable');
+      };
+      // Restoring navigation must work even when listing windows is unavailable.
+      if (action === 'native') {
+        const saved = (await command('show-options', '-qv', '-t', sessionId, '@web-terminal-native-status')).trim();
+        await setViewStatus(/^(?:on|off|[1-5])$/.test(saved) ? saved : 'on');
+        await command('set-option', '-u', '-t', sessionId, '@web-terminal-native-status');
+        return { restored: true };
+      }
+      if (action === 'select' || action === 'close') {
+        if (typeof windowId !== 'string' || !/^@\d+$/.test(windowId)) throw new Error('Window unavailable');
+        // Resolve in the confirmed view, then guard identity and last-window
+        // preservation in tmux's command queue, not in a read-then-kill check.
+        const condition = `#{&&:#{==:#{pid},${serverPid}},#{&&:#{==:#{session_id},${sessionId}},#{&&:#{==:#{window_id},${windowId}},${action === 'close' ? '#{>:#{session_windows},1}' : '1'}}}}`;
+        const output = await command('if-shell', '-F', '-t', `${sessionId}:${windowId}`, condition,
+          `${action === 'close' ? 'kill-window' : 'select-window'} -t ${sessionId}:${windowId} ; display-message -p WT_WINDOW_OK`,
+          'display-message -p WT_WINDOW_UNAVAILABLE');
+        if (output.trim() !== 'WT_WINDOW_OK') throw new Error('Window unavailable or last window');
+      }
+      const rows = (await command('list-windows', '-t', sessionId, '-F', '#{window_id}|#{window_index}|#{window_active}')).trim().split('\n');
+      if (rows.length > 100) throw new Error('Window list unavailable');
+      const windows = [];
+      for (const row of rows.slice(0, 100)) {
+        const match = /^(@\d+)\|(\d+)\|([01])$/.exec(row);
+        if (!match) throw new Error('Window list unavailable');
+        const name = (await command('display-message', '-p', '-t', `${sessionId}:${match[1]}`, '#{window_name}')).replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 160).trim();
+        const process = (await command('display-message', '-p', '-t', `${sessionId}:${match[1]}`, '#{pane_current_command}')).replace(/[\x00-\x1f\x7f]/g, '').trim().split(/[\\/]/).pop().slice(0, 80);
+        windows.push({ id: match[1], index: match[2], active: match[3] === '1', name, process });
+      }
+      if (browserTabs) {
+        const saved = (await command('show-options', '-qv', '-t', sessionId, '@web-terminal-native-status')).trim();
+        if (!saved) {
+          const status = (await command('show-options', '-Av', '-t', sessionId, 'status')).trim();
+          if (!/^(?:on|off|[1-5])$/.test(status)) throw new Error('View status unavailable');
+          await command('set-option', '-t', sessionId, '@web-terminal-native-status', status);
+        }
+        await setViewStatus('off');
+      }
+      return { windows };
+    },
     async insert(ticket, requireCurrent = false) {
       const record = lookup(ticket);
       if (!record || !record.path || !record.target || record.busy) throw new Error('Target unavailable');

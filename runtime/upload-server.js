@@ -81,7 +81,7 @@ const server = http.createServer((req, res) => {
   if (req.headers.origin !== origin)
     return reply(res, 403, { error: "Origin not allowed" });
   const action = req.headers['x-terminal-action'];
-  if (action === 'capture' || action === 'insert' || action === 'insert-current' || action === 'result' || action === 'latest') {
+  if (action === 'capture' || action === 'insert' || action === 'insert-current' || action === 'result' || action === 'latest' || ['windows', 'select-window', 'close-window', 'native-tabs'].includes(action)) {
     if (req.headers['transfer-encoding'] || Number(req.headers['content-length'] || 0) !== 0)
       return reply(res, 400, { error: 'Unexpected request body' });
     if (controlActive >= 4) return reply(res, 429, { error: 'Too many target requests' });
@@ -96,7 +96,9 @@ const server = http.createServer((req, res) => {
       if (controlFinished) return;
       controlProcessing = true;
       try {
-        const result = action === 'capture' || action === 'latest'
+        const result = ['windows', 'select-window', 'close-window', 'native-tabs'].includes(action)
+          ? await targets.windows(req.headers['x-terminal-view'], req.headers['x-terminal-session'], req.headers['x-terminal-session-id'], req.headers['x-terminal-pane'], req.headers['x-terminal-server-pid'], action === 'windows' ? 'list' : action === 'native-tabs' ? 'native' : action === 'close-window' ? 'close' : 'select', req.headers['x-terminal-window'], req.headers['x-terminal-tabs'] === 'browser')
+          : action === 'capture' || action === 'latest'
           ? await targets[action === 'capture' ? 'capture' : 'returnToLive'](req.headers['x-terminal-view'], req.headers['x-terminal-session'], req.headers['x-terminal-session-id'], req.headers['x-terminal-pane'], req.headers['x-terminal-server-pid'])
           : action === 'result'
             ? targets.result(req.headers['x-terminal-target'])

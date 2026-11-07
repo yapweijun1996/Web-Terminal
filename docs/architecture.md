@@ -38,7 +38,7 @@ The undeployed candidate correlates each browser view with a dedicated grouped t
 
 Historical Skill evidence reports that a protected-site Chrome fixture tested ordinary shell scrolling and reconnect while preserving its fixture process, history, and unsent input. Isolated fixtures tested mouse reporting on primary and alternate screens and a separate Codex TUI. These results do **not** prove that the original running Codex pane was repaired: that pane had alternate screen enabled, mouse capture disabled, and its recorded `Ctrl+T` attempt did not open a transcript. Its cause remains unknown.
 
-Physical trackpad behavior, other browsers, unauthorized identities, long-duration behavior, and Windows and WSL operation remain unverified. Inspect the actual target and consult [operations](operations.md) before drawing a current-state conclusion.
+Physical trackpad behavior, other browsers, unauthorized identities and long-duration behavior remain unverified for those fixtures. Native Windows evidence is scoped separately below; WSL deployment remains unverified. Inspect the actual target and consult [operations](operations.md) before drawing a current-state conclusion.
 
 ## Linux implementation
 
@@ -48,6 +48,32 @@ The Linux candidate similarly passes tmux pane metadata through the embedded tty
 
 The UI does not verify Access JWTs itself. The upstream tunnel must validate each HTTP and WebSocket request; the origin socket must remain private. Other processes running as the same OS user are within the local trust boundary. Login expiry is not proof that an already-open WebSocket has been terminated.
 
+## Native Windows adapter
+
+The separate [Windows adapter](../windows/README.md) routes HTTPS through a
+dedicated Access-validating tunnel to a loopback Node HTTP/WebSocket service.
+The service also verifies Access JWT signature, issuer, audience, expiry and the
+configured owner email on every route and upgrade. Mutations require an exact
+Origin and request token. WebSocket connections close at JWT expiry; immediate
+revocation is a separate, unverified property.
+
+Each PowerShell shell runs through ConPTY in a dedicated worker process, with
+headless screen state retained by the service. Browser disconnects and hidden
+views leave the worker running; explicit End terminates it. This is separate
+from tmux: service restart, logout and reboot end its shells. Same-user local
+processes remain trusted. Upload and MCP routes are not implemented by this
+adapter. The launcher and owner-scoped interactive logon task manage only this
+terminal and connector. Local settings and tunnel credentials are excluded from
+Git. Native integration and owner-confirmed basic browser acceptance are
+documented in the adapter README; logon, revocation and full browser lifecycle
+acceptance remain incomplete.
+
 ## Authoritative sources and ownership
 
 The running host configuration and source are the authority for its current behavior; Cloudflare configuration and identity-provider policy determine the actual remote access boundary. The imported Linux files are a snapshot and are not automatically deployed. The [reconstructed Mac development candidate](../client/README.md) is also separate from the live service; its runtime configuration is explicitly supplied and its socket guard differs from the live script. Full parity remains to be established. The KB Skill owns the reusable procedure, not authorization or current runtime truth. See the [roadmap](improvement-roadmap.md) for the path to a reviewable source of truth.
+
+### Mac window controls candidate
+
+The Mac browser strip uses the existing private same-origin control endpoint to list, select and close windows in its confirmed grouped view. The inline × hides through browser-local state; the separate End window modal captures a stable tmux window ID; the backend validates view/session/pane metadata and checks server PID, session ID, window identity and remaining window count in tmux before a close. It uses `kill-window`, preserving the session and other windows. Shared grouped views observe the same window deletion. Browser-list opt-in hides the native status row in the validated grouped view only; a reachable list failure restores its saved status before hiding browser controls. The workspace/global defaults and legacy views retain their native status. A completely unavailable control service requires recovery or a fresh connection for native navigation. The browser strip, scoped toolbar CSS and paired control backend received an owner-authorized minimal live port on 2026-11-06; TASK.md records the isolated and authenticated live acceptance separately. The full repository runtime remains a separately maintained candidate.
+
+The IDE-style strip stores names, pin/order and hidden state by server PID/window ID in browser storage. Those preferences never mutate tmux. The searchable switcher includes hidden windows, confirmed process basenames and connection availability without claiming task health. All-hidden views conceal terminal output while retaining the attachment. Workspace tools reuses original toolbar nodes and handlers.

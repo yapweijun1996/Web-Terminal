@@ -5,3 +5,8 @@ client/dist/
 
 mcp/node_modules/
 mcp-auth/node_modules/
+artifacts/
+windows/node_modules/
+windows/*.local.json
+windows/*.local.yml
+windows/runtime/

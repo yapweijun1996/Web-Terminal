@@ -1,0 +1,7 @@
+{
+  "hostname": "terminal.example.com",
+  "teamName": "replace-with-access-team",
+  "audience": "REPLACE_WITH_ACCESS_APPLICATION_AUDIENCE",
+  "allowedEmail": "owner@example.com",
+  "port": 8799
+}

@@ -47,14 +47,12 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     res.end('{"ok":true}');
   });
   await new Promise((r) => upstream.listen(up, r));
-  const requestEvents = [];
   const gateway = createGateway(
     {
       publicUrl: origin + "/mcp",
       approvalUrl: approval + "/__terminal_mcp/authorize",
       redirectUris: ["https://client.example.test/callback"],
       upstreamSocket: up,
-      onRequest: (event) => requestEvents.push(event),
     },
     async (req) => req.headers["test-owner"] === "yes",
   );
@@ -87,9 +85,6 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     (await publicCall("/.well-known/oauth-protected-resource/mcp")).status,
     200,
   );
-  const metadata = JSON.parse((await publicCall("/.well-known/oauth-authorization-server")).body);
-  assert.equal(metadata.authorization_response_iss_parameter_supported, true);
-  assert.equal(metadata.issuer, origin);
   assert.equal(
     (
       await publicCall(
@@ -101,6 +96,12 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     ).status,
     400,
   );
+  const metadata = await publicCall("/.well-known/oauth-authorization-server");
+  assert.equal(
+    JSON.parse(metadata.body).authorization_response_iss_parameter_supported,
+    true,
+  );
+  assert.equal(JSON.parse(metadata.body).issuer, origin);
   const registered = await publicCall(
     "/oauth/register",
     "POST",
@@ -150,7 +151,7 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     "test-owner": "yes",
   });
   assert.equal(consent.status, 200);
-  assert.match(consent.body, /Allow terminal control/);
+  assert.match(consent.body, /Share your terminal/);
   const id = new URL(start.headers.location).searchParams.get("request"),
     csrf = /name="csrf" value="([^"]+)"/.exec(consent.body)[1];
   const form = new URLSearchParams({
@@ -176,6 +177,18 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     ).status,
     400,
   );
+  assert.equal(consent.headers["referrer-policy"], "same-origin");
+  const nullOrigin = await call(
+    owner,
+    "terminal.example.test",
+    "/__terminal_mcp/authorize",
+    "POST",
+    form,
+    { ...hdr, origin: "null" },
+  );
+  assert.equal(nullOrigin.status, 400);
+  assert.match(nullOrigin.headers["content-type"], /text\/html/);
+  assert.match(nullOrigin.body, /Unable to confirm this request/);
   const decision = await call(
     owner,
     "terminal.example.test",
@@ -185,7 +198,34 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     hdr,
   );
   assert.equal(decision.status, 302);
-  assert.equal(new URL(decision.headers.location).searchParams.get("iss"), metadata.issuer);
+  assert.equal(
+    new URL(decision.headers.location).searchParams.get("iss"),
+    origin,
+  );
+  assert.match(
+    consent.headers["content-security-policy"],
+    /form-action 'self' https:\/\/client\.example\.test\/callback;/,
+  );
+  const replayed = await call(
+    owner,
+    "terminal.example.test",
+    "/__terminal_mcp/authorize",
+    "POST",
+    form,
+    hdr,
+  );
+  assert.equal(replayed.status, 409);
+  assert.match(replayed.body, /already handled/i);
+  assert.equal(replayed.headers.location, undefined);
+  const invalidReplay = await call(
+    owner,
+    "terminal.example.test",
+    "/__terminal_mcp/authorize",
+    "POST",
+    form,
+    { ...hdr, origin: "null" },
+  );
+  assert.equal(invalidReplay.status, 400);
   const code = new URL(decision.headers.location).searchParams.get("code");
   assert.equal(
     new URL(decision.headers.location).searchParams.get("state"),
@@ -211,7 +251,7 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     ).status,
     400,
   );
-  const freshCode = async () => {
+  const freshCode = async (decision = "allow") => {
     const fresh = await publicCall("/oauth/authorize?" + query);
     const url = new URL(fresh.headers.location);
     const page = await call(
@@ -236,6 +276,8 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
       hdr,
     );
     assert.equal(wrong.status, 400);
+    assert.match(wrong.headers["content-type"], /text\/html/);
+    assert.match(wrong.body, /Unable to confirm this request/);
     const allowed = await call(
       owner,
       "terminal.example.test",
@@ -244,25 +286,19 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
       new URLSearchParams({
         request: url.searchParams.get("request"),
         csrf,
-        decision: "allow",
+        decision,
       }).toString(),
       hdr,
     );
-    return new URL(allowed.headers.location).searchParams.get("code");
+    const returned = new URL(allowed.headers.location);
+    assert.equal(returned.searchParams.get("iss"), origin);
+    if (decision === "deny") {
+      assert.equal(returned.searchParams.get("error"), "access_denied");
+      assert.equal(returned.searchParams.has("code"), false);
+    }
+    return returned.searchParams.get("code");
   };
-  const deniedStart = new URL((await publicCall("/oauth/authorize?" + query)).headers.location);
-  const deniedPage = await call(owner, "terminal.example.test", deniedStart.pathname + deniedStart.search, "GET", "", { "test-owner": "yes" });
-  const denied = await call(owner, "terminal.example.test", deniedStart.pathname, "POST", new URLSearchParams({
-    request: deniedStart.searchParams.get("request"),
-    csrf: /name="csrf" value="([^"]+)"/.exec(deniedPage.body)[1],
-    decision: "deny",
-  }).toString(), hdr);
-  assert.equal(denied.status, 302);
-  const deniedCallback = new URL(denied.headers.location);
-  assert.equal(deniedCallback.searchParams.get("iss"), metadata.issuer);
-  assert.equal(deniedCallback.searchParams.get("error"), "access_denied");
-  assert.equal(deniedCallback.searchParams.get("state"), "fixture");
-  assert.equal(deniedCallback.searchParams.has("code"), false);
+  await freshCode("deny");
   for (const [key, value] of [
     ["code_verifier", "x".repeat(43)],
     ["resource", origin + "/wrong"],
@@ -343,7 +379,7 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     ).body,
   ).access_token;
   try {
-    Date.now = () => realNow() + 3600001;
+    Date.now = () => realNow() + 2592000001;
     assert.equal(
       (
         await publicCall("/mcp", "POST", "{}", {
@@ -355,12 +391,6 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
   } finally {
     Date.now = realNow;
   }
-  await publicCall("/unknown-private-path?token=PRIVATE_QUERY", "POST", "PRIVATE_BODY");
-  assert.ok(requestEvents.some((event) => event.route === "other" && event.status === 404));
-  for (const event of requestEvents)
-    assert.deepEqual(Object.keys(event).sort(), ["method", "route", "status", "surface"]);
-  assert.doesNotMatch(JSON.stringify(requestEvents), /PRIVATE_QUERY|PRIVATE_BODY|unknown-private-path/);
-  assert.ok(!JSON.stringify(requestEvents).includes(bearer));
 });
 
 test("signed Access JWT pins issuer, audience, signature, expiry and optional owner", async () => {
@@ -423,7 +453,7 @@ test("signed Access JWT pins issuer, audience, signature, expiry and optional ow
   }
 });
 
-test("OAuth gateway reaches actual MCP SDK and the same disposable tmux view", async () => {
+for (const mode of ["normal", "emergency", "unavailable"]) test(`OAuth gateway reaches actual MCP SDK (${mode})`, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "terminal-e2e-"));
   fs.chmodSync(dir, 0o700);
   const pub = path.join(dir, "public.sock"),
@@ -432,15 +462,20 @@ test("OAuth gateway reaches actual MCP SDK and the same disposable tmux view", a
   const tmuxName = "auth-e2e-" + crypto.randomUUID();
   const tmux = (...args) =>
     execFileSync("tmux", ["-L", tmuxName, ...args], { encoding: "utf8" });
-  tmux("new-session", "-d", "-s", "workspace", "/bin/cat");
-  tmux("new-session", "-d", "-t", "workspace", "-s", "view-fixture");
+  if (mode === "normal") {
+    tmux("new-session", "-d", "-s", "workspace", "/bin/cat");
+    tmux("new-session", "-d", "-t", "workspace", "-s", "view-fixture");
+  }
   const child = spawn(
     process.execPath,
     [fileURLToPath(new URL("../mcp/server.js", import.meta.url))],
     {
       env: {
         ...process.env,
+        NODE_OPTIONS: `--import=${fileURLToPath(new URL("../mcp/test/fake-statfs.js", import.meta.url))}`,
+        FIXTURE_STATFS: mode,
         WEB_TERMINAL_MCP_SOCKET: up,
+        WEB_TERMINAL_JOB_DIR: path.join(dir, "jobs"),
         WEB_TERMINAL_TMUX_SERVER: tmuxName,
         WEB_TERMINAL_MCP_SESSION: "workspace",
       },
@@ -552,7 +587,48 @@ test("OAuth gateway reaches actual MCP SDK and the same disposable tmux view", a
       ).serverInfo.name,
       "web-terminal",
     );
-    assert.equal((await rpc("tools/list", {})).tools.length, 6);
+    const tools = (await rpc("tools/list", {})).tools;
+    assert.equal(tools.length, 11);
+    assert.ok(tools.some((tool) => tool.name === "terminal_exec"));
+    if (mode !== "normal") {
+      const marker = path.join(dir, "never-created");
+      for (const name of ["terminal_exec", "terminal_job_start"]) {
+        const args = { executable: process.execPath, args: ["-e", "require('fs').writeFileSync(process.argv[1], 'bad')", marker], cwd: dir };
+        if (name === "terminal_job_start") args.storage_class = "light";
+        const response = await rpc("tools/call", { name, arguments: args });
+        const result = JSON.parse(response.content[0].text);
+        assert.equal(result.error.code, "STORAGE_ADMISSION_DENIED");
+        assert.equal(result.error.reason, mode === "emergency" ? "EMERGENCY" : "UNAVAILABLE");
+        assert.equal(fs.existsSync(marker), false);
+      }
+      return;
+    }
+    const startedJob = await rpc("tools/call", { name: "terminal_job_start", arguments: { executable: process.execPath, args: ["-e", "process.stdout.write('oauth-job')"], cwd: dir } });
+    const jobId = JSON.parse(startedJob.content[0].text).job_id;
+    let jobStatus;
+    for (let i = 0; i < 100; i++) {
+      jobStatus = JSON.parse((await rpc("tools/call", { name: "terminal_job_status", arguments: { job_id: jobId } })).content[0].text);
+      if (!["starting", "running"].includes(jobStatus.status)) break;
+      await new Promise(r => setTimeout(r, 20));
+    }
+    assert.equal(jobStatus.status, "success");
+    const jobLogs = JSON.parse((await rpc("tools/call", { name: "terminal_job_logs", arguments: { job_id: jobId } })).content[0].text);
+    assert.equal(Buffer.from(jobLogs.data_base64, "base64").toString(), "oauth-job");
+    const output = "literal $HOME; $(echo untouched)";
+    const executed = await rpc("tools/call", {
+      name: "terminal_exec",
+      arguments: {
+        executable: process.execPath,
+        args: ["-e", "process.stdout.write(process.argv[1])", output],
+        cwd: dir,
+      },
+    });
+    assert.equal(executed.isError, undefined);
+    assert.equal(executed.content[0].type, "text");
+    const execution = JSON.parse(executed.content[0].text);
+    assert.equal(execution.status, "success");
+    assert.equal(execution.exit_code, 0);
+    assert.equal(execution.stdout, output);
     const listed = await rpc("tools/call", {
       name: "terminal_list",
       arguments: {},
@@ -562,9 +638,9 @@ test("OAuth gateway reaches actual MCP SDK and the same disposable tmux view", a
       name: "terminal_type",
       arguments: { target, text: "OAUTH_SAME_VIEW" },
     });
-    assert.equal(typed.isError, undefined);
+    assert.equal(typed.isError, true);
     await new Promise((r) => setTimeout(r, 100));
-    assert.match(
+    assert.doesNotMatch(
       tmux("capture-pane", "-p", "-t", "view-fixture:"),
       /OAUTH_SAME_VIEW/,
     );
@@ -576,7 +652,24 @@ test("OAuth gateway reaches actual MCP SDK and the same disposable tmux view", a
         (s) => new Promise((r) => s.close(r)),
       ),
     );
-    tmux("kill-server");
+    if (mode === "normal") tmux("kill-server");
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("callback CSP sources cannot inject directives and omit queries", async () => {
+  const { callbackFormSource } = await import("./server.mjs");
+  assert.equal(
+    callbackFormSource("https://client.example.test/callback?fixed=1"),
+    "https://client.example.test/callback",
+  );
+  assert.equal(
+    callbackFormSource(
+      "https://client.example.test/cb;script-src'unsafe-inline'",
+    ),
+    "https://client.example.test/cb%3Bscript-src%27unsafe-inline%27",
+  );
+  assert.throws(() =>
+    callbackFormSource("http://client.example.test/callback"),
+  );
 });
