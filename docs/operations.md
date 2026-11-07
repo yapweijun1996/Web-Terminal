@@ -71,6 +71,16 @@ For the recorded ttyd 1.7.7 Mac bundle, historical fixture evidence found that a
 
 Consult the [lifecycle matrix](lifecycle-matrix.md) before assuming that a session survives a resize, disconnect, restart, sleep, logout or reboot on a given platform.
 
+## Deploying the Linux UI
+
+Observed on the Linux host on 2026-11-07; recheck the unit files before relying on this.
+
+- `linux-web-terminal-tunnel.service` declares `Requires=linux-web-terminal-ui.service`. An explicit `systemctl --user restart linux-web-terminal-ui` therefore also stops and restarts the tunnel. On the observed deployment cloudflared needed about 30 seconds to stop gracefully, and the terminal hostname was briefly unreachable. ttyd (`linux-web-terminal.service`), tmux, the MCP services and the system-level tunnel were not restarted.
+- Treat a UI restart as a tunnel restart: obtain the explicit authorization required by the [connection runbook](mcp-connection-runbook.md) first, and read the dependent unit files (`systemctl --user show <unit> -p Requires -p After`) before choosing a restart.
+- The UI server reads `index.html`, `app.js`, the stylesheets and the other listed assets from disk on each request. Editing an existing asset does not require a restart. A new asset needs an explicit route in `server.js`, and any `server.js` change requires a restart, so those changes need the tunnel authorization above.
+- Before copying files, back up the live `ui/` directory. Rollback is the same copy in reverse and, if `server.js` changed, a restart with the same tunnel consequence.
+- After a restart, compare tmux session names and pane PIDs with the values captured beforehand, confirm the live files match the merged revision, and check that an unauthenticated public request still redirects to Access. These checks do not show what a signed-in browser displays; verify that separately.
+
 ## Rollback principles
 
 Restore only the exact component changed, using the captured prior configuration. Identify jobs before a restart, logout, removal, or process termination; preserve the tmux server and unrelated tunnels. Verify the restored access boundary and report any lost or unverified behavior. Do not delete retained uploads or other user data as part of routine cleanup; remove only owned disposable test artifacts.
