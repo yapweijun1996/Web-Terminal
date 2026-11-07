@@ -24,7 +24,21 @@ function controllerFixture({ narrow = true } = {}) {
         remove: name => { this.className = this.className.split(' ').filter(value => value !== name).join(' '); },
       };
     }
-    append(...children) { for (const child of children) { child.parentElement = this; this.children.push(child); } }
+    remove() {
+      if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(child => child !== this);
+      this.parentElement = null;
+    }
+    append(...children) { for (const child of children) { child.remove(); child.parentElement = this; this.children.push(child); } }
+    prepend(...children) {
+      for (const child of children) child.remove();
+      for (const child of children) child.parentElement = this;
+      this.children.unshift(...children);
+    }
+    before(child) {
+      child.remove();
+      child.parentElement = this.parentElement;
+      this.parentElement.children.splice(this.parentElement.children.indexOf(this), 0, child);
+    }
     setAttribute(name, value) { this.attributes[name] = String(value); }
     matches(selector) {
       return selector.split(',').some(part => {
@@ -101,9 +115,18 @@ function controllerFixture({ narrow = true } = {}) {
   add('div', 'sidebar-resizer'); add('button', 'sidebar-backdrop');
   const main = add('main', 'main');
   add('button', 'sidebar-toggle', main);
+  const actions = add('div', 'session-actions', main);
+  for (const id of ['new-session', 'reconnect', 'fullscreen']) add('button', id, actions);
   const menu = add('details', 'toolbar-menu', main);
-  add('summary', 'menu-summary', menu); add('button', 'rename-tab', menu);
-  add('select', 'theme', menu); add('input', 'menu-input', menu); add('textarea', 'menu-textarea', menu);
+  add('summary', 'menu-summary', menu);
+  const panel = add('div', 'toolbar-menu-panel', menu);
+  add('button', 'rename-tab', panel);
+  add('select', 'theme', panel); add('input', 'menu-input', panel); add('textarea', 'menu-textarea', panel);
+  const viewActions = add('div', 'view-actions', main);
+  add('button', 'keys-toggle', viewActions);
+  add('button', 'latest', main);
+  const connection = add('div', 'connection', main); connection.className = 'connection';
+  add('button', 'retry', connection);
   add('button', 'outside', main);
   const dialog = add('dialog', 'close-dialog'); add('button', 'dialog-cancel', dialog);
   const media = matches => ({
@@ -260,4 +283,49 @@ test('toolbar menu dismisses on outside pointerdown and focus leaving, not on in
   nodes['rename-tab'].focus();
   nodes['rename-tab'].dispatch('focusout', { relatedTarget: null });
   assert.equal(menu.open, false, 'focus leaving the document also dismisses');
+});
+
+test('narrow menu preserves action identity, keyboard activation and focus across breakpoint changes', () => {
+  const { document, nodes, narrowMedia } = controllerFixture({ narrow: false });
+  const create = nodes['new-session'];
+  let creations = 0;
+  create.addEventListener('click', () => creations++);
+  create.focus();
+  narrowMedia.change(true);
+  assert.equal(document.activeElement, create, 'a focused action stays reachable when it moves into the menu');
+  assert.equal(nodes['toolbar-menu'].open, true);
+  create.dispatch('keydown', { key: 'ArrowDown' });
+  assert.equal(document.activeElement, nodes.reconnect);
+  nodes.reconnect.dispatch('keydown', { key: 'Home' });
+  assert.equal(document.activeElement, create);
+  create.click();
+  assert.equal(creations, 1);
+  create.dispatch('keydown', { key: 'Escape' });
+  assert.equal(nodes['toolbar-menu'].open, false);
+  assert.equal(document.activeElement, nodes['menu-summary']);
+  assert.equal(create.getClientRects().length, 0, 'closed menu actions must leave the tab order');
+  nodes['menu-summary'].dispatch('keydown', { key: 'ArrowDown' });
+  assert.equal(document.activeElement, create);
+  narrowMedia.change(false);
+  assert.equal(document.activeElement, create);
+  assert.equal(create.getClientRects().length, 1);
+  for (let index = 0; index < 3; index++) { narrowMedia.change(true); narrowMedia.change(false); }
+  create.click();
+  assert.equal(creations, 2, 'resizing never installs another action handler');
+  assert.equal(nodes['toolbar-menu'].contains(create), false);
+  assert.equal(nodes['toolbar-menu'].contains(nodes['keys-toggle']), false);
+  assert.equal(nodes.retry.parentElement, nodes.connection);
+});
+
+test('initial narrow layout includes retry and view controls in menu keyboard navigation', () => {
+  const { document, nodes } = controllerFixture();
+  nodes['menu-summary'].dispatch('keydown', { key: 'ArrowDown' });
+  assert.equal(document.activeElement, nodes['new-session']);
+  for (const id of ['reconnect', 'retry', 'keys-toggle']) {
+    document.activeElement.dispatch('keydown', { key: 'ArrowDown' });
+    assert.equal(document.activeElement, nodes[id]);
+  }
+  nodes['keys-toggle'].dispatch('keydown', { key: 'Escape' });
+  assert.equal(document.activeElement, nodes['menu-summary']);
+  assert.equal(nodes['toolbar-menu'].open, false);
 });

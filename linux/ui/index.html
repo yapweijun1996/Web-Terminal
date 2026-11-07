@@ -30,12 +30,14 @@
       <button id="sidebar-toggle" type="button" aria-label="Open session sidebar" aria-controls="sidebar" aria-expanded="false">☰</button>
       <div class="current-session"><strong id="current-name">No session</strong><span id="current-secondary">Disconnected</span></div>
       <div class="toolbar-actions">
-        <button id="new-session" type="button">New Session</button>
-        <button id="reconnect" type="button">Reconnect</button>
-        <button id="fullscreen" type="button" aria-pressed="false" hidden>Fullscreen</button>
+        <div id="session-actions" class="action-group">
+          <button id="new-session" type="button">New Session</button>
+          <button id="reconnect" type="button">Reconnect</button>
+          <button id="fullscreen" type="button" aria-pressed="false" hidden>Fullscreen</button>
+        </div>
         <details id="toolbar-menu">
           <summary aria-label="Session actions">...</summary>
-          <div class="menu-panel">
+          <div id="toolbar-menu-panel" class="menu-panel">
             <button id="rename-tab" type="button">Rename</button>
             <button id="restore" type="button" hidden>Restore hidden tabs</button>
             <button id="copy-selection" type="button" hidden>Copy selection</button>
@@ -57,6 +59,7 @@
         </details>
       </div>
       <div class="state-toolbar">
+        <div id="view-actions" class="action-group"></div>
         <button id="latest" type="button" title="Exit tmux copy mode; application scroll position is separate">Return to live</button>
         <div class="connection">
           <span id="status" role="status" aria-live="polite" tabindex="-1"></span>

@@ -68,6 +68,28 @@ const TerminalSidebar = (() => {
     const systemTheme = window.matchMedia?.('(prefers-color-scheme: dark)');
     const narrow = window.matchMedia?.('(max-width: 700px)');
     let scheduled = false;
+
+    // Reparent the original controls, so menu navigation and event handlers stay shared.
+    function placeToolbarActions() {
+      const panel = document.getElementById('toolbar-menu-panel');
+      const sessionActions = document.getElementById('session-actions');
+      const viewActions = document.getElementById('view-actions');
+      const latest = document.getElementById('latest');
+      const retry = document.getElementById('retry');
+      if (!panel || !sessionActions || !viewActions || !latest) return;
+      const focused = document.activeElement;
+      const movingFocus = sessionActions.contains(focused) || viewActions.contains(focused) || focused === retry;
+      if (narrow?.matches) {
+        panel.prepend(sessionActions, viewActions);
+        if (retry) sessionActions.append(retry);
+        if (movingFocus) menu.open = true;
+      } else {
+        menu.before(sessionActions);
+        latest.before(viewActions);
+        if (retry) document.querySelector('.connection')?.append(retry);
+      }
+      if (movingFocus) focused.focus();
+    }
     let drag = null;
 
     function refit() {
@@ -264,7 +286,12 @@ const TerminalSidebar = (() => {
       else media?.addListener?.(listener);
     }
     mediaListener(systemTheme, () => { if (prefs.theme === 'system') applyTheme(); });
-    mediaListener(narrow, () => { if (!narrow.matches) closeDrawer(false); refit(); });
+    mediaListener(narrow, () => {
+      if (!narrow.matches) closeDrawer(false);
+      placeToolbarActions();
+      refit();
+    });
+    placeToolbarActions();
     showWidth();
     applyTheme();
     return {
