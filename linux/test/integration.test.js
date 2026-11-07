@@ -4,12 +4,19 @@ const assert = require('node:assert/strict');
 const { spawn, spawnSync, execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// A socket file can exist before the server listens on it; only a successful connection proves readiness.
+const accepts = socketPath => new Promise(resolve => {
+  const probe = net.connect(socketPath);
+  probe.once('connect', () => { probe.destroy(); resolve(true); });
+  probe.once('error', () => resolve(false));
+});
 // Poll until done(value) or a deadline: fixed iteration counts fail on a briefly stalled machine.
 const until = async (read, done, timeoutMs = 10000, intervalMs = 20) => {
   const deadline = Date.now() + timeoutMs;
@@ -36,11 +43,11 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
   const ready = async () => {
     const deadline = Date.now() + 10000;
     while (Date.now() < deadline) {
-      if (server.exitCode !== null) throw new Error('fixture server exited');
-      if (fs.existsSync(socket)) return;
+      if (server.exitCode !== null || server.signalCode !== null) throw new Error(`fixture server exited (code ${server.exitCode}, signal ${server.signalCode})`);
+      if (await accepts(socket)) return;
       await sleep(50);
     }
-    throw new Error('fixture socket did not appear');
+    throw new Error('fixture socket never accepted a connection');
   };
   const request = (method, url, headers = {}, body) => new Promise((resolve, reject) => {
     const req = http.request({ socketPath: socket, method, path: url, headers: { host: 'fixture.test', ...headers } }, res => {
@@ -317,11 +324,11 @@ test('split API binds identity and pane limits to the active target window', asy
         TERMINAL_TEST_HTTP: '1', TERMINAL_UPLOAD_DIR: path.join(directory, 'uploads') },
       stdio: 'ignore',
     });
-    await until(() => {
-      assert.equal(server.exitCode, null, 'split fixture server remains running');
-      return fs.existsSync(socket);
+    await until(async () => {
+      assert.equal(server.exitCode, null, `split fixture server remains running (signal ${server.signalCode})`);
+      return accepts(socket);
     }, Boolean);
-    assert.ok(fs.existsSync(socket), 'split fixture socket appears');
+    assert.ok(await accepts(socket), 'split fixture socket accepts connections');
     const listing = await request('GET', '/api/sessions');
     assert.equal(listing.status, 200);
     const identityResponse = await request('GET', `/api/sessions/${name}/identity`);
