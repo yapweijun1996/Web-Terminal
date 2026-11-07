@@ -43,6 +43,15 @@ let closeSequence = 0;
 const frames = new Map();
 const connections = new Map();
 let sessionDetails = {};
+let metadataStale = false, tabViewKey = null;
+const missingPolls = new Map();
+function foregroundStatus(name) {
+  return metadataStale ? { state: 'Status unavailable', command: '' }
+    : window.TerminalSidebar.sessionStatus(sessions.includes(name) && !missingPolls.has(name), connections.get(name), sessionDetails[name]?.command);
+}
+function foregroundText(foreground) {
+  return `${foreground.state}${foreground.state === 'Running' && foreground.command ? ` · ${foreground.command}` : ''}`;
+}
 const sidebar = window.TerminalSidebar.create({
   getFrames: () => frames.values(),
   refit: () => {
@@ -80,8 +89,8 @@ function updateControls() {
   latest.disabled = !sessionReady || !active || returning;
   renameTab.disabled = !sessionReady || !active;
   currentName.textContent = active ? label(active) : 'No session';
-  const foreground = window.TerminalSidebar.sessionStatus(sessions.includes(active), connections.get(active), sessionDetails[active]?.command);
-  currentSecondary.textContent = `${foreground.state}${foreground.state === 'Running' && foreground.command ? ` · ${foreground.command}` : ''}`;
+  const foreground = foregroundStatus(active);
+  currentSecondary.textContent = foregroundText(foreground);
 }
 function showStatus(message, retryAction = null, link = message) {
   status.textContent = message;
@@ -269,7 +278,12 @@ function confirmClose(name, opener) {
   const cancelDialog = () => {
     if (closing) return;
     dialog.close();
-    if (opener.isConnected === false) renderTabs(name); else opener.focus();
+    if (opener.isConnected !== false && opener.getClientRects().length) opener.focus();
+    else {
+      const fallback = ['#sidebar-close', '#sidebar-toggle'].map(selector => document.querySelector(selector))
+        .find(element => element?.getClientRects().length);
+      fallback?.focus();
+    }
   };
   cancel.onclick = cancelDialog; dismiss.onclick = cancelDialog;
   dialog.oncancel = event => { event.preventDefault(); cancelDialog(); };
@@ -308,10 +322,24 @@ function renderTabs(focusName = null) {
   const focused = document.activeElement;
   const focusSession = focused?.dataset?.session;
   const focusAction = focused?.dataset?.action;
-  tabs.replaceChildren();
+  const focusRow = target => {
+    if (!target) return;
+    if (sidebar.isNarrow() && !sidebar.isDrawerOpen()) status.focus();
+    else { target.focus(); target.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+  };
   const pins = sidebar.prefs.pins;
   const query = document.querySelector('#session-search').value || '';
   const visible = window.TerminalSidebar.orderSessions(sessions.filter(n => !hidden.has(n)), pins, label, query);
+  const view = visible.map(name => [name, label(name), foregroundText(foregroundStatus(name)), pins.includes(name)]);
+  const key = JSON.stringify([view, active, sidebar.prefs.collapsed, query]);
+  restore.hidden = !sessions.some(n => hidden.has(n));
+  updateControls();
+  if (key === tabViewKey) {
+    if (focusName) focusRow(tabs.querySelector(`[data-session="${focusName}"][data-action="open"]`));
+    return;
+  }
+  tabViewKey = key;
+  tabs.replaceChildren();
   const resultCount = `${visible.length} ${visible.length === 1 ? 'session' : 'sessions'} found`;
   if (searchResults.textContent !== resultCount) searchResults.textContent = resultCount;
   const navigable = visible.filter(name => query || !sidebar.prefs.collapsed[pins.includes(name) ? 'Pinned' : 'Sessions']);
@@ -345,11 +373,11 @@ function renderTabs(focusName = null) {
         const next = ['ArrowRight', 'ArrowDown'].includes(event.key) ? navigable[(index + 1) % navigable.length]
           : ['ArrowLeft', 'ArrowUp'].includes(event.key) ? navigable[(index - 1 + navigable.length) % navigable.length]
             : event.key === 'Home' ? navigable[0] : event.key === 'End' ? navigable[navigable.length - 1] : null;
-        if (next) { event.preventDefault(); activate(next, true); sidebar.closeDrawer(); }
+        if (next) { event.preventDefault(); activate(next, true); }
       });
-      const foreground = window.TerminalSidebar.sessionStatus(sessions.includes(name), connections.get(name), sessionDetails[name]?.command);
-      const state = document.createElement('span'); state.className = `session-state ${foreground.state.toLowerCase()}`;
-      state.textContent = `${foreground.state}${foreground.state === 'Running' && foreground.command ? ` · ${foreground.command}` : ''}`;
+      const foreground = foregroundStatus(name);
+      const state = document.createElement('span'); state.className = `session-state ${metadataStale ? 'stale' : foreground.state.toLowerCase()}`;
+      state.textContent = foregroundText(foreground);
       const stateId = `session-state-${name}`; state.id = stateId;
       open.setAttribute('aria-describedby', stateId);
       const pin = document.createElement('button'); pin.type = 'button'; pin.className = 'pin';
@@ -369,12 +397,7 @@ function renderTabs(focusName = null) {
       else if (!focusName && name === focusSession) focusTarget = group.hidden ? heading : focusAction === 'pin' ? pin : focusAction === 'close' ? close : open;
     }
   }
-  restore.hidden = !sessions.some(n => hidden.has(n));
-  updateControls();
-  if (focusTarget) {
-    if (sidebar.isNarrow() && !sidebar.isDrawerOpen()) status.focus();
-    else { focusTarget.focus(); focusTarget.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
-  }
+  focusRow(focusTarget);
 }
 renameTab.addEventListener('click', () => {
   document.querySelector('#toolbar-menu').open = false;
@@ -424,6 +447,7 @@ async function load() {
     if (authRequired) throw Error('Authentication may be required');
     if (!response.ok) throw Error('Unable to load terminals');
     const data = await response.json(); sessions = data.sessions; sessionDetails = data.details || {}; token = data.token; sessionReady = true;
+    metadataStale = false; missingPolls.clear();
     const first = sessions.includes(active) && !hidden.has(active) ? active : sessions.find(n => !hidden.has(n));
     if (first) activate(first); else renderTabs();
     if (!first) { detailView.textContent = 'Unknown'; showStatus('No visible terminals', null, 'Unknown'); updateControls(); }
@@ -438,10 +462,20 @@ async function pollSessions() {
   const previousSessions = sessions;
   try {
     const response = await fetch('/api/sessions', { cache: 'no-store', redirect: 'manual' });
-    if (!response.ok || response.redirected || response.type === 'opaqueredirect') return;
+    if (!response.ok || response.redirected || response.type === 'opaqueredirect') throw Error('Status unavailable');
     const data = await response.json();
     if (sessions !== previousSessions || creating) return;
-    sessions = data.sessions; sessionDetails = data.details || {}; token = data.token;
+    const reported = new Set(data.sessions);
+    const retained = [];
+    for (const name of sessions) {
+      if (reported.has(name)) { missingPolls.delete(name); continue; }
+      const misses = (missingPolls.get(name) || 0) + 1;
+      if (misses < 2) { missingPolls.set(name, misses); retained.push(name); }
+      else missingPolls.delete(name);
+    }
+    const details = data.details || {};
+    for (const name of retained) details[name] = sessionDetails[name] || { command: '' };
+    sessions = [...data.sessions, ...retained]; sessionDetails = details; token = data.token; metadataStale = false;
     for (const name of frames.keys()) {
       if (!sessions.includes(name)) {
         frames.get(name).remove(); frames.delete(name); connections.delete(name); scrollModes.delete(name);
@@ -451,9 +485,12 @@ async function pollSessions() {
       active = null;
       const next = sessions.find(name => !hidden.has(name));
       if (next) activate(next, true);
-      else { showStatus('No visible terminals', null, 'Unknown'); renderTabs(); }
+      else { detailView.textContent = 'Unknown'; showStatus('No visible terminals', null, 'Unknown'); renderTabs(); }
     } else renderTabs();
-  } catch { /* Existing iframe connection state remains authoritative. */ }
+  } catch {
+    // Metadata availability is separate from the live iframe connection.
+    if (sessions === previousSessions && !creating) { metadataStale = true; renderTabs(); }
+  }
   finally { polling = false; }
 }
 function schedulePoll() {

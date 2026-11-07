@@ -147,8 +147,13 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     }
     assert.equal(activeCommand, 'sleep', 'session details follow the active pane foreground command without arguments');
     tmux('select-pane', '-t', targetInfo[1]);
-    assert.equal(JSON.parse((await request('GET', '/api/sessions')).body).details.shared.command,
-      path.basename(shellCommand).replace(/[^A-Za-z0-9._+-]/g, '').slice(0, 24),
+    const expectedShellCommand = path.basename(shellCommand).replace(/[^A-Za-z0-9._+-]/g, '').slice(0, 24);
+    for (let i = 0; i < 100; i++) {
+      activeCommand = JSON.parse((await request('GET', '/api/sessions')).body).details.shared.command;
+      if (activeCommand === expectedShellCommand) break;
+      await sleep(20);
+    }
+    assert.equal(activeCommand, expectedShellCommand,
       'selecting another pane updates the command rather than retaining the inactive sleep');
     tmux('select-pane', '-t', otherPane);
     assert.equal((await request('POST', '/api/images/insert', { ...headers, 'x-image-receipt': bound.ticket })).status, 200);
@@ -237,7 +242,12 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
       command = tmux('display-message', '-p', '-t', name, '#{pane_current_command}');
     }
     assert.equal(command, 'sleep');
-    const runningList = JSON.parse((await request('GET', '/api/sessions')).body);
+    let runningList;
+    for (let i = 0; i < 100; i++) {
+      runningList = JSON.parse((await request('GET', '/api/sessions')).body);
+      if (runningList.details[name]?.command === 'sleep') break;
+      await sleep(20);
+    }
     assert.deepEqual(runningList.sessions, ['shared', name].sort());
     assert.deepEqual(Object.keys(runningList.details).sort(), runningList.sessions);
     assert.deepEqual(runningList.details[name], { command: 'sleep' });

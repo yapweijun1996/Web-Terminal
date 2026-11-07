@@ -34,22 +34,37 @@ function tmux(args) {
   return execFileSync('tmux', ['-L', tmuxSocket, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 const imageReceipts = createImageReceipts(tmux);
-function sessions() {
-  try { return tmux(['list-sessions', '-F', '#{session_name}']).trim().split('\n').filter(s => sessionPattern.test(s)).sort(); }
-  catch { return []; }
-}
-function sessionDetails(names) {
-  const details = {};
-  for (const name of names) {
-    let command = '';
-    try {
-      // Read only the active pane's executable name, never its arguments or title.
-      command = path.basename(tmux(['display-message', '-p', '-t', `=${name}:`, '#{pane_current_command}']).trim())
-        .replace(/[^A-Za-z0-9._+-]/g, '').slice(0, 24);
-    } catch { /* A session may disappear after the list was captured. */ }
-    details[name] = { command };
+let cachedSessionMetadata = null;
+let sessionMetadataExpires = 0;
+function sessionMetadata() {
+  const now = Date.now();
+  if (cachedSessionMetadata && now < sessionMetadataExpires) return cachedSessionMetadata;
+  let output;
+  try {
+    // The active pane's executable only: never arguments, titles, or pane contents.
+    output = tmux(['list-sessions', '-F', '#{session_name}|#{pane_current_command}']);
+  } catch (error) {
+    if (!/^(?:no server running(?: on [^\r\n]+)?|no sessions)$/.test(String(error.stderr || '').trim())) throw error;
+    output = '';
   }
-  return details;
+  const commands = {};
+  for (const line of output.trim().split('\n')) {
+    const separator = line.indexOf('|');
+    if (separator < 0) continue;
+    const name = line.slice(0, separator);
+    if (!sessionPattern.test(name)) continue;
+    commands[name] = path.basename(line.slice(separator + 1).trim()).replace(/[^A-Za-z0-9._+-]/g, '').slice(0, 24);
+  }
+  const names = Object.keys(commands).sort();
+  const details = {};
+  for (const name of names) details[name] = { command: commands[name] };
+  cachedSessionMetadata = { sessions: names, details };
+  // Stay within the active-pane status polling deadline.
+  sessionMetadataExpires = now + 1000;
+  return cachedSessionMetadata;
+}
+function sessions() {
+  return sessionMetadata().sessions;
 }
 function send(res, status, body, contentType = 'application/json; charset=utf-8') {
   res.writeHead(status, { 'Content-Type': contentType, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
@@ -219,8 +234,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/sidebar.css') return file(res, 'sidebar.css', 'text/css; charset=utf-8');
     if (req.method === 'GET' && req.url === '/style.css') return file(res, 'style.css', 'text/css; charset=utf-8');
     if (req.method === 'GET' && req.url === '/api/sessions') {
-      const names = sessions();
-      return send(res, 200, JSON.stringify({ sessions: names, details: sessionDetails(names), token }));
+      try {
+        const metadata = sessionMetadata();
+        return send(res, 200, JSON.stringify({ ...metadata, token }));
+      } catch { return send(res, 503, '{"error":"Terminal service error"}'); }
     }
     const identity = /^\/api\/sessions\/(shared|web-[a-f0-9]{12})\/identity$/.exec(req.url);
     if (req.method === 'GET' && identity) {
@@ -243,6 +260,7 @@ const server = http.createServer(async (req, res) => {
           `kill-session -t '${sessionId}'`, 'display-message -p STALE']).trim();
         if (result === 'STALE') throw new Error('Session changed');
       } catch { return send(res, 409, '{"error":"Session changed or unavailable"}'); }
+      cachedSessionMetadata = null;
       const child = children.get(close[1]);
       if (child) { children.delete(close[1]); child.kill('SIGTERM'); }
       return send(res, 200, '{"ok":true}');
@@ -265,6 +283,7 @@ const server = http.createServer(async (req, res) => {
       const name = `web-${crypto.randomBytes(6).toString('hex')}`;
       // Pi runs on the host, but the clipboard belongs to the remote browser.
       tmux(['new-session', '-d', '-e', 'PI_CLIPBOARD_OSC52=1', '-s', name]);
+      cachedSessionMetadata = null;
       return send(res, 201, JSON.stringify({ name }));
     }
     const latest = /^\/api\/sessions\/(shared|web-[a-f0-9]{12})\/latest$/.exec(req.url);

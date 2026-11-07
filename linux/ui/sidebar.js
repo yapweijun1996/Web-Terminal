@@ -100,10 +100,22 @@ const TerminalSidebar = (() => {
       refit();
     }
 
+    function focusableItems(container) {
+      return [...(container?.querySelectorAll('summary, button, a[href], input, select, textarea, [tabindex]') || [])]
+        .filter(item => !item.matches(':disabled') && item.tabIndex >= 0
+          && !item.closest('[hidden], [inert]') && item.getClientRects().length
+          && window.getComputedStyle(item).visibility !== 'hidden');
+    }
+
+    function dialogOwnsFocus(event) {
+      return document.querySelector('dialog[open]') || event.target?.closest?.('dialog');
+    }
+
     function closeDrawer(restoreFocus = true) {
       const wasOpen = document.body.classList.contains('sidebar-open');
       document.body.classList.remove('sidebar-open');
       opener?.setAttribute('aria-expanded', 'false');
+      if (main) main.inert = false;
       if (wasOpen) {
         if (restoreFocus) opener?.focus();
         refit();
@@ -112,9 +124,13 @@ const TerminalSidebar = (() => {
 
     function toggleDrawer() {
       if (document.body.classList.contains('sidebar-open')) { closeDrawer(); return; }
+      if (!narrow?.matches) return;
       document.body.classList.add('sidebar-open');
       opener?.setAttribute('aria-expanded', 'true');
-      (search || close || sidebar)?.focus();
+      if (main) main.inert = true;
+      const items = focusableItems(sidebar);
+      const active = sidebar?.querySelector('.session-open[aria-pressed="true"]');
+      (items.includes(close) ? close : items.includes(active) ? active : items.find(item => item !== search))?.focus();
       refit();
     }
 
@@ -159,6 +175,7 @@ const TerminalSidebar = (() => {
       event.preventDefault();
       setWidth(prefs.width + (event.key === 'ArrowLeft' ? -16 : 16));
     });
+    if (main) main.inert = false;
     opener?.setAttribute('aria-expanded', 'false');
     opener?.addEventListener('click', toggleDrawer);
     backdrop?.addEventListener('click', () => closeDrawer());
@@ -171,21 +188,25 @@ const TerminalSidebar = (() => {
       applyTheme();
     });
 
+    function closeMenu(restoreFocus = false) {
+      if (!menu?.open) return;
+      menu.open = false;
+      if (restoreFocus) menu.querySelector('summary')?.focus();
+      refit();
+    }
+
     if (menu) {
       const summary = menu.querySelector('summary');
-      function menuItems() {
-        return [...menu.querySelectorAll('summary, button, a[href], input, select, textarea, [tabindex]')]
-          .filter(item => item !== summary && !item.disabled && item.tabIndex >= 0 && !item.closest('[hidden], [inert]') && item.getClientRects().length);
-      }
+      const menuItems = () => focusableItems(menu).filter(item => item !== summary);
       menu.addEventListener('keydown', event => {
+        if (event.defaultPrevented || dialogOwnsFocus(event)) return;
         if (event.key === 'Escape' && menu.open) {
           event.preventDefault();
-          menu.open = false;
-          summary?.focus();
-          refit();
+          closeMenu(true);
           return;
         }
         if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+        if (event.target?.closest?.('select, input, textarea')) return;
         event.preventDefault();
         menu.open = true;
         const items = menuItems();
@@ -196,11 +217,27 @@ const TerminalSidebar = (() => {
         items[next].focus();
       });
       menu.addEventListener('toggle', refit);
+      document.addEventListener('pointerdown', event => {
+        if (!menu.contains(event.target)) closeMenu();
+      });
+      menu.addEventListener('focusout', event => {
+        if (!menu.contains(event.relatedTarget)) closeMenu();
+      });
     }
     document.addEventListener('keydown', event => {
-      if (event.key === 'Escape' && !event.defaultPrevented && document.body.classList.contains('sidebar-open')) {
+      if (event.defaultPrevented || dialogOwnsFocus(event) || !narrow?.matches
+        || !document.body.classList.contains('sidebar-open')) return;
+      if (event.key === 'Escape') {
         event.preventDefault();
         closeDrawer();
+      } else if (event.key === 'Tab') {
+        const items = focusableItems(sidebar);
+        if (!items.length) { event.preventDefault(); return; }
+        const index = items.indexOf(document.activeElement);
+        if (index < 0 || (event.shiftKey ? index === 0 : index === items.length - 1)) {
+          event.preventDefault();
+          items[event.shiftKey ? items.length - 1 : 0].focus();
+        }
       }
     });
 
@@ -234,9 +271,7 @@ const TerminalSidebar = (() => {
       prefs, save, closeDrawer, applyTheme, refit,
       isDrawerOpen: () => document.body.classList.contains('sidebar-open'),
       isNarrow: () => narrow?.matches === true,
-      closeMenu: () => {
-        if (menu?.open) { menu.open = false; menu.querySelector('summary')?.focus(); }
-      },
+      closeMenu: () => closeMenu(true),
     };
   }
 
