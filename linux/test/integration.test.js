@@ -10,6 +10,13 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Poll until done(value) or a deadline: fixed iteration counts fail on a briefly stalled machine.
+const until = async (read, done, timeoutMs = 10000, intervalMs = 20) => {
+  const deadline = Date.now() + timeoutMs;
+  let value = await read();
+  while (!done(value) && Date.now() < deadline) { await sleep(intervalMs); value = await read(); }
+  return value;
+};
 
 test('private Linux fixture isolates sessions and preserves jobs', async () => {
   assert.equal(spawnSync('tmux', ['-V']).status, 0, 'tmux is required');
@@ -27,7 +34,8 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     });
   };
   const ready = async () => {
-    for (let i = 0; i < 100; i++) {
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
       if (server.exitCode !== null) throw new Error('fixture server exited');
       if (fs.existsSync(socket)) return;
       await sleep(50);
@@ -92,19 +100,11 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     const interrupted = JSON.parse((await request('POST', '/api/images/prepare', headers)).body);
     const partial = http.request({ socketPath: socket, method: 'POST', path: '/api/images', headers: { host: 'fixture.test', ...imageHeaders, 'content-length': 100, 'x-image-receipt': interrupted.ticket } });
     partial.on('error', () => {}); partial.write(image.subarray(0, 8));
-    let interruptedState;
-    for (let i = 0; i < 100; i++) {
-      interruptedState = JSON.parse((await request('POST', '/api/images/result', { ...headers, 'x-image-receipt': interrupted.ticket })).body).state;
-      if (interruptedState === 'uploading') break;
-      await sleep(10);
-    }
+    const receiptState = async () => JSON.parse((await request('POST', '/api/images/result', { ...headers, 'x-image-receipt': interrupted.ticket })).body).state;
+    let interruptedState = await until(receiptState, state => state === 'uploading', 10000, 10);
     assert.equal(interruptedState, 'uploading');
     partial.destroy();
-    for (let i = 0; i < 100; i++) {
-      interruptedState = JSON.parse((await request('POST', '/api/images/result', { ...headers, 'x-image-receipt': interrupted.ticket })).body).state;
-      if (interruptedState === 'failed') break;
-      await sleep(10);
-    }
+    interruptedState = await until(receiptState, state => state === 'failed', 10000, 10);
     assert.equal(interruptedState, 'failed', 'an interrupted request is recorded as not saved');
     assert.equal((await request('POST', '/api/sessions', { ...headers, origin: 'http://other.test' })).status, 403);
     assert.equal((await request('POST', '/api/sessions', { ...headers, 'x-terminal-request': 'invalid' })).status, 403);
@@ -139,30 +139,18 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     const shellCommand = tmux('display-message', '-p', '-t', targetInfo[1], '#{pane_current_command}');
     const otherPane = tmux('split-window', '-h', '-d', '-P', '-F', '#{pane_id}', '-t', 'shared:', 'sleep 60');
     tmux('select-pane', '-t', otherPane);
-    let activeCommand;
-    for (let i = 0; i < 100; i++) {
-      activeCommand = JSON.parse((await request('GET', '/api/sessions')).body).details.shared.command;
-      if (activeCommand === 'sleep') break;
-      await sleep(20);
-    }
+    const sharedCommand = async () => JSON.parse((await request('GET', '/api/sessions')).body).details.shared.command;
+    let activeCommand = await until(sharedCommand, command => command === 'sleep');
     assert.equal(activeCommand, 'sleep', 'session details follow the active pane foreground command without arguments');
     tmux('select-pane', '-t', targetInfo[1]);
     const expectedShellCommand = path.basename(shellCommand).replace(/[^A-Za-z0-9._+-]/g, '').slice(0, 24);
-    for (let i = 0; i < 100; i++) {
-      activeCommand = JSON.parse((await request('GET', '/api/sessions')).body).details.shared.command;
-      if (activeCommand === expectedShellCommand) break;
-      await sleep(20);
-    }
+    activeCommand = await until(sharedCommand, command => command === expectedShellCommand);
     assert.equal(activeCommand, expectedShellCommand,
       'selecting another pane updates the command rather than retaining the inactive sleep');
     tmux('select-pane', '-t', otherPane);
     assert.equal((await request('POST', '/api/images/insert', { ...headers, 'x-image-receipt': bound.ticket })).status, 200);
-    let oldPaneOutput = '';
-    for (let i = 0; i < 100; i++) {
-      oldPaneOutput = tmux('capture-pane', '-J', '-p', '-t', targetInfo[1]);
-      if (oldPaneOutput.replace(/\n/g, '').includes(boundUpload.path)) break;
-      await sleep(10);
-    }
+    const oldPaneOutput = await until(() => tmux('capture-pane', '-J', '-p', '-t', targetInfo[1]),
+      output => output.replace(/\n/g, '').includes(boundUpload.path), 10000, 10);
     assert.ok(oldPaneOutput.replace(/\n/g, '').endsWith(boundUpload.path), 'the captured pane receives the path without Enter');
     assert.ok(!tmux('capture-pane', '-J', '-p', '-t', otherPane).includes(boundUpload.path), 'the later pane does not receive it');
     assert.equal((await request('POST', '/api/images/insert', { ...headers, 'x-image-receipt': bound.ticket })).status, 409, 'insertion cannot be repeated');
@@ -236,18 +224,10 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     assert.equal(await upgrade('http://fixture.test'), 101);
 
     tmux('send-keys', '-t', name, 'sleep 60', 'Enter');
-    let command = '';
-    for (let i = 0; i < 30 && command !== 'sleep'; i++) {
-      await sleep(50);
-      command = tmux('display-message', '-p', '-t', name, '#{pane_current_command}');
-    }
+    const command = await until(() => tmux('display-message', '-p', '-t', name, '#{pane_current_command}'), value => value === 'sleep', 10000, 50);
     assert.equal(command, 'sleep');
-    let runningList;
-    for (let i = 0; i < 100; i++) {
-      runningList = JSON.parse((await request('GET', '/api/sessions')).body);
-      if (runningList.details[name]?.command === 'sleep') break;
-      await sleep(20);
-    }
+    const runningList = await until(async () => JSON.parse((await request('GET', '/api/sessions')).body),
+      list => list.details[name]?.command === 'sleep');
     assert.deepEqual(runningList.sessions, ['shared', name].sort());
     assert.deepEqual(Object.keys(runningList.details).sort(), runningList.sessions);
     assert.deepEqual(runningList.details[name], { command: 'sleep' });
@@ -277,7 +257,7 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
     });
     assert.ok(childPid > 0, 'the session has its own UI-managed ttyd');
     assert.equal((await request('POST', `/api/sessions/${name}/close`, { ...target, 'x-terminal-session-id': replacement.sessionId, 'x-terminal-server-pid': replacement.serverPid })).status, 200);
-    for (let i = 0; i < 100 && fs.existsSync(`/proc/${childPid}`); i++) await sleep(10);
+    await until(() => fs.existsSync(`/proc/${childPid}`), alive => !alive, 10000, 10);
     assert.equal(fs.existsSync(`/proc/${childPid}`), false, 'ending the session also stops its ttyd');
     const remainingList = JSON.parse((await request('GET', '/api/sessions')).body);
     assert.ok(!remainingList.sessions.includes(name));
