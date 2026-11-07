@@ -10,6 +10,12 @@ const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 
+// kill-server leaves the socket file behind; remove only the fixture's own socket.
+function removeTmuxSocket(name) {
+  const base = process.env.TMUX_TMPDIR || os.tmpdir();
+  fs.rmSync(path.join(base, `tmux-${process.getuid()}`, name), { force: true });
+}
+
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 // A socket file can exist before the server listens on it; only a successful connection proves readiness.
 const accepts = socketPath => new Promise(resolve => {
@@ -278,6 +284,7 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
       await new Promise(resolve => server.once('exit', resolve));
     }
     try { tmux('kill-server'); } catch {}
+    removeTmuxSocket(tmuxSocket);
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -450,6 +457,7 @@ test('split API binds identity and pane limits to the active target window', asy
       await new Promise(resolve => server.once('exit', resolve));
     }
     try { tmux('kill-server'); } catch {}
+    removeTmuxSocket(tmuxSocket);
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
