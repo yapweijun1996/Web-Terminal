@@ -157,6 +157,12 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
     );
     if (process.env.BASELINE_ONLY === "1") return;
     policyOverride = undefined;
+    if (!process.env.MCP_TEST_MAX_GRANT_SECONDS) {
+      await page.goto(await start());
+      assert.equal(await page.locator("#duration").inputValue(), "2592000");
+      assert.deepEqual(await page.locator("#duration option").evaluateAll((options) => options.map((option) => option.value)),
+        ["3600", "86400", "604800", "2592000", "31536000"]);
+    }
     if (process.env.MCP_CONSENT_SCREENSHOT_DIR) {
       fs.mkdirSync(process.env.MCP_CONSENT_SCREENSHOT_DIR, { recursive: true });
       for (const width of [390, 768, 1440]) {
