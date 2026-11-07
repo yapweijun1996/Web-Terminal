@@ -44,7 +44,7 @@ function sessionMetadata() {
     // The active pane's executable only: never arguments, titles, or pane contents.
     output = tmux(['list-sessions', '-F', '#{session_name}|#{pane_current_command}']);
   } catch (error) {
-    if (!/^(?:no server running(?: on [^\r\n]+)?|no sessions)$/.test(String(error.stderr || '').trim())) throw error;
+    if (!/^(?:no server running(?: on [^\r\n]+)?|no sessions|error connecting to [^\r\n]+ \(No such file or directory\))$/.test(String(error.stderr || '').trim())) throw error;
     output = '';
   }
   const commands = {};

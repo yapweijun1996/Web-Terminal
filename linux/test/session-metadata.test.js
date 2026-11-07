@@ -163,7 +163,7 @@ test('rejected mutations do not discard a valid metadata cache', async () => {
 });
 
 test('only no-server and no-sessions tmux failures produce an empty successful list', async t => {
-  for (const stderr of ['no server running\n', 'no server running on /isolated/tmux-socket\n', Buffer.from('no sessions\n')]) {
+  for (const stderr of ['no server running\n', 'no server running on /isolated/tmux-socket\n', 'error connecting to /isolated/tmux-socket (No such file or directory)\n', Buffer.from('no sessions\n')]) {
     await t.test(String(stderr).trim(), async () => {
       const server = fixture();
       server.failure(serviceError(stderr));
@@ -187,7 +187,6 @@ test('only no-server and no-sessions tmux failures produce an empty successful l
 test('other tmux list failures return exact generic 503 without output or a cached empty list', async t => {
   const failures = [
     serviceError(Buffer.from('error connecting to /isolated/private-socket (Permission denied)\n')),
-    serviceError('error connecting to /isolated/missing-socket (No such file or directory)\n'),
     serviceError('no sessions\nprivate diagnostic must not leak\n'),
     serviceError('unexpected failure for no server running request\n'),
     Object.assign(new Error('spawnSync tmux ENOENT'), { code: 'ENOENT' }),
