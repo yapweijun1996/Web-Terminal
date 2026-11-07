@@ -189,6 +189,7 @@ function cleanup() {
     if (proxy) await new Promise(resolve => proxy.close(resolve));
     await stop(ui);
     spawnSync('tmux', [...tmuxArgs, 'kill-server'], { env, stdio: 'ignore', timeout: 5000 });
+    fs.rmSync(path.join(process.env.TMUX_TMPDIR || os.tmpdir(), `tmux-${process.getuid()}`, tmuxSocket), { force: true });
     if (browserDirectory) fs.rmSync(browserDirectory, { recursive: true, force: true });
     fs.rmSync(directory, { recursive: true, force: true });
   })();
