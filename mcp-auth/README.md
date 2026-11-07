@@ -35,6 +35,10 @@ Official callback sources checked 2026-11-05:
 
 Allowlist callbacks exactly; never wildcard. Clients must pass `resource` equal to `MCP_PUBLIC_URL` during authorization and exchange.
 
+The gateway advertises RFC 9207 issuer identification and returns its exact `issuer` as `iss` in both successful and denied authorization callbacks. This enables ChatGPT's stable callback URI above; without issuer identification, new ChatGPT connections use callback-specific URIs instead. See the current [OpenAI authentication documentation](https://developers.openai.com/plugins/build/auth).
+
+For connection diagnosis, `MCP_AUTH_LOG_REQUESTS=1` enables request summaries containing only the surface, allowlisted route, normalized HTTP method and response status. Queries, request bodies, headers and identities are omitted. Logging is disabled by default.
+
 ## Verification
 
 Run `npm test`. Disposable fixtures cover OAuth consent and negative boundaries, signed Access JWT verification, and bearer proxy isolation. They do not touch live terminals. Production acceptance additionally requires a real user sign-in and connector approval, then same-window listing and harmless input in a disposable visible terminal. Fixture success does not prove actual ChatGPT/Claude UI behavior or production identity policy. Revocation rejects subsequent requests; already forwarded input cannot be undone.

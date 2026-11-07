@@ -1,5 +1,7 @@
 # Shared terminal MCP
 
+For target identification, current OAuth requirements, DNS checks, and the distinction between partial checks and real connector acceptance, read the [MCP connection runbook](mcp-connection-runbook.md).
+
 The MCP server operates the same dedicated tmux workspace as the browser terminal. The owner sees agent text in that same pane. Both can input; coordinate before typing concurrently.
 
 ## Tools
@@ -32,6 +34,12 @@ A dedicated launchd user agent should invoke a private wrapper loading an owner-
 `cd mcp && npm test` uses disposable tmux servers only: grouped-view text visibility, key/control rejection, stale PID/removed-pane rejection, grouped selection, SDK stdio handshake/calls, and private HTTP initialize/list with Origin denial. A separate real Chrome/ttyd 1.7.7 isolated fixture switched to another grouped window, then typed a harmless marker; Chrome readback of the actual xterm buffer confirmed the marker was visible after automatic target selection. The owned fixture listener and tmux server were removed. These checks do not prove a real hosted ChatGPT/Claude connector, production browser behavior, simultaneous-input conflict handling or OS lifecycle persistence. No input lock or collaboration cursor is provided. Owner-authorized terminal reads send content to the AI provider.
 
 SDK reference: https://github.com/modelcontextprotocol/typescript-sdk/tree/v1.x
+
+## Linux independent tabs
+
+Set `WEB_TERMINAL_MCP_LAYOUT=linux-tabs` with the existing dedicated tmux server. This layout exposes the Linux UI's `shared` and `web-<12 hexadecimal digits>` sessions and includes `sessionName` in target listings. It does not expose other sessions on that server. `terminal_new_window` creates a new independent session compatible with the browser UI; refresh the browser to discover it. The owner switches browser tabs manually. Targets remain bound to the original server, session, window and pane identities; input does not fall back to another tab.
+
+On 2026-11-07, Linux MCP and OAuth services were installed and started privately on `yapvmmcp`. Four MCP tests and three OAuth tests passed, including isolated Linux tab scoping, input, new-session creation and stale-target rejection. Private live checks confirmed discovery, six tools, rejection of requests without bearer or Access JWT, and exact session-set agreement with the browser. Existing pane process identities were preserved; no production pane content was read or input sent. The requested public URL is `https://terminal-mcp.yapweijun1996.com/mcp`. DNS creation succeeded. After explicit owner approval, the dedicated terminal tunnel was restarted with the validated ingress. Public HTTPS checks using the authoritative DNS address returned OAuth and resource metadata 200, MCP without a bearer 401, and terminal/approval without Access 302. Google and Cloudflare DNS resolve the new hostname; the host resolver still returned a cached negative response at verification time. Hosted-client authorization remains pending owner sign-in and consent. The Linux gateway currently uses one-hour, in-memory grants as described in `mcp-auth/README.md`.
 
 ## Deployment evidence, 2026-11-05
 

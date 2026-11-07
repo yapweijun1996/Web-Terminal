@@ -47,12 +47,14 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     res.end('{"ok":true}');
   });
   await new Promise((r) => upstream.listen(up, r));
+  const requestEvents = [];
   const gateway = createGateway(
     {
       publicUrl: origin + "/mcp",
       approvalUrl: approval + "/__terminal_mcp/authorize",
       redirectUris: ["https://client.example.test/callback"],
       upstreamSocket: up,
+      onRequest: (event) => requestEvents.push(event),
     },
     async (req) => req.headers["test-owner"] === "yes",
   );
@@ -85,6 +87,9 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     (await publicCall("/.well-known/oauth-protected-resource/mcp")).status,
     200,
   );
+  const metadata = JSON.parse((await publicCall("/.well-known/oauth-authorization-server")).body);
+  assert.equal(metadata.authorization_response_iss_parameter_supported, true);
+  assert.equal(metadata.issuer, origin);
   assert.equal(
     (
       await publicCall(
@@ -180,6 +185,7 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     hdr,
   );
   assert.equal(decision.status, 302);
+  assert.equal(new URL(decision.headers.location).searchParams.get("iss"), metadata.issuer);
   const code = new URL(decision.headers.location).searchParams.get("code");
   assert.equal(
     new URL(decision.headers.location).searchParams.get("state"),
@@ -244,6 +250,19 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
     );
     return new URL(allowed.headers.location).searchParams.get("code");
   };
+  const deniedStart = new URL((await publicCall("/oauth/authorize?" + query)).headers.location);
+  const deniedPage = await call(owner, "terminal.example.test", deniedStart.pathname + deniedStart.search, "GET", "", { "test-owner": "yes" });
+  const denied = await call(owner, "terminal.example.test", deniedStart.pathname, "POST", new URLSearchParams({
+    request: deniedStart.searchParams.get("request"),
+    csrf: /name="csrf" value="([^"]+)"/.exec(deniedPage.body)[1],
+    decision: "deny",
+  }).toString(), hdr);
+  assert.equal(denied.status, 302);
+  const deniedCallback = new URL(denied.headers.location);
+  assert.equal(deniedCallback.searchParams.get("iss"), metadata.issuer);
+  assert.equal(deniedCallback.searchParams.get("error"), "access_denied");
+  assert.equal(deniedCallback.searchParams.get("state"), "fixture");
+  assert.equal(deniedCallback.searchParams.has("code"), false);
   for (const [key, value] of [
     ["code_verifier", "x".repeat(43)],
     ["resource", origin + "/wrong"],
@@ -336,6 +355,12 @@ test("owner consent, PKCE, one-use code, bearer proxy and negative boundaries", 
   } finally {
     Date.now = realNow;
   }
+  await publicCall("/unknown-private-path?token=PRIVATE_QUERY", "POST", "PRIVATE_BODY");
+  assert.ok(requestEvents.some((event) => event.route === "other" && event.status === 404));
+  for (const event of requestEvents)
+    assert.deepEqual(Object.keys(event).sort(), ["method", "route", "status", "surface"]);
+  assert.doesNotMatch(JSON.stringify(requestEvents), /PRIVATE_QUERY|PRIVATE_BODY|unknown-private-path/);
+  assert.ok(!JSON.stringify(requestEvents).includes(bearer));
 });
 
 test("signed Access JWT pins issuer, audience, signature, expiry and optional owner", async () => {

@@ -83,6 +83,7 @@ export function createGateway(config, verifyOwner) {
     reset = Date.now() + 60000;
   const metadata = {
     issuer,
+    authorization_response_iss_parameter_supported: true,
     authorization_endpoint: issuer + "/oauth/authorize",
     token_endpoint: issuer + "/oauth/token",
     registration_endpoint: issuer + "/oauth/register",
@@ -103,8 +104,23 @@ export function createGateway(config, verifyOwner) {
     send(res, status, {
       error: status === 401 ? "invalid_token" : "invalid_request",
     });
+  // Optional diagnostics deliberately omit queries, bodies, headers and identities.
+  const observe = (req, res, surface) => {
+    if (!config.onRequest) return;
+    const pathname = new URL(req.url, issuer).pathname;
+    const route = [
+      "/.well-known/oauth-authorization-server",
+      "/.well-known/oauth-protected-resource",
+      "/.well-known/oauth-protected-resource/mcp",
+      "/oauth/register", "/oauth/authorize", "/oauth/token", "/oauth/revoke",
+      "/mcp", approval.pathname,
+    ].includes(pathname) ? pathname : "other";
+    const method = ["GET", "POST", "DELETE", "OPTIONS", "HEAD"].includes(req.method) ? req.method : "other";
+    res.once("finish", () => config.onRequest({ surface, route, method, status: res.statusCode }));
+  };
   const publicServer = http.createServer(async (req, res) => {
     try {
+      observe(req, res, "public");
       prune();
       if (Date.now() > reset) {
         budget = 0;
@@ -298,6 +314,7 @@ export function createGateway(config, verifyOwner) {
   });
   const approvalServer = http.createServer(async (req, res) => {
     try {
+      observe(req, res, "approval");
       prune();
       if (
         req.headers.host !== approval.host ||
@@ -341,6 +358,7 @@ export function createGateway(config, verifyOwner) {
       if (!record || record.csrf !== q.get("csrf")) return fail(res);
       pending.delete(q.get("request"));
       const location = new URL(record.redirect);
+      location.searchParams.set("iss", issuer);
       if (record.state !== null)
         location.searchParams.set("state", record.state);
       if (q.get("decision") === "allow") {
@@ -393,6 +411,9 @@ if (
     accessIssuer: env.ACCESS_ISSUER,
     accessAudience: env.ACCESS_AUDIENCE,
     ownerEmail: env.ACCESS_OWNER_EMAIL,
+    onRequest: env.MCP_AUTH_LOG_REQUESTS === "1"
+      ? (event) => console.error(JSON.stringify({ event: "oauth_http", ...event }))
+      : undefined,
   });
   listenPrivate(gateway.publicServer, env.MCP_AUTH_SOCKET);
   listenPrivate(gateway.approvalServer, env.MCP_APPROVAL_SOCKET);

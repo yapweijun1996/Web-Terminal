@@ -4,6 +4,36 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { TerminalController } from "../terminal.js";
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+test("Linux tabs are scoped, independently controlled and created for the browser", async () => {
+  const server = `mcp-linux-${randomUUID()}`;
+  const tmux = (...args) => execFileSync("tmux", ["-L", server, ...args], { encoding: "utf8" });
+  tmux("new-session", "-d", "-s", "web-012345abcdef", "/bin/cat");
+  try {
+    tmux("new-session", "-d", "-s", "web-abcdef012345", "/bin/cat");
+    tmux("new-session", "-d", "-s", "unrelated", "/bin/cat");
+    const ctl = new TerminalController({ server, layout: "linux-tabs" });
+    const initial = await ctl.list();
+    assert.equal(initial.length, 2);
+    assert.ok(initial.every((p) => p.sessionName.startsWith("web-")));
+    const target = initial.find((p) => p.sessionName === "web-012345abcdef");
+    await ctl.type(target, "LINUX_MCP_VISIBLE");
+    await wait(100);
+    assert.match(await ctl.read(target, 10), /LINUX_MCP_VISIBLE/);
+    assert.doesNotMatch(tmux("capture-pane", "-p", "-t", "=web-abcdef012345:"), /LINUX_MCP_VISIBLE/);
+    const [pid, sessionId, windowId, paneId] = tmux("display-message", "-p", "-t", "=unrelated:", "#{pid}|#{session_id}|#{window_id}|#{pane_id}").trim().split("|");
+    await assert.rejects(ctl.type({ serverPid: pid, sessionId, windowId, paneId }, "DENIED"));
+    const after = await ctl.newWindow();
+    assert.equal(after.length, 3);
+    const created = after.find((p) => !initial.some((old) => old.sessionId === p.sessionId));
+    assert.match(created.sessionName, /^web-[a-f0-9]{12}$/);
+    assert.equal(tmux("show-environment", "-t", created.sessionId, "PI_CLIPBOARD_OSC52").trim(), "PI_CLIPBOARD_OSC52=1");
+    tmux("kill-session", "-t", target.sessionId);
+    tmux("new-session", "-d", "-s", target.sessionName, "/bin/cat");
+    await assert.rejects(ctl.type(target, "STALE"));
+  } finally {
+    tmux("kill-server");
+  }
+});
 test("shared workspace input, selection and stale targets", async () => {
   const server = `mcp-test-${randomUUID()}`;
   const tmux = (...a) =>
