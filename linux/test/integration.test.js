@@ -42,7 +42,7 @@ test('private Linux fixture isolates sessions and preserves jobs', async () => {
   let server;
   const start = () => {
     server = spawn(process.execPath, [path.join(__dirname, '../ui/server.js')], {
-      env: { ...process.env, TERMINAL_RUNTIME: directory, TERMINAL_TMUX_SOCKET: tmuxSocket, TERMINAL_TEST_HTTP: '1', TERMINAL_UPLOAD_DIR: path.join(directory, 'uploads') },
+      env: { ...process.env, TERMINAL_RUNTIME: directory, TERMINAL_TMUX_SOCKET: tmuxSocket, TERMINAL_TEST_HTTP: '1', TERMINAL_UPLOAD_DIR: path.join(directory, 'uploads'), TERMINAL_START_DIR: directory },
       stdio: 'ignore',
     });
   };
