@@ -1,0 +1,11 @@
+#context-editor { box-sizing: border-box; position: fixed; inset: var(--context-top, 0px) 0 auto; margin: auto; width: min(95vw, 800px); max-width: 100vw; height: min(var(--context-height, 95dvh), 850px); max-height: var(--context-height, 95dvh); padding: 16px; color: var(--text, #e5e7eb); background: var(--bg, #16191f); border: 1px solid #777; border-radius: 10px; overflow: auto; }
+#context-editor[open] { display: flex; flex-direction: column; gap: 8px; }
+#context-editor::backdrop { background: #0009; }
+#context-editor h2, #context-editor p { margin: 0; overflow-wrap: anywhere; }
+#context-editor textarea { flex: 1 1 160px; min-height: 80px; width: 100%; box-sizing: border-box; resize: none; font: 16px/1.4 monospace; color: inherit; background: var(--bg, #16191f); border: 1px solid #888; padding: 8px; }
+#context-editor .context-help { font-size: 12px; }
+#context-editor .context-actions { flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+#context-editor button { min-height: 44px; padding: 6px 10px; }
+#context-editor input { display: block; width: 100%; box-sizing: border-box; font-size: 16px; }
+#context-editor :focus-visible { outline: 3px solid var(--focus, #68aaff); outline-offset: 2px; }
+@media (max-height: 500px) { #context-editor { padding: 8px; gap: 4px; } #context-editor .context-help { display: none; } #context-editor h2 { font-size: 18px; } }

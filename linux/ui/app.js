@@ -187,6 +187,9 @@ const displayControls = window.createTerminalDisplayControls({
 document.querySelector('#view-actions').append(displayControls.element);
 const collaborationControls = window.createCollaborationControls?.({ getSession: () => active, getToken: () => token });
 if (collaborationControls) document.querySelector('#view-actions').append(collaborationControls.element);
+const contextPaste = window.createContextPaste?.({ getSession: () => active, getToken: () => token,
+  getTarget: () => active && connections.get(active) === 'Connected' ? frames.get(active)?.contentWindow?.webTerminalTarget : null });
+if (contextPaste) document.querySelector('#session-actions').append(contextPaste.button);
 function label(name) { return names[name] || (name === 'shared' ? 'Existing terminal' : `Terminal ${name.slice(4)}`); }
 function saveHidden() { try { localStorage.setItem(storageKey, JSON.stringify([...hidden])); } catch {} }
 function saveNames() { try { localStorage.setItem(namesKey, JSON.stringify(names)); return true; } catch { return false; } }
