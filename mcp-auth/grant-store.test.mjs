@@ -258,3 +258,18 @@ test("unissued pending grants expire with the shared authorization-code deadline
     store.close();
   }
 });
+
+test("verified token projection exposes only grant identity and absolute expiry", t => {
+  const store = new GrantStore(fixture(t));
+  try {
+    const { id } = grant(store), token = random();
+    const issued = store.bindToken(id, token);
+    const projection = store.grantForToken(token);
+    assert.deepEqual(projection, { id, expires: issued.expires });
+    assert.equal(Object.isFrozen(projection), true);
+    assert.equal(store.grantForToken("unknown-token"), null);
+    assert.equal(store.revokeToken(token), id);
+    assert.equal(store.grantForToken(token), null);
+    assert.equal(store.revokeToken(token), null);
+  } finally { store.close(); }
+});

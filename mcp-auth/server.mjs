@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { GrantStore } from "./grant-store.mjs";
 import {
@@ -108,7 +109,7 @@ export function callbackFormSource(redirect) {
     )
   );
 }
-export function createAccessVerifier(config, keys) {
+export function createAccessIdentityVerifier(config, keys) {
   const accessIssuer = validHttps(config.accessIssuer).origin;
   if (!config.accessAudience) throw Error("Access audience required");
   const jwks =
@@ -128,8 +129,21 @@ export function createAccessVerifier(config, keys) {
         requiredClaims: ["exp", "iat", "sub", "email"],
       },
     );
-    return !config.ownerEmail || payload.email === config.ownerEmail;
+    if (typeof payload.sub !== "string" || !payload.sub || payload.sub.length > 1024 ||
+        typeof payload.email !== "string" || !Number.isSafeInteger(payload.exp * 1000))
+      throw Error("Invalid Access identity");
+    if (config.ownerEmail && payload.email !== config.ownerEmail) return null;
+    return Object.freeze({
+      ownerId: hash(accessIssuer + "\0" + payload.sub),
+      expires: payload.exp * 1000,
+    });
   };
+}
+export function createAccessVerifier(config, keys) {
+  const identity = createAccessIdentityVerifier(config, keys);
+  const verify = async req => Boolean(await identity(req));
+  verify.identity = identity;
+  return verify;
 }
 export function createGateway(config, verifyOwner) {
   const resource = validHttps(config.publicUrl).href,
@@ -139,6 +153,18 @@ export function createGateway(config, verifyOwner) {
   const mcpBodyTimeoutMs = config.mcpBodyTimeoutMs ?? 5000;
   if (!Number.isInteger(mcpBodyTimeoutMs) || mcpBodyTimeoutMs < 1 || mcpBodyTimeoutMs > 30000)
     throw Error("MCP body timeout must be an integer from 1 to 30000 milliseconds");
+  if (config.collaborationSocket !== undefined &&
+      (typeof config.collaborationSocket !== "string" || !path.isAbsolute(config.collaborationSocket)))
+    throw Error("Absolute collaboration socket required");
+  // Optional deployments do not require the coordinator or its modules.
+  const collaboration = config.collaborationSocket
+    ? createRequire(import.meta.url)("../runtime/gateway/collaboration-contract.cjs") : null;
+  const revokeAdmission = async grantId => {
+    if (!collaboration || !grantId) return;
+    try {
+      await collaboration.privateCall(config.collaborationSocket, "/v1/revoke", { grantId });
+    } catch { /* New requests still require a currently valid grant. */ }
+  };
   const redirects = new Set(
     config.redirectUris.map((value) => validHttps(value).href),
   );
@@ -333,7 +359,8 @@ export function createGateway(config, verifyOwner) {
         )
           return fail(res);
         const q = new URLSearchParams(await body(req));
-        store.revokeToken(q.get("token") || "");
+        const revokedId = store.revokeToken(q.get("token") || "");
+        await revokeAdmission(revokedId);
         return send(res, 200, {});
       }
       if (url.pathname === "/mcp") {
@@ -370,6 +397,35 @@ export function createGateway(config, verifyOwner) {
         };
         if (req.headers["mcp-protocol-version"])
           headers["mcp-protocol-version"] = req.headers["mcp-protocol-version"];
+        if (collaboration) {
+          let message;
+          try { message = JSON.parse(data); } catch { /* SDK validates malformed JSON. */ }
+          const tool = message?.method === "tools/call" ? message.params?.name : null;
+          if (tool === "terminal_type" || tool === "terminal_send_key") {
+            const grant = store.grantForToken(match[1]);
+            if (!grant) return unauthorizedMcp(res);
+            let admission;
+            try {
+              const digest = collaboration.operationDigest(tool, message.params.arguments);
+              admission = await collaboration.privateCall(config.collaborationSocket, "/v1/admit", { grant, tool, digest });
+            } catch {
+              if (!store.validToken(match[1])) return unauthorizedMcp(res);
+              return send(res, 503, { error: "input_authority_unavailable" });
+            }
+            const current = store.grantForToken(match[1]);
+            if (!current || current.id !== grant.id || current.expires !== grant.expires) {
+              await revokeAdmission(grant.id);
+              return unauthorizedMcp(res);
+            }
+            if (!admission || !/^[A-Za-z0-9_-]{16,200}$/.test(admission.admission || "") ||
+                !Number.isSafeInteger(admission.expires) || admission.expires <= Date.now() ||
+                admission.expires > grant.expires || admission.expires > Date.now() + 15000)
+              return send(res, 503, { error: "input_authority_unavailable" });
+            if (req.aborted || res.destroyed) return;
+            // Never forward a caller-provided admission or bearer header.
+            headers["x-web-terminal-admission"] = admission.admission;
+          }
+        }
         const upstream = http.request(
           {
             socketPath: config.upstreamSocket,
@@ -409,8 +465,18 @@ export function createGateway(config, verifyOwner) {
         new URL(req.url, approval).pathname !== approval.pathname
       )
         return fail(res);
-      if (!(await verifyOwner(req))) return fail(res, 401);
       const pageUrl = new URL(req.url, approval);
+      if (req.method === "GET" && pageUrl.searchParams.get("view") === "input-identity") {
+        // Only the cryptographically verified identity projection is accepted.
+        // Boolean-only test/legacy verifiers cannot synthesize an owner role.
+        if (typeof verifyOwner.identity !== "function") return fail(res, 401);
+        const identity = await verifyOwner.identity(req);
+        if (!identity || typeof identity.ownerId !== "string" || !identity.ownerId ||
+            !Number.isSafeInteger(identity.expires) || identity.expires <= Date.now())
+          return fail(res, 401);
+        return send(res, 200, { authorized: true, ownerId: identity.ownerId, expires: identity.expires });
+      }
+      if (!(await verifyOwner(req))) return fail(res, 401);
       const pageHeaders = {
         "Content-Type": "text/html; charset=utf-8",
         "Content-Security-Policy":
@@ -515,6 +581,7 @@ export function createGateway(config, verifyOwner) {
           );
         management.delete(csrf);
         store.revokeGrant(q.get("grantId"));
+        await revokeAdmission(q.get("grantId"));
         return send(res, 303, "", {
           Location: approval.pathname + "?view=connections&revoked=1",
         });
@@ -638,6 +705,7 @@ if (
     approvalUrl: env.MCP_APPROVAL_URL,
     redirectUris: JSON.parse(env.MCP_REDIRECT_URIS || "[]"),
     upstreamSocket: env.MCP_UPSTREAM_SOCKET,
+    collaborationSocket: env.MCP_COLLABORATION_SOCKET,
     accessIssuer: env.ACCESS_ISSUER,
     accessAudience: env.ACCESS_AUDIENCE,
     ownerEmail: env.ACCESS_OWNER_EMAIL,

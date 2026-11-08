@@ -22,7 +22,7 @@ function call(socket, host, route, method = "GET", data = "", headers = {}) {
     req.end(data);
   });
 }
-async function fixture(t, timeoutMs = 5000) {
+async function fixture(t, timeoutMs = 5000, config = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-proxy-body-"));
   fs.chmodSync(dir, 0o700);
   const pub = path.join(dir, "public.sock"), owner = path.join(dir, "owner.sock"), upstreamSocket = path.join(dir, "upstream.sock");
@@ -35,7 +35,7 @@ async function fixture(t, timeoutMs = 5000) {
   });
   await new Promise(resolve => upstream.listen(upstreamSocket, resolve));
   const gateway = createGateway({ publicUrl: publicOrigin + "/mcp", approvalUrl: ownerOrigin + "/__terminal_mcp/authorize",
-    redirectUris: [callback], upstreamSocket, mcpBodyTimeoutMs: timeoutMs },
+    redirectUris: [callback], upstreamSocket, mcpBodyTimeoutMs: timeoutMs, ...config },
   async req => req.headers["test-owner"] === "yes");
   let bodyObserver;
   gateway.publicServer.on("request", req => {
@@ -89,7 +89,7 @@ async function fixture(t, timeoutMs = 5000) {
     });
     return { request, response, seen };
   }
-  return { pub, requests, publicCall, grant, hold };
+  return { pub, requests, publicCall, ownerCall, grant, hold };
 }
 
 test("MCP body proxy revalidates revocation after the initial authorization check", async t => {
@@ -194,5 +194,128 @@ test("chunked body exceeding the byte limit is refused before upstream setup", a
   });
   assert.equal(response.status, 413);
   assert.deepEqual(JSON.parse(response.body), { error: "request_too_large" });
+  assert.equal(f.requests.length, 0);
+});
+
+async function coordinatorFixture(t, admit) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "auth-coordinator-"));
+  fs.chmodSync(dir, 0o700);
+  const socket = path.join(dir, "coordinator.sock"), requests = [];
+  const server = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const payload = JSON.parse(Buffer.concat(chunks));
+    requests.push({ route: req.url, payload });
+    res.setHeader("content-type", "application/json");
+    if (req.url === "/v1/admit") res.end(JSON.stringify(await admit(payload)));
+    else if (req.url === "/v1/revoke") res.end('{"revoked":true}');
+    else { res.statusCode = 404; res.end('{}'); }
+  });
+  await new Promise(resolve => server.listen(socket, resolve));
+  t.after(async () => {
+    await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  return { socket, requests };
+}
+const inputArgs = { target: { serverPid: "123", sessionId: "$1", windowId: "@1", paneId: "%1", inputGeneration: "fixture-generation" }, text: "Literal fixture" };
+const mutation = (tool = "terminal_type", args = inputArgs) => JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: tool, arguments: args } });
+
+test("coordinated proxy binds server-owned grant and exact operation; caller admission headers never pass through", async t => {
+  const minted = [];
+  const coordinator = await coordinatorFixture(t, ({ grant }) => {
+    const admission = crypto.randomBytes(32).toString("base64url"); minted.push(admission);
+    return { admission, expires: Math.min(grant.expires, Date.now() + 5000) };
+  });
+  const f = await fixture(t, 5000, { collaborationSocket: coordinator.socket });
+  const token = await f.grant();
+  const result = await f.publicCall("/mcp", "POST", mutation(), { authorization: "Bearer " + token, "content-type": "application/json",
+    "x-web-terminal-admission": "forged-caller-admission", "x-owner": "yes" });
+  assert.equal(result.status, 200);
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].headers["x-web-terminal-admission"], minted[0]);
+  assert.equal(f.requests[0].headers["x-owner"], undefined);
+  assert.equal(f.requests[0].headers.authorization, undefined);
+  const { operationDigest } = await import("../runtime/gateway/collaboration-contract.cjs");
+  assert.equal(coordinator.requests[0].payload.digest, operationDigest("terminal_type", inputArgs));
+  assert.equal(coordinator.requests[0].payload.tool, "terminal_type");
+  assert.deepEqual(Object.keys(coordinator.requests[0].payload.grant).sort(), ["expires", "id"]);
+  assert.match(coordinator.requests[0].payload.grant.id, /^[A-Za-z0-9_-]{43}$/);
+  assert.doesNotMatch(JSON.stringify(coordinator.requests), new RegExp(token));
+  const otherToken = await f.grant();
+  assert.equal((await f.publicCall("/mcp", "POST", mutation("terminal_send_key", { target: inputArgs.target, key: "Enter" }), { authorization: "Bearer " + otherToken })).status, 200);
+  assert.notEqual(coordinator.requests[1].payload.grant.id, coordinator.requests[0].payload.grant.id);
+  assert.notEqual(f.requests[1].headers["x-web-terminal-admission"], f.requests[0].headers["x-web-terminal-admission"]);
+  const list = JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+  assert.equal((await f.publicCall("/mcp", "POST", list, { authorization: "Bearer " + token, "x-web-terminal-admission": minted[0] })).status, 200);
+  assert.equal(f.requests[2].headers["x-web-terminal-admission"], undefined);
+  assert.equal(coordinator.requests.length, 2);
+});
+
+test("revocation during coordinator admission is notified and prevents upstream forwarding", async t => {
+  let release, admitted;
+  const waiting = new Promise(resolve => { admitted = resolve; });
+  const coordinator = await coordinatorFixture(t, async ({ grant }) => {
+    const response = { admission: crypto.randomBytes(32).toString("base64url"), expires: Math.min(grant.expires, Date.now() + 5000) };
+    admitted(); await new Promise(resolve => { release = resolve; }); return response;
+  });
+  const f = await fixture(t, 5000, { collaborationSocket: coordinator.socket });
+  const token = await f.grant();
+  const pending = f.publicCall("/mcp", "POST", mutation(), { authorization: "Bearer " + token });
+  await waiting;
+  assert.equal((await f.publicCall("/oauth/revoke", "POST", new URLSearchParams({ token }).toString(), { "content-type": "application/x-www-form-urlencoded" })).status, 200);
+  release();
+  assert.equal((await pending).status, 401);
+  assert.equal(f.requests.length, 0);
+  const initial = coordinator.requests.find(request => request.route === "/v1/admit");
+  assert.ok(coordinator.requests.some(request => request.route === "/v1/revoke" && request.payload.grantId === initial.payload.grant.id));
+});
+
+test("coordinator refusal or absence fails mutations closed and does not block read-only RPC", async t => {
+  const coordinator = await coordinatorFixture(t, () => ({ error: { code: "INPUT_PAUSED", message: "paused" } }));
+  const f = await fixture(t, 5000, { collaborationSocket: coordinator.socket });
+  const token = await f.grant();
+  assert.equal((await f.publicCall("/mcp", "POST", mutation(), { authorization: "Bearer " + token })).status, 503);
+  assert.equal(f.requests.length, 0);
+  const unavailable = await fixture(t, 5000, { collaborationSocket: path.join(path.dirname(coordinator.socket), "absent.sock") });
+  const another = await unavailable.grant();
+  assert.equal((await unavailable.publicCall("/mcp", "POST", mutation(), { authorization: "Bearer " + another })).status, 503);
+  const list = JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+  assert.equal((await unavailable.publicCall("/mcp", "POST", list, { authorization: "Bearer " + another })).status, 200);
+  assert.equal(unavailable.requests.length, 1);
+  assert.equal(unavailable.requests[0].headers["x-web-terminal-admission"], undefined);
+});
+
+test("protected owner grant revocation notifies the coordinator and rejects later requests", async t => {
+  const coordinator = await coordinatorFixture(t, ({ grant }) => ({ admission: crypto.randomBytes(32).toString("base64url"), expires: Math.min(grant.expires, Date.now() + 5000) }));
+  const f = await fixture(t, 5000, { collaborationSocket: coordinator.socket });
+  const token = await f.grant();
+  assert.equal((await f.publicCall("/mcp", "POST", mutation(), { authorization: "Bearer " + token })).status, 200);
+  const grantId = coordinator.requests[0].payload.grant.id;
+  const page = await f.ownerCall("/__terminal_mcp/authorize?view=connections");
+  assert.equal(page.status, 200);
+  const csrf = /name="csrf" value="([^"]+)"/.exec(page.body)[1];
+  const revoked = await f.ownerCall("/__terminal_mcp/authorize?view=connections", "POST", new URLSearchParams({ action: "revoke", grantId, csrf }).toString());
+  assert.equal(revoked.status, 303);
+  assert.ok(coordinator.requests.some(request => request.route === "/v1/revoke" && request.payload.grantId === grantId));
+  assert.equal((await f.publicCall("/mcp", "POST", mutation(), { authorization: "Bearer " + token })).status, 401);
+  assert.equal(f.requests.length, 1);
+});
+
+test("grant expiry during admission denies forwarding even if an admission response arrives", async t => {
+  let release, admitted;
+  const waiting = new Promise(resolve => { admitted = resolve; });
+  const coordinator = await coordinatorFixture(t, async ({ grant }) => {
+    const response = { admission: crypto.randomBytes(32).toString("base64url"), expires: Math.min(grant.expires, Date.now() + 5000) };
+    admitted(); await new Promise(resolve => { release = resolve; }); return response;
+  });
+  const f = await fixture(t, 5000, { collaborationSocket: coordinator.socket });
+  const token = await f.grant();
+  const pending = f.publicCall("/mcp", "POST", mutation(), { authorization: "Bearer " + token });
+  await waiting;
+  const now = Date.now;
+  t.mock.method(Date, "now", () => now() + 3600001);
+  release();
+  assert.equal((await pending).status, 401);
   assert.equal(f.requests.length, 0);
 });

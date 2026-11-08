@@ -48,6 +48,32 @@ integer from 1 to 30000 milliseconds; invalid configuration fails startup. The
 limit does not alter the existing 30-day default/365-day maximum grant policy,
 owner verification, PKCE, callbacks, or durable authorization storage.
 
+## Optional coordinated-input adapter
+
+Set `MCP_COLLABORATION_SOCKET` to the absolute private coordinator socket only
+when the MCP server and UI are configured for coordinated input. After the final
+bearer check, each text/key RPC obtains a short-lived single-use admission bound
+to the server-owned grant ID/absolute expiry and the exact operation digest. The
+gateway rechecks that same grant after admission and forwards only the internally
+minted `x-web-terminal-admission`; caller-supplied admission/owner headers and raw
+bearers are never forwarded. Coordinator refusal or unavailability sends no
+mutation upstream and does not fall back to direct input. Read-only RPC does not
+need an admission. Token and protected owner-management revocation notify the
+coordinator without changing durable grant policy; already-dispatched bytes or
+commands cannot be undone. The coordinator independently bounds admission TTL
+and enforces grant revocation/expiry before delivery.
+
+The existing exact Access-protected approval URL supports the read-only query
+`?view=input-identity`. It returns only `{authorized:true, ownerId, expires}` from
+the cryptographically verified Access issuer/subject/expiry; the identity is
+opaque and does not expose email or JWT. A boolean-only verifier cannot supply
+this identity. UI private calls forward the incoming signed Access JWT for this
+check, never a claimed owner role. The UI uses `TERMINAL_OWNER_VERIFY_SOCKET` and
+`TERMINAL_OWNER_VERIFY_URL` for the existing approval socket/URL. No new public
+route, relaxed callback allowlist, fake owner header, or independent-OS-principal
+claim is introduced. The same-UID private socket remains a trusted local adapter
+boundary rather than a sandbox against processes with that OS authority.
+
 ## Durable connections and revocation
 
 Create separate owned mode-0700 state and key directories before launch. Production requires both state paths. A new store creates a random 32-byte mode-0600 master key outside the state directory; keep the key out of state snapshots. Grant metadata and DCR registrations persist as an integrity-authenticated JSON envelope written through exclusive temporary files, fsync and atomic rename. Store contents contain client names, public client identifiers, grant timing and keyed token digests, never raw bearer tokens or authorization codes. Issuer and resource are bound to the envelope; reuse under a different public URL fails closed. A missing/wrong key, tampering, unsafe permissions or symlinks prevents startup. Persistence failures disable further authorization instead of falling back to memory.

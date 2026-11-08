@@ -315,12 +315,16 @@ export class GrantStore {
     this.persist();
     return grant;
   }
-  validToken(token) {
+  grantForToken(token) {
     this.prune();
     const digest = this.digest("access-token", token);
-    return [...this.grants.values()].some(
-      (grant) => grant.tokenDigest === digest,
-    );
+    for (const [id, grant] of this.grants)
+      if (grant.tokenDigest === digest)
+        return Object.freeze({ id, expires: grant.expires });
+    return null;
+  }
+  validToken(token) {
+    return this.grantForToken(token) !== null;
   }
   revokeToken(token) {
     this.ready();
@@ -329,8 +333,9 @@ export class GrantStore {
       if (grant.tokenDigest === digest) {
         this.grants.delete(id);
         this.persist();
-        return;
+        return id;
       }
+    return null;
   }
   revokeGrant(id) {
     this.ready();
