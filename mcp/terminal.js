@@ -20,6 +20,12 @@ function expectedPanePid(options) {
     throw new TerminalError("INVALID_TARGET");
   return pid;
 }
+function dispatchCheck(options) {
+  const check = options?.beforeDispatch;
+  if (check !== undefined && typeof check !== "function")
+    throw new TerminalError("AUTHORITY_UNAVAILABLE");
+  return check;
+}
 export class TerminalController {
   constructor({ server, session, layout = "grouped", tmux = process.env.TMUX_BIN || "tmux" }) {
     if (
@@ -103,8 +109,9 @@ export class TerminalController {
     if (!current) throw new TerminalError("STALE_TARGET");
     return current;
   }
-  async guarded(t, command, allowMode = false, panePid) {
+  async guarded(t, command, allowMode = false, panePid, beforeDispatch) {
     panePid = expectedPanePid({ expectedPanePid: panePid });
+    beforeDispatch = dispatchCheck({ beforeDispatch });
     const current = await this.validate(t);
     const checks = [
       `#{==:#{pid},${t.serverPid}}`,
@@ -120,6 +127,9 @@ export class TerminalController {
     if (panePid !== undefined)
       checks.push(`#{==:#{pane_pid},${panePid}}`, "#{==:#{pane_dead},0}");
     const cond = checks.reduce((a, b) => `#{&&:${a},${b}}`);
+    // Trusted adapters recheck admission after every awaited preparation step.
+    // Do not insert another async operation between this hook and dispatch.
+    if (beforeDispatch) await beforeDispatch();
     const result = await this.run([
       "if-shell",
       "-F",
@@ -164,12 +174,13 @@ export class TerminalController {
   async type(t, text, options) {
     validateTerminalText(text);
     const panePid = expectedPanePid(options);
+    const beforeDispatch = dispatchCheck(options);
     return this.input(t, async target => {
       const buffer = `web-terminal-mcp-${randomUUID()}`;
       try {
         await this.validate(target);
         await this.run(["set-buffer", "-b", buffer, "--", text]);
-        await this.guarded(target, `paste-buffer -p -d -b ${buffer} -t ${target.paneId}`, false, panePid);
+        await this.guarded(target, `paste-buffer -p -d -b ${buffer} -t ${target.paneId}`, false, panePid, beforeDispatch);
         return { sent: true, submitted: false };
       } finally {
         await this.run(["delete-buffer", "-b", buffer]).catch(() => {});
@@ -193,8 +204,9 @@ export class TerminalController {
     )
       throw Error("Unsupported key");
     const panePid = expectedPanePid(options);
+    const beforeDispatch = dispatchCheck(options);
     return this.input(t, async target => {
-      await this.guarded(target, `send-keys -t ${target.paneId} ${key}`, false, panePid);
+      await this.guarded(target, `send-keys -t ${target.paneId} ${key}`, false, panePid, beforeDispatch);
       return { sent: true, submitted: key === "Enter" };
     });
   }

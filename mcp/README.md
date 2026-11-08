@@ -70,3 +70,12 @@ four public target IDs, preventing same-pane respawn from inheriting an old
 coordinated operation. This optional adapter field is not a public owner claim,
 does not pin the changing foreground command PID, and does not change the four-ID
 delegated target contract. Caller mutation after dispatch cannot rebind it.
+
+
+A trusted coordinator can also supply `beforeDispatch` in those controller
+options. The function is captured and validated before awaiting, then awaited
+after target/buffer preparation and immediately before tmux input dispatch. It
+must recheck the authoritative grant and then synchronously check admission
+expiry, generation, pause and revocation state. Rejection sends no input and
+still cleans the operation's buffer. Tool schemas do not accept or create this
+server-side callback; delegated/default behavior without it is unchanged.

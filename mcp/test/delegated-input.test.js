@@ -201,3 +201,64 @@ test("trusted pane-process option is captured before await and cannot follow a c
   assert.equal(await ctl.read(target), "");
   assert.equal(tmux("list-buffers"), "");
 });
+
+test("trusted dispatch recheck rejects expired/revoked text after buffer preparation and cleans it", async t => {
+  const { ctl, tmux } = fixture(t);
+  const [target] = await ctl.list();
+  const originalRun = ctl.run.bind(ctl);
+  const calls = [];
+  let prepared = false, checked = false;
+  ctl.run = async args => {
+    calls.push(args[0]);
+    const value = await originalRun(args);
+    if (args[0] === "set-buffer") prepared = true;
+    return value;
+  };
+  const failure = new Error("test-only authority expired");
+  await assert.rejects(ctl.type(target, "MUST_NOT_PASTE", {
+    beforeDispatch: async () => {
+      assert.equal(prepared, true, "authority is rechecked after buffer preparation");
+      assert.ok(calls.lastIndexOf("list-panes") > calls.lastIndexOf("set-buffer"), "final target validation follows buffer preparation and precedes the hook");
+      await Promise.resolve(); checked = true; throw failure;
+    },
+  }), error => error === failure);
+  assert.equal(checked, true);
+  assert.equal(calls.includes("if-shell"), false);
+  assert.equal(calls.at(-1), "delete-buffer");
+  assert.equal(tmux("list-buffers"), "");
+  assert.equal(await ctl.read(target), "");
+});
+test("trusted dispatch recheck rejects a key before any tmux input command", async t => {
+  const { ctl } = fixture(t);
+  const [target] = await ctl.list();
+  const originalRun = ctl.run.bind(ctl), calls = [];
+  ctl.run = async args => { calls.push(args[0]); return originalRun(args); };
+  const failure = new Error("test-only authority revoked");
+  await assert.rejects(ctl.key(target, "Enter", { beforeDispatch: async () => { throw failure; } }), error => error === failure);
+  assert.equal(calls.includes("if-shell"), false);
+  assert.equal(await ctl.read(target), "");
+  assert.deepEqual(await ctl.key(target, "Enter", { beforeDispatch: async () => {} }), { sent: true, submitted: true });
+});
+test("trusted dispatch hook is captured synchronously and invalid options execute nothing", async t => {
+  const { ctl } = fixture(t);
+  const [target] = await ctl.list();
+  let resume, checked = 0;
+  const hold = new Promise(resolve => { resume = resolve; });
+  const validate = ctl.validate.bind(ctl);
+  let first = true;
+  ctl.validate = async captured => { if (first) { first = false; await hold; } return validate(captured); };
+  const failure = new Error("test-only original check denied");
+  const options = { beforeDispatch: async () => { checked++; throw failure; } };
+  const writing = ctl.type(target, "NO_HOOK_REBIND", options);
+  options.beforeDispatch = async () => {};
+  resume();
+  await assert.rejects(writing, error => error === failure);
+  assert.equal(checked, 1);
+  assert.equal(await ctl.read(target), "");
+  const noExec = new TerminalController({ server: "unused-hook-fixture", session: "workspace" });
+  noExec.run = async () => assert.fail("invalid trusted hook must reject before execution");
+  for (const beforeDispatch of [true, "owner", {}, null]) {
+    await assert.rejects(noExec.type(target, "NO_INPUT", { beforeDispatch }), error => error.code === "AUTHORITY_UNAVAILABLE");
+    await assert.rejects(noExec.key(target, "Enter", { beforeDispatch }), error => error.code === "AUTHORITY_UNAVAILABLE");
+  }
+});
