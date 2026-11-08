@@ -39,7 +39,10 @@ test('owner controls require independent owner verification and CSRF; image inse
   assert.equal((await f.control('pause', 'shared', false)).status >= 400, true);
   const denied = await f.request('POST', '/api/collaboration/control', { body: { session: 'shared', action: 'pause' }, headers: { Origin: 'http://other.invalid', 'Content-Type': 'application/json', 'X-Terminal-Request': f.tokens.token } });
   assert.equal(denied.status, 403);
-  const [target] = await f.list();
+  const secondaryName = 'web-abcdef012345';
+  f.tmux('new-session', '-d', '-s', secondaryName, '/bin/cat');
+  const all = await f.list(), target = all.find(p => p.sessionName === 'shared'), secondary = all.find(p => p.sessionName === secondaryName);
+  assert.deepEqual(await f.mutate('terminal_type', { target: secondary, text: 'SECONDARY_AI_DRAFT' }), { sent: true, submitted: false });
   const headers = { Origin: 'http://fixture.invalid', 'Content-Type': 'application/json', 'X-Terminal-Request': f.tokens.token,
     'X-Terminal-Session': 'shared', 'X-Terminal-Session-Id': target.sessionId, 'X-Terminal-Pane': target.paneId, 'X-Terminal-Server-Pid': target.serverPid };
   const receipt = (await f.request('POST', '/api/images/prepare', { headers })).data;
@@ -47,7 +50,10 @@ test('owner controls require independent owner verification and CSRF; image inse
   const uploaded = await f.request('POST', '/api/images', { body: image, headers: { ...headers, 'Content-Type': 'application/octet-stream', 'X-Image-Receipt': receipt.ticket } });
   assert.equal(uploaded.status, 201);
   assert.equal((await f.request('POST', '/api/images/insert', { headers: { ...headers, 'X-Image-Receipt': receipt.ticket } })).status, 200);
-  assert.equal((await f.request('GET', '/api/collaboration/state')).data.sessions.shared.state, 'paused');
+  const state = (await f.request('GET', '/api/collaboration/state')).data.sessions;
+  assert.equal(state.shared.state, 'paused');
+  assert.equal(state[secondaryName].paused, true, 'image insertion fences writers outside its captured session too');
+  assert.equal((await f.mutate('terminal_send_key', { target: secondary, key: 'Enter' })).error.code, 'STALE_INPUT_GENERATION');
   assert.equal((await f.mutate('terminal_type', { target, text: 'OLD' })).error.code, 'STALE_INPUT_GENERATION');
   assert.match(f.tmux('capture-pane', '-p', '-t', target.paneId), /uploads/);
 });
@@ -85,4 +91,30 @@ test('full signed-owner OAuth gateway to coordinated MCP to UI broker delivers a
   assert.equal((await f.revoke()).status, 200);
   assert.equal((await f.mutate('terminal_type', { target: fresh, text: 'REVOKED_MUST_NOT_ARRIVE' })).error.code, 'AUTHORITY_UNAVAILABLE');
   assert.doesNotMatch(f.tmux('capture-pane', '-p', '-t', target.paneId), /REVOKED_MUST_NOT_ARRIVE/);
+});
+
+
+test('native tmux next-session switching cannot leave the destination AI writer active', async t => {
+  const f = await createFixture(); t.after(() => f.close());
+  const webName = 'web-012345abcdef';
+  f.tmux('new-session', '-d', '-s', webName, '/bin/cat');
+  const { client } = await f.connect();
+  const web = (await f.list()).find(p => p.sessionName === webName);
+  assert.deepEqual(await f.mutate('terminal_type', { target: web, text: 'AI_WEB_DRAFT_' }), { sent: true, submitted: false });
+  // Native tmux C-b ')' switches the existing ttyd client away from its URL's
+  // original shared session. Subsequent owner input really edits the web pane.
+  client.send(Buffer.from([48, 2, 41]));
+  await until(() => f.tmux('list-clients', '-F', '#{session_name}').trim(), name => name === webName);
+  client.send(Buffer.from('0HUMAN_WEB_EDIT'));
+  await until(() => f.tmux('capture-pane', '-p', '-t', web.paneId), text => text.includes('HUMAN_WEB_EDIT'));
+  assert.equal((await f.request('GET', '/api/collaboration/state')).data.sessions[webName].paused, true);
+  const oldEnter = await f.mutate('terminal_send_key', { target: web, key: 'Enter' });
+  assert.equal(oldEnter.error.code, 'STALE_INPUT_GENERATION');
+  const freshPaused = (await f.list()).find(p => p.sessionName === webName);
+  assert.equal((await f.mutate('terminal_type', { target: freshPaused, text: 'NO_IMPLICIT_RESUME' })).error.code, 'INPUT_PAUSED');
+  assert.doesNotMatch(f.tmux('capture-pane', '-p', '-t', web.paneId), /NO_IMPLICIT_RESUME/);
+  assert.equal((await f.control('resume', webName)).status, 200);
+  const fresh = (await f.list()).find(p => p.sessionName === webName);
+  assert.deepEqual(await f.mutate('terminal_type', { target: fresh, text: '_EXPLICIT_RESUME' }), { sent: true, submitted: false });
+  assert.equal((await f.request('GET', '/api/collaboration/state')).data.sessions.shared.paused, true);
 });

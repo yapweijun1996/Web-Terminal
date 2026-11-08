@@ -24,9 +24,13 @@ already holding terminal OS authority. The owner verifier uses signed Access JWT
 the grant verifier reads live delegated grants without exposing bearer tokens.
 
 In coordinated mode, MCP input needs a short-lived, single-use, request-bound
-admission and current `inputGeneration`. Human browser input pauses AI across the
-entire attached session. Owner Pause/Take control acknowledges only after pending
-MCP writes drain; unknown delivery stays blocked. Resume sharing is deliberate and
+admission and current `inputGeneration`. Human browser input and image insertion
+pause AI across **all managed terminals**, not only the WebSocket URL's original session. Native tmux prefixes
+and mouse navigation can switch the actual client to another session. Every
+known generation/lease is invalidated immediately, newly discovered sessions
+default to paused, and all in-flight MCP writes drain before native bytes are
+forwarded. Resume sharing applies only to the explicitly chosen terminal. Owner
+Pause/Take control acknowledges only after pending MCP writes drain; unknown delivery stays blocked. Resume sharing is deliberate and
 rotates the generation. Expired writer leases also rotate generation, so a delayed
 Enter cannot silently reacquire authority and submit another draft. Input is pinned
 to the pane process captured server-side, not a foreground command PID.

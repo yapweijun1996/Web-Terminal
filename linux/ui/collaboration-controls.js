@@ -2,10 +2,11 @@
 // Status always comes from the authoritative coordinator, never a local pause flag.
 window.createCollaborationControls = function ({ getSession, getToken }) {
   const element = document.createElement('div'); element.className = 'action-group'; element.hidden = true;
+  element.title = 'Human typing or image insertion pauses AI in all managed terminals. Resume sharing applies only to this terminal.';
   const status = document.createElement('span'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
   const pause = document.createElement('button'); pause.type = 'button'; pause.textContent = 'Pause AI';
   const takeover = document.createElement('button'); takeover.type = 'button'; takeover.textContent = 'Take control';
-  const resume = document.createElement('button'); resume.type = 'button'; resume.textContent = 'Resume sharing';
+  const resume = document.createElement('button'); resume.type = 'button'; resume.textContent = 'Resume sharing'; resume.title = 'Resume AI in this terminal only, using a fresh input generation';
   element.append(status, pause, takeover, resume);
   let busy = false, known = null;
   function render(state) {

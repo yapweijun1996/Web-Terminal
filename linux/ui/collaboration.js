@@ -59,6 +59,9 @@ async function createCoordinator({ socket, controller, now = () => performance.n
   const admissions = new Map(), grants = new Map(), sessions = new Map(), fingerprints = new Map();
   const sessionKey = p => `${p.serverPid}:${p.sessionId}`;
   const paneKey = p => `${p.serverPid}:${p.paneId}`;
+  // A tmux client can switch sessions through native prefix/mouse input. The
+  // WebSocket URL is its original attachment, not authority over its destination.
+  let pauseNewSessions = false, humanPending = 0;
   const broker = new InputBroker({ verifyTarget: t => controller.validate(t), now,
     execute: async (target, op) => {
       const activeSession = sessions.get(op.sessionKey);
@@ -104,11 +107,11 @@ async function createCoordinator({ socket, controller, now = () => performance.n
     const key = sessionKey(p);
     if (!sessions.has(key)) {
       if (sessions.size >= 100) throw fault('INPUT_BUSY');
-      sessions.set(key, { key, serverPid: p.serverPid, sessionId: p.sessionId, sessionName: p.sessionName, generation: randomUUID(), paused: false, unknown: false, writer: null, writers: new Map(), inFlight: new Set(), jobs: new Map(), humanPending: 0 });
+      sessions.set(key, { key, serverPid: p.serverPid, sessionId: p.sessionId, sessionName: p.sessionName, generation: randomUUID(), paused: pauseNewSessions, unknown: false, writer: null, writers: new Map(), inFlight: new Set(), jobs: new Map() });
     }
     return sessions.get(key);
   }
-  function projection(s) { return { serverPid: s.serverPid, sessionId: s.sessionId, paused: s.paused, writer: s.writer ? 'AI' : s.paused ? 'Owner' : 'Shared', state: s.unknown ? 'unknown' : s.inFlight.size && s.paused ? 'pause-pending' : s.humanPending ? 'owner-active' : s.paused ? 'paused' : 'sharing', inputGeneration: s.generation }; }
+  function projection(s) { return { serverPid: s.serverPid, sessionId: s.sessionId, paused: s.paused, writer: s.writer ? 'AI' : s.paused ? 'Owner' : 'Shared', state: s.unknown ? 'unknown' : s.inFlight.size && s.paused ? 'pause-pending' : humanPending ? 'owner-active' : s.paused ? 'paused' : 'sharing', inputGeneration: s.generation }; }
   async function captureIdentity(pane) {
     const raw = await controller.run(['display-message', '-p', '-t', `${pane.sessionId}:${pane.windowId}.${pane.paneId}`,
       '#{pid}|#{session_id}|#{window_id}|#{pane_id}|#{pane_pid}|#{pane_dead}']);
@@ -229,7 +232,7 @@ async function createCoordinator({ socket, controller, now = () => performance.n
     const s = await resolveSession(name); checkedBinding(s, binding);
     if (action === 'pause' || action === 'takeover') return pauseSession(s);
     if (action !== 'resume') throw fault('INVALID_INPUT');
-    if (s.humanPending) throw fault('INPUT_BUSY');
+    if (humanPending) throw fault('INPUT_BUSY');
     if (s.inFlight.size || s.unknown) throw fault('OPERATION_UNAVAILABLE');
     invalidate(s); s.paused = false; return projection(s);
   }
@@ -237,16 +240,20 @@ async function createCoordinator({ socket, controller, now = () => performance.n
     if (!ownerValid(owner)) throw fault('AUTHORITY_UNAVAILABLE');
     const s = sessions.get(`${binding?.serverPid}:${binding?.sessionId}`);
     if (!s) throw fault('STALE_TARGET');
-    invalidate(s); s.humanPending++;
+    // Conservatively fence every managed AI writer before forwarding native
+    // bytes: this client's next byte may address a different tmux session.
+    pauseNewSessions = true;
+    for (const current of sessions.values()) invalidate(current);
+    humanPending++;
     let finished = false;
-    return () => { if (!finished) { finished = true; s.humanPending--; } };
+    return () => { if (!finished) { finished = true; humanPending--; } };
   }
   async function human(name, owner, dispatch, binding) {
     if (!ownerValid(owner)) throw fault('AUTHORITY_UNAVAILABLE');
     const s = await resolveSession(name); checkedBinding(s, binding);
     const finish = beginHuman(s, owner);
     try {
-      await pauseSession(s);
+      await Promise.all([...sessions.values()].map(drain));
       if (!ownerValid(owner)) throw fault('AUTHORITY_UNAVAILABLE');
       return await dispatch();
     } finally { finish(); }

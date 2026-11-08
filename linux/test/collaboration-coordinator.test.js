@@ -25,7 +25,7 @@ async function fixture(t, options = {}) {
   const args = async (overrides = {}) => ({ target: (await coordinator.list()).panes[0], text: 'literal 中文', ...overrides });
   const defaultGrant = { id: 'test-grant', expires: Date.now() + 60000 };
   const admit = (tool, args, grant = defaultGrant) => coordinator.admit({ grant, tool, digest: operationDigest(tool, args) });
-  return { coordinator, writes, controller, socket, args, admit };
+  return { coordinator, writes, controller, panes, socket, args, admit };
 }
 test('private coordinator admits exact one-use requests; nonce/digest/grant/generation cannot be forged', async t => {
   const f = await fixture(t), args = await f.args();
@@ -161,4 +161,42 @@ test('expired writer generations cannot silently reacquire for an old Enter or o
   const fresh = await f.args({ text: 'fresh-deliberate-action' });
   assert.notEqual(fresh.target.inputGeneration, current.target.inputGeneration);
   assert.deepEqual(await f.coordinator.execute({ ...f.admit('terminal_type', fresh, a), tool: 'terminal_type', arguments: fresh }), { sent: true, submitted: false });
+});
+
+
+test('human input fences all sessions, waits for cross-session writes and pauses newly discovered sessions', async t => {
+  let release, began;
+  const started = new Promise(resolve => { began = resolve; });
+  let held = true;
+  const f = await fixture(t, { controller: { type: async () => {
+    if (held) { began(); await new Promise(resolve => { release = resolve; }); held = false; }
+    return { sent: true, submitted: false };
+  } } });
+  const web = { ...base, sessionId: '$2', windowId: '@2', paneId: '%3', sessionName: 'web-012345abcdef' };
+  f.panes.push(web);
+  const target = (await f.coordinator.list()).panes.find(p => p.sessionName === web.sessionName);
+  const args = { target, text: 'AI_WEB_DRAFT' }, grant = { id: 'cross-session-grant', expires: Date.now() + 60000 };
+  const writing = f.coordinator.execute({ ...f.admit('terminal_type', args, grant), tool: 'terminal_type', arguments: args });
+  await started;
+  const binding = await f.coordinator.binding('shared');
+  let forwarded = false;
+  const human = f.coordinator.human('shared', owner(), () => { forwarded = true; }, binding);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(forwarded, false, 'human bytes wait for a write in a different session');
+  assert.equal((await f.coordinator.state(web.sessionName)).paused, true);
+  await assert.rejects(f.coordinator.control(web.sessionName, 'resume', owner()), code('INPUT_BUSY'));
+  release(); await writing; await human;
+  assert.equal(forwarded, true);
+  const delayed = { target, key: 'Enter' };
+  await assert.rejects(f.coordinator.execute({ ...f.admit('terminal_send_key', delayed, grant), tool: 'terminal_send_key', arguments: delayed }), code('STALE_INPUT_GENERATION'));
+  const next = { ...web, sessionId: '$3', windowId: '@3', paneId: '%4', sessionName: 'web-fedcba654321' };
+  f.panes.push(next);
+  const listed = (await f.coordinator.list()).panes;
+  assert.equal(listed.find(p => p.sessionName === next.sessionName).collaboration.paused, true, 'a session first discovered after human activity must not reopen AI writing');
+  await f.coordinator.control(web.sessionName, 'resume', owner());
+  const fresh = (await f.coordinator.list()).panes.find(p => p.sessionName === web.sessionName);
+  assert.equal(fresh.collaboration.paused, false);
+  assert.equal((await f.coordinator.state('shared')).paused, true, 'resume is explicit and local, not an all-session grant');
+  const current = { target: fresh, text: 'FRESH_DELIBERATE_WEB_ACTION' };
+  assert.deepEqual(await f.coordinator.execute({ ...f.admit('terminal_type', current, grant), tool: 'terminal_type', arguments: current }), { sent: true, submitted: false });
 });
