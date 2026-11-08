@@ -1,3 +1,4 @@
+import { TerminalError, validateTerminalText } from "./terminal-errors.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
@@ -85,11 +86,11 @@ export class TerminalController {
       !/^@\d+$/.test(t.windowId) ||
       !/^%\d+$/.test(t.paneId)
     )
-      throw Error("Invalid target");
+      throw new TerminalError("INVALID_TARGET");
     const current = (await this.list()).find((p) =>
       ["serverPid", "sessionId", "windowId", "paneId"].every((k) => p[k] === t[k]),
     );
-    if (!current) throw Error("Target changed");
+    if (!current) throw new TerminalError("STALE_TARGET");
     return current;
   }
   async guarded(t, command, allowMode = false) {
@@ -114,9 +115,7 @@ export class TerminalController {
       "display-message -p WT_MCP_STALE",
     ]);
     if (!result.endsWith("WT_MCP_OK\n"))
-      throw Error(
-        "Target changed or input unavailable; do not retry input automatically",
-      );
+      throw new TerminalError("STALE_TARGET");
     return result.slice(0, -"WT_MCP_OK\n".length);
   }
   async read(t, lines = 100) {
@@ -135,13 +134,7 @@ export class TerminalController {
   }
 
   async type(t, text) {
-    if (
-      typeof text !== "string" ||
-      !text.length ||
-      Buffer.byteLength(text) > 8192 ||
-      /[\x00-\x1f\x7f]/.test(text)
-    )
-      throw Error("Text must be 1–8192 bytes without controls; use send_key");
+    validateTerminalText(text);
     const buffer = `web-terminal-mcp-${randomUUID()}`;
     try {
       await this.select(t);
