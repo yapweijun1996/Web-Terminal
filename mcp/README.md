@@ -61,3 +61,12 @@ fixtures can use delegated mode. Concurrent private requests keep separate
 admission contexts. Coordinator errors are mapped to fixed public diagnostics;
 raw upstream messages and authority values are not echoed. The private local
 socket remains a same-user trust boundary, not an OS sandbox.
+
+
+Trusted coordinator adapters may additionally call controller `type`/`key` with a
+third `{expectedPanePid}` option captured from the server's own pane-process
+snapshot. The final tmux guard checks `pane_pid` and alive state as well as the
+four public target IDs, preventing same-pane respawn from inheriting an old
+coordinated operation. This optional adapter field is not a public owner claim,
+does not pin the changing foreground command PID, and does not change the four-ID
+delegated target contract. Caller mutation after dispatch cannot rebind it.

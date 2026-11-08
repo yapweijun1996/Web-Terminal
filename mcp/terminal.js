@@ -13,6 +13,13 @@ function snapshotTarget(t) {
     throw new TerminalError("INVALID_TARGET");
   return Object.freeze(Object.fromEntries(["serverPid", "sessionId", "windowId", "paneId"].map(k => [k, t[k]])));
 }
+function expectedPanePid(options) {
+  const pid = options?.expectedPanePid;
+  if (pid === undefined) return undefined;
+  if (typeof pid !== "string" || !/^[1-9]\d{0,19}$/.test(pid))
+    throw new TerminalError("INVALID_TARGET");
+  return pid;
+}
 export class TerminalController {
   constructor({ server, session, layout = "grouped", tmux = process.env.TMUX_BIN || "tmux" }) {
     if (
@@ -96,7 +103,8 @@ export class TerminalController {
     if (!current) throw new TerminalError("STALE_TARGET");
     return current;
   }
-  async guarded(t, command, allowMode = false) {
+  async guarded(t, command, allowMode = false, panePid) {
+    panePid = expectedPanePid({ expectedPanePid: panePid });
     const current = await this.validate(t);
     const checks = [
       `#{==:#{pid},${t.serverPid}}`,
@@ -107,6 +115,10 @@ export class TerminalController {
     if (this.layout === "linux-tabs")
       checks.push(`#{==:#{session_name},${current.sessionName}}`);
     if (!allowMode) checks.push("#{==:#{pane_in_mode},0}");
+    // Optional trusted adapter snapshot fences a respawn within the same pane ID.
+    // This is the pane process, not the changing foreground command PID.
+    if (panePid !== undefined)
+      checks.push(`#{==:#{pane_pid},${panePid}}`, "#{==:#{pane_dead},0}");
     const cond = checks.reduce((a, b) => `#{&&:${a},${b}}`);
     const result = await this.run([
       "if-shell",
@@ -149,21 +161,22 @@ export class TerminalController {
       activeWrites.delete(id);
     }
   }
-  async type(t, text) {
+  async type(t, text, options) {
     validateTerminalText(text);
+    const panePid = expectedPanePid(options);
     return this.input(t, async target => {
       const buffer = `web-terminal-mcp-${randomUUID()}`;
       try {
         await this.validate(target);
         await this.run(["set-buffer", "-b", buffer, "--", text]);
-        await this.guarded(target, `paste-buffer -p -d -b ${buffer} -t ${target.paneId}`);
+        await this.guarded(target, `paste-buffer -p -d -b ${buffer} -t ${target.paneId}`, false, panePid);
         return { sent: true, submitted: false };
       } finally {
         await this.run(["delete-buffer", "-b", buffer]).catch(() => {});
       }
     });
   }
-  async key(t, key) {
+  async key(t, key, options) {
     if (
       ![
         "Enter",
@@ -179,8 +192,9 @@ export class TerminalController {
       ].includes(key)
     )
       throw Error("Unsupported key");
+    const panePid = expectedPanePid(options);
     return this.input(t, async target => {
-      await this.guarded(target, `send-keys -t ${target.paneId} ${key}`);
+      await this.guarded(target, `send-keys -t ${target.paneId} ${key}`, false, panePid);
       return { sent: true, submitted: key === "Enter" };
     });
   }

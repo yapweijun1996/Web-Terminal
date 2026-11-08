@@ -166,3 +166,38 @@ test("process-wide input capacity rejects excess work without an unbounded queue
   finally { resume(); await Promise.all(pending); }
   assert.equal(await ctl.input(target(32), async () => true), true);
 });
+
+test("trusted pane-process snapshot rejects same-pane respawn inside the tmux guard", async t => {
+  const { ctl, tmux } = fixture(t);
+  const [target] = await ctl.list();
+  const oldPid = tmux("display-message", "-p", "-t", target.paneId, "#{pane_pid}").trim();
+  tmux("respawn-pane", "-k", "-t", target.paneId, "/bin/cat");
+  const currentPid = tmux("display-message", "-p", "-t", target.paneId, "#{pane_pid}").trim();
+  assert.notEqual(currentPid, oldPid);
+  assert.deepEqual((await ctl.list()).map(p => [p.serverPid, p.sessionId, p.windowId, p.paneId]), [[target.serverPid, target.sessionId, target.windowId, target.paneId]]);
+  await assert.rejects(ctl.type(target, "OLD_PROCESS_DENIED", { expectedPanePid: oldPid }), error => error.code === "STALE_TARGET");
+  await assert.rejects(ctl.key(target, "Enter", { expectedPanePid: oldPid }), error => error.code === "STALE_TARGET");
+  assert.equal(await ctl.read(target), "");
+  assert.equal(tmux("list-buffers"), "");
+  await assert.rejects(ctl.type(target, "INVALID_PID", { expectedPanePid: "1;evil" }), error => error.code === "INVALID_TARGET");
+  assert.deepEqual(await ctl.type(target, "FRESH_PROCESS", { expectedPanePid: currentPid }), { sent: true, submitted: false });
+  assert.deepEqual(await ctl.key(target, "Enter", { expectedPanePid: currentPid }), { sent: true, submitted: true });
+});
+test("trusted pane-process option is captured before await and cannot follow a caller mutation", async t => {
+  const { ctl, tmux } = fixture(t);
+  const [target] = await ctl.list();
+  const oldPid = tmux("display-message", "-p", "-t", target.paneId, "#{pane_pid}").trim();
+  const options = { expectedPanePid: oldPid };
+  let resume;
+  const hold = new Promise(resolve => { resume = resolve; });
+  const validate = ctl.validate.bind(ctl);
+  let first = true;
+  ctl.validate = async captured => { if (first) { first = false; await hold; } return validate(captured); };
+  const writing = ctl.type(target, "MUST_NOT_REBIND", options);
+  tmux("respawn-pane", "-k", "-t", target.paneId, "/bin/cat");
+  options.expectedPanePid = tmux("display-message", "-p", "-t", target.paneId, "#{pane_pid}").trim();
+  resume();
+  await assert.rejects(writing, error => error.code === "STALE_TARGET");
+  assert.equal(await ctl.read(target), "");
+  assert.equal(tmux("list-buffers"), "");
+});
