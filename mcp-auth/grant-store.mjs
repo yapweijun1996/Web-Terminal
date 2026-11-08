@@ -323,6 +323,13 @@ export class GrantStore {
         return Object.freeze({ id, expires: grant.expires });
     return null;
   }
+  activeGrant(id) {
+    this.prune();
+    const grant = this.grants.get(id);
+    return grant && grant.tokenDigest !== null
+      ? Object.freeze({ active: true, expires: grant.expires })
+      : Object.freeze({ active: false });
+  }
   validToken(token) {
     return this.grantForToken(token) !== null;
   }

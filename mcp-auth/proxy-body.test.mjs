@@ -25,7 +25,7 @@ function call(socket, host, route, method = "GET", data = "", headers = {}) {
 async function fixture(t, timeoutMs = 5000, config = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-proxy-body-"));
   fs.chmodSync(dir, 0o700);
-  const pub = path.join(dir, "public.sock"), owner = path.join(dir, "owner.sock"), upstreamSocket = path.join(dir, "upstream.sock");
+  const pub = path.join(dir, "public.sock"), owner = path.join(dir, "owner.sock"), upstreamSocket = path.join(dir, "upstream.sock"), grantSocket = path.join(dir, "grant.sock");
   const requests = [];
   const upstream = http.createServer((req, res) => {
     const entry = { headers: req.headers, chunks: [] };
@@ -43,9 +43,10 @@ async function fixture(t, timeoutMs = 5000, config = {}) {
   });
   listenPrivate(gateway.publicServer, pub);
   listenPrivate(gateway.approvalServer, owner);
-  await Promise.all([gateway.publicServer, gateway.approvalServer].map(server => server.listening ? undefined : new Promise(resolve => server.once("listening", resolve))));
+  listenPrivate(gateway.grantVerifierServer, grantSocket);
+  await Promise.all([gateway.publicServer, gateway.approvalServer, gateway.grantVerifierServer].map(server => server.listening ? undefined : new Promise(resolve => server.once("listening", resolve))));
   t.after(async () => {
-    await Promise.all([upstream, gateway.publicServer, gateway.approvalServer].map(server => new Promise(resolve => {
+    await Promise.all([upstream, gateway.publicServer, gateway.approvalServer, gateway.grantVerifierServer].map(server => new Promise(resolve => {
       server.close(resolve);
       server.closeAllConnections();
     })));
@@ -89,7 +90,8 @@ async function fixture(t, timeoutMs = 5000, config = {}) {
     });
     return { request, response, seen };
   }
-  return { pub, requests, publicCall, ownerCall, grant, hold };
+  const verifyGrant = grantId => call(grantSocket, "localhost", "/v1/grant", "POST", JSON.stringify({ grantId }), { "content-type": "application/json" });
+  return { pub, grantSocket, requests, publicCall, ownerCall, verifyGrant, grant, hold };
 }
 
 test("MCP body proxy revalidates revocation after the initial authorization check", async t => {
@@ -197,7 +199,7 @@ test("chunked body exceeding the byte limit is refused before upstream setup", a
   assert.equal(f.requests.length, 0);
 });
 
-async function coordinatorFixture(t, admit) {
+async function coordinatorFixture(t, admit, revoke = () => ({ revoked: true })) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "auth-coordinator-"));
   fs.chmodSync(dir, 0o700);
   const socket = path.join(dir, "coordinator.sock"), requests = [];
@@ -208,7 +210,7 @@ async function coordinatorFixture(t, admit) {
     requests.push({ route: req.url, payload });
     res.setHeader("content-type", "application/json");
     if (req.url === "/v1/admit") res.end(JSON.stringify(await admit(payload)));
-    else if (req.url === "/v1/revoke") res.end('{"revoked":true}');
+    else if (req.url === "/v1/revoke") res.end(JSON.stringify(await revoke(payload)));
     else { res.statusCode = 404; res.end('{}'); }
   });
   await new Promise(resolve => server.listen(socket, resolve));
@@ -318,4 +320,68 @@ test("grant expiry during admission denies forwarding even if an admission respo
   release();
   assert.equal((await pending).status, 401);
   assert.equal(f.requests.length, 0);
+});
+
+test("authoritative grant lookup rejects an outstanding admission despite lost revoke notification", async t => {
+  let unavailable = true;
+  const admitted = [];
+  const coordinator = await coordinatorFixture(t, ({ grant }) => {
+    const response = { admission: crypto.randomBytes(32).toString("base64url"), expires: Date.now() + 15000 };
+    admitted.push({ ...response, grant }); return response;
+  }, () => unavailable ? { error: { code: "INPUT_UNKNOWN", message: "unconfirmed" } } : { revoked: true });
+  const f = await fixture(t, 5000, { collaborationSocket: coordinator.socket });
+  const token = await f.grant();
+  assert.equal((await f.publicCall("/mcp", "POST", mutation(), { authorization: "Bearer " + token })).status, 200);
+  const outstanding = admitted[0];
+  assert.deepEqual(JSON.parse((await f.verifyGrant(outstanding.grant.id)).body), { active: true, expires: outstanding.grant.expires });
+  const revoke = () => f.publicCall("/oauth/revoke", "POST", new URLSearchParams({ token }).toString(), { "content-type": "application/x-www-form-urlencoded" });
+  const first = await revoke();
+  assert.equal(first.status, 503);
+  assert.deepEqual(JSON.parse(first.body), { error: "revocation_pending" });
+  assert.equal((await revoke()).status, 503);
+  // The unconsumed, unexpired coordinator nonce still exists, but its source of
+  // authority now says inactive even before notification delivery recovers.
+  assert.ok(outstanding.expires > Date.now());
+  assert.deepEqual(JSON.parse((await f.verifyGrant(outstanding.grant.id)).body), { active: false });
+  assert.equal((await f.publicCall("/mcp", "POST", mutation(), { authorization: "Bearer " + token })).status, 401);
+  unavailable = false;
+  assert.equal((await revoke()).status, 200);
+  assert.equal((await revoke()).status, 200);
+  const unknown = await f.publicCall("/oauth/revoke", "POST", new URLSearchParams({ token: "u".repeat(43) }).toString(), { "content-type": "application/x-www-form-urlencoded" });
+  assert.equal(unknown.status, 503);
+  assert.deepEqual(JSON.parse(unknown.body), { error: "revocation_status_unavailable" });
+  assert.equal(f.requests.length, 1);
+});
+
+test("owner management reports durable revocation with unconfirmed drain honestly and permits a fresh verified retry", async t => {
+  let unavailable = true;
+  const coordinator = await coordinatorFixture(t, ({ grant }) => ({ admission: crypto.randomBytes(32).toString("base64url"), expires: Math.min(grant.expires, Date.now() + 5000) }),
+    () => unavailable ? { error: { code: "INPUT_UNKNOWN" } } : { revoked: true });
+  const f = await fixture(t, 5000, { collaborationSocket: coordinator.socket });
+  const token = await f.grant();
+  assert.equal((await f.publicCall("/mcp", "POST", mutation(), { authorization: "Bearer " + token })).status, 200);
+  const grantId = coordinator.requests[0].payload.grant.id;
+  const revoke = async retryPage => {
+    const page = retryPage || await f.ownerCall("/__terminal_mcp/authorize?view=connections");
+    const csrf = /name="csrf" value="([^"]+)"/.exec(page.body)[1];
+    return f.ownerCall("/__terminal_mcp/authorize?view=connections", "POST", new URLSearchParams({ action: "revoke", grantId, csrf }).toString());
+  };
+  const pending = await revoke();
+  assert.equal(pending.status, 503);
+  assert.match(pending.body, /Access revoked; input cancellation pending/);
+  assert.deepEqual(JSON.parse((await f.verifyGrant(grantId)).body), { active: false });
+  unavailable = false;
+  assert.equal((await revoke(pending)).status, 303);
+  assert.equal((await revoke(pending)).status, 400);
+});
+
+test("private grant verifier has no public route and rejects malformed or browser-origin requests", async t => {
+  const f = await fixture(t);
+  assert.equal((await f.publicCall("/v1/grant", "POST", JSON.stringify({ grantId: "g".repeat(43) }))).status, 404);
+  assert.equal((await call(f.grantSocket, "localhost", "/v1/grant", "GET")).status, 404);
+  assert.equal((await call(f.grantSocket, "localhost", "/v1/grant", "POST", "{}", { origin: "https://browser.example.test" })).status, 404);
+  assert.equal((await call(f.grantSocket, "localhost", "/v1/grant", "POST", '{"grantId":"bad"}')).status, 400);
+  assert.equal((await call(f.grantSocket, "localhost", "/v1/grant", "POST", 'not-json')).status, 400);
+  assert.deepEqual(JSON.parse((await f.verifyGrant("g".repeat(43))).body), { active: false });
+  assert.equal(fs.statSync(f.grantSocket).mode & 0o777, 0o600);
 });

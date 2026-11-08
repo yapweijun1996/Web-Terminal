@@ -63,6 +63,27 @@ coordinator without changing durable grant policy; already-dispatched bytes or
 commands cannot be undone. The coordinator independently bounds admission TTL
 and enforces grant revocation/expiry before delivery.
 
+For execute-time revocation authority, configure `MCP_GRANT_VERIFY_SOCKET` in
+the gateway's private owned runtime directory and `TERMINAL_GRANT_VERIFY_SOCKET`
+on the UI coordinator to that same socket. Only this new private listener serves
+`POST /v1/grant {grantId}`; it returns a live `{active:true,expires}` projection or
+`{active:false}` after pruning, never a bearer or owner claim. It is absent from
+the public/approval routes, rejects browser Origin, and uses the existing private
+socket ownership/mode checks. The coordinator must query it before actual
+mutation delivery; an unavailable verifier never permits cached authority. This
+closes the stale-admission window even if a revoke notification is lost.
+
+In coordinated mode, durable token revocation and confirmed input cancellation
+are different outcomes. A missing/failed drain acknowledgement returns sanitized
+`503 revocation_pending` after the token is already revoked. Bounded process-local
+HMAC-keyed status permits retrying confirmation without storing raw tokens; an
+unknown status after restart/eviction returns `revocation_status_unavailable`
+rather than claiming a drain completed. Owner management displays the pending
+state and a fresh one-use CSRF retry form. A successful notification/drain can
+then confirm cancellation. Without a coordinator, the existing idempotent OAuth
+revocation behavior is unchanged. No durable authorization state is rolled back
+to make a notification succeed.
+
 The existing exact Access-protected approval URL supports the read-only query
 `?view=input-identity`. It returns only `{authorized:true, ownerId, expires}` from
 the cryptographically verified Access issuer/subject/expiry; the identity is

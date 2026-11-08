@@ -159,11 +159,21 @@ export function createGateway(config, verifyOwner) {
   // Optional deployments do not require the coordinator or its modules.
   const collaboration = config.collaborationSocket
     ? createRequire(import.meta.url)("../runtime/gateway/collaboration-contract.cjs") : null;
+  const revocations = new Map();
+  const rememberRevocation = (key, state) => {
+    if (!revocations.has(key) && revocations.size >= 1000) {
+      const completed = [...revocations].find(([, value]) => value.confirmed);
+      if (completed) revocations.delete(completed[0]);
+    }
+    if (revocations.has(key) || revocations.size < 1000) revocations.set(key, state);
+  };
   const revokeAdmission = async grantId => {
-    if (!collaboration || !grantId) return;
+    if (!collaboration) return true;
+    if (!grantId) return false;
     try {
-      await collaboration.privateCall(config.collaborationSocket, "/v1/revoke", { grantId });
-    } catch { /* New requests still require a currently valid grant. */ }
+      const result = await collaboration.privateCall(config.collaborationSocket, "/v1/revoke", { grantId });
+      return result?.revoked === true && !result.error;
+    } catch { return false; }
   };
   const redirects = new Set(
     config.redirectUris.map((value) => validHttps(value).href),
@@ -359,8 +369,20 @@ export function createGateway(config, verifyOwner) {
         )
           return fail(res);
         const q = new URLSearchParams(await body(req));
-        const revokedId = store.revokeToken(q.get("token") || "");
-        await revokeAdmission(revokedId);
+        const token = q.get("token") || "";
+        const statusKey = store.digest("access-token", token);
+        const previous = revocations.get(statusKey);
+        const revokedId = store.revokeToken(token);
+        if (!collaboration) return send(res, 200, {});
+        const grantId = revokedId || previous?.grantId;
+        // An unknown token remains invalid, but after restart/eviction we cannot
+        // claim that its earlier in-flight coordinator work was drained.
+        if (!grantId) return send(res, 503, { error: "revocation_status_unavailable" });
+        if (previous?.confirmed && !revokedId) return send(res, 200, {});
+        rememberRevocation(statusKey, { grantId, confirmed: false });
+        if (!(await revokeAdmission(grantId)))
+          return send(res, 503, { error: "revocation_pending" });
+        rememberRevocation(statusKey, { grantId, confirmed: true });
         return send(res, 200, {});
       }
       if (url.pathname === "/mcp") {
@@ -581,7 +603,21 @@ export function createGateway(config, verifyOwner) {
           );
         management.delete(csrf);
         store.revokeGrant(q.get("grantId"));
-        await revokeAdmission(q.get("grantId"));
+        if (!(await revokeAdmission(q.get("grantId")))) {
+          if (management.size >= 100) management.delete(management.keys().next().value);
+          const retryCsrf = random();
+          management.set(retryCsrf, { expires: Date.now() + 300000 });
+          // These values are server-random or validated opaque IDs. Omitting
+          // action keeps native retry on this exact verified management URL.
+          const retry = `<form method="post"><input type="hidden" name="csrf" value="${retryCsrf}"><input type="hidden" name="action" value="revoke"><input type="hidden" name="grantId" value="${q.get("grantId")}"><button type="submit">Confirm input cancellation</button></form>`;
+          const page = renderError({
+            title: "Access revoked; input cancellation pending",
+            message: "This app can no longer make authorized requests. Confirmation that earlier terminal input has stopped is unavailable. Retry confirmation below or use the terminal controls to pause AI input and verify its status.",
+            retryUrl: approval.pathname + "?view=connections",
+            retryLabel: "Manage connections",
+          }).replace("</main>", retry + "</main>");
+          return send(res, 503, page, pageHeaders);
+        }
         return send(res, 303, "", {
           Location: approval.pathname + "?view=connections&revoked=1",
         });
@@ -659,6 +695,32 @@ export function createGateway(config, verifyOwner) {
       return fail(res, 401);
     }
   });
+  // This verifier is never routed through the public or approval surfaces.
+  // A failed lookup is an authority failure, never a cached positive result.
+  const grantVerifierServer = http.createServer(async (req, res) => {
+    try {
+      if (req.method !== "POST" || req.url !== "/v1/grant" ||
+          req.headers.host !== "localhost" || req.headers.origin)
+        return send(res, 404, { error: "not_found" });
+      if (Number(req.headers["content-length"] || 0) > 4096)
+        return send(res, 413, { error: "request_too_large" });
+      let data;
+      try { data = await readMcpBody(req, 1000); }
+      catch (error) {
+        if (req.destroyed || res.destroyed) return;
+        if (!(error instanceof McpBodyError)) throw error;
+        return send(res, error.status, { error: error.code }, { Connection: "close" });
+      }
+      if (data.length > 4096) return send(res, 413, { error: "request_too_large" });
+      let value;
+      try { value = JSON.parse(data); }
+      catch { return send(res, 400, { error: "invalid_request" }); }
+      if (!value || typeof value !== "object" || Array.isArray(value) ||
+          Object.keys(value).length !== 1 || !/^[A-Za-z0-9_-]{43}$/.test(value.grantId || ""))
+        return send(res, 400, { error: "invalid_request" });
+      return send(res, 200, store.activeGrant(value.grantId));
+    } catch { return send(res, 503, { error: "grant_authority_unavailable" }); }
+  });
   for (const server of [publicServer, approvalServer]) {
     server.requestTimeout = 30000;
     server.headersTimeout = 10000;
@@ -667,9 +729,15 @@ export function createGateway(config, verifyOwner) {
   let closed = 0;
   for (const server of [publicServer, approvalServer])
     server.once("close", () => {
-      if (++closed === 2) store.close();
+      if (++closed === 2) {
+        if (grantVerifierServer.listening) grantVerifierServer.close(() => store.close());
+        else store.close();
+      }
     });
-  return { publicServer, approvalServer };
+  grantVerifierServer.requestTimeout = 2000;
+  grantVerifierServer.headersTimeout = 1000;
+  grantVerifierServer.maxHeadersCount = 16;
+  return { publicServer, approvalServer, grantVerifierServer };
 }
 export function listenPrivate(server, socket) {
   if (!path.isAbsolute(socket)) throw Error("Absolute socket required");
@@ -718,9 +786,12 @@ if (
   });
   listenPrivate(gateway.publicServer, env.MCP_AUTH_SOCKET);
   listenPrivate(gateway.approvalServer, env.MCP_APPROVAL_SOCKET);
+  if (env.MCP_GRANT_VERIFY_SOCKET !== undefined)
+    listenPrivate(gateway.grantVerifierServer, env.MCP_GRANT_VERIFY_SOCKET);
   for (const signal of ["SIGINT", "SIGTERM"])
     process.on(signal, () => {
       gateway.publicServer.close();
       gateway.approvalServer.close();
+      gateway.grantVerifierServer.close();
     });
 }

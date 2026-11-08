@@ -273,3 +273,22 @@ test("verified token projection exposes only grant identity and absolute expiry"
     assert.equal(store.revokeToken(token), null);
   } finally { store.close(); }
 });
+
+test("authoritative active-grant projection rejects pending, expired and revoked grants", t => {
+  const store = new GrantStore(fixture(t));
+  try {
+    const { id } = grant(store);
+    assert.deepEqual(store.activeGrant(id), { active: false });
+    const token = random(), bound = store.bindToken(id, token);
+    assert.deepEqual(store.activeGrant(id), { active: true, expires: bound.expires });
+    const realNow = Date.now;
+    t.mock.method(Date, "now", () => bound.expires);
+    assert.deepEqual(store.activeGrant(id), { active: false });
+    t.mock.restoreAll();
+    const next = grant(store); store.bindToken(next.id, random());
+    store.revokeGrant(next.id);
+    assert.deepEqual(store.activeGrant(next.id), { active: false });
+    assert.deepEqual(store.activeGrant("unknown"), { active: false });
+    assert.ok(realNow() < bound.expires);
+  } finally { store.close(); }
+});
