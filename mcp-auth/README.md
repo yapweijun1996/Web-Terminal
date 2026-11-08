@@ -31,6 +31,23 @@ MCP_REDIRECT_URIS=["https://chatgpt.com/connector_platform_oauth_redirect","http
 
 Route the MCP hostname to the public socket. Route the exact approval path on the terminal hostname to the approval socket before the terminal catch-all, preserving existing origin-side Access validation. The MCP hostname uses application OAuth and must not require interactive Access login for metadata/token/MCP requests. Preserve terminal/upload protection. Back up and validate ingress before changing it. Do not restart ttyd or tmux.
 
+## MCP request-body authorization boundary
+
+The gateway authenticates a bearer before collecting an MCP request body, then
+checks the same token again immediately before opening the upstream connection.
+A grant revoked or expired while the body is being uploaded receives `401` with
+the normal resource-metadata challenge and sends no bytes upstream. The absolute
+grant expiry is unchanged. Requests already forwarded and commands already
+started cannot be retracted by this check.
+
+MCP bodies are limited to 1 MiB and a **total** five-second upload deadline; each
+chunk does not extend the deadline. Timeout returns a sanitized `408`, oversized
+content returns `413`, and an aborted upload is discarded. No partial body is
+forwarded. `MCP_REQUEST_BODY_TIMEOUT_MS` may set the server-owned deadline to an
+integer from 1 to 30000 milliseconds; invalid configuration fails startup. The
+limit does not alter the existing 30-day default/365-day maximum grant policy,
+owner verification, PKCE, callbacks, or durable authorization storage.
+
 ## Durable connections and revocation
 
 Create separate owned mode-0700 state and key directories before launch. Production requires both state paths. A new store creates a random 32-byte mode-0600 master key outside the state directory; keep the key out of state snapshots. Grant metadata and DCR registrations persist as an integrity-authenticated JSON envelope written through exclusive temporary files, fsync and atomic rename. Store contents contain client names, public client identifiers, grant timing and keyed token digests, never raw bearer tokens or authorization codes. Issuer and resource are bound to the envelope; reuse under a different public URL fails closed. A missing/wrong key, tampering, unsafe permissions or symlinks prevents startup. Persistence failures disable further authorization instead of falling back to memory.

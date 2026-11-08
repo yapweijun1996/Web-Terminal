@@ -37,6 +37,59 @@ async function body(req) {
   }
   return data;
 }
+// This deadline covers the entire body, rather than resetting on each chunk.
+// Reject before opening the upstream connection; never log the received bytes.
+class McpBodyError extends Error {
+  constructor(status, code) {
+    super(code);
+    this.status = status;
+    this.code = code;
+  }
+}
+function readMcpBody(req, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let length = 0, settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      req.off("data", onData);
+      req.off("end", onEnd);
+      req.off("aborted", onAbort);
+      req.off("error", onError);
+      req.off("close", onClose);
+    };
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) {
+        // A response with Connection: close terminates incomplete bodies. An
+        // aborted IncomingMessage may emit an error after its aborted event.
+        req.pause();
+        req.once("error", () => {});
+        reject(error);
+      } else resolve(Buffer.concat(chunks, length));
+    };
+    const onData = chunk => {
+      length += chunk.length;
+      if (length > 1048576)
+        return finish(new McpBodyError(413, "request_too_large"));
+      chunks.push(chunk);
+    };
+    const onEnd = () => finish();
+    const onAbort = () => finish(new McpBodyError(400, "invalid_request"));
+    const onError = () => finish(new McpBodyError(400, "invalid_request"));
+    const onClose = () => { if (!req.complete) onAbort(); };
+    const timer = setTimeout(() => finish(new McpBodyError(408, "request_timeout")), timeoutMs);
+    timer.unref();
+    req.on("data", onData);
+    req.once("end", onEnd);
+    req.once("aborted", onAbort);
+    req.once("error", onError);
+    req.once("close", onClose);
+    if (req.aborted || req.destroyed) onAbort();
+  });
+}
 function validHttps(value) {
   const u = new URL(value);
   if (u.protocol !== "https:" || u.username || u.password || u.hash)
@@ -83,6 +136,9 @@ export function createGateway(config, verifyOwner) {
     issuer = new URL(resource).origin,
     approval = validHttps(config.approvalUrl),
     publicHost = new URL(resource).host;
+  const mcpBodyTimeoutMs = config.mcpBodyTimeoutMs ?? 5000;
+  if (!Number.isInteger(mcpBodyTimeoutMs) || mcpBodyTimeoutMs < 1 || mcpBodyTimeoutMs > 30000)
+    throw Error("MCP body timeout must be an integer from 1 to 30000 milliseconds");
   const redirects = new Set(
     config.redirectUris.map((value) => validHttps(value).href),
   );
@@ -135,6 +191,9 @@ export function createGateway(config, verifyOwner) {
     send(res, status, {
       error: status === 401 ? "invalid_token" : "invalid_request",
     });
+  const unauthorizedMcp = res => send(res, 401, { error: "invalid_token" }, {
+    "WWW-Authenticate": `Bearer resource_metadata="${issuer}/.well-known/oauth-protected-resource/mcp"`,
+  });
   // Never log queries, bodies, headers, identities or credentials.
   const observe = (req, res, surface) => {
     if (!config.onRequest) return;
@@ -282,14 +341,7 @@ export function createGateway(config, verifyOwner) {
           req.headers.authorization || "",
         );
         if (!match || !store.validToken(match[1]))
-          return send(
-            res,
-            401,
-            { error: "invalid_token" },
-            {
-              "WWW-Authenticate": `Bearer resource_metadata="${issuer}/.well-known/oauth-protected-resource/mcp"`,
-            },
-          );
+          return unauthorizedMcp(res);
         if (req.method !== "POST")
           return send(
             res,
@@ -299,18 +351,22 @@ export function createGateway(config, verifyOwner) {
           );
         if (Number(req.headers["content-length"] || 0) > 1048576)
           return send(res, 413, { error: "request_too_large" });
-        const chunks = [];
-        let length = 0;
-        for await (const chunk of req) {
-          length += chunk.length;
-          if (length > 1048576)
-            return send(res, 413, { error: "request_too_large" });
-          chunks.push(chunk);
+        let data;
+        try {
+          data = await readMcpBody(req, mcpBodyTimeoutMs);
+        } catch (error) {
+          if (req.destroyed || res.destroyed) return;
+          if (!(error instanceof McpBodyError)) throw error;
+          return send(res, error.status, { error: error.code }, { Connection: "close" });
         }
+        if (req.aborted || (!req.complete && req.destroyed) || res.destroyed) return;
+        // Revocation or expiry may occur while a client withholds body bytes.
+        // There is no asynchronous work between this check and upstream setup.
+        if (!store.validToken(match[1])) return unauthorizedMcp(res);
         const headers = {
           "content-type": req.headers["content-type"] || "application/json",
           accept: req.headers.accept || "application/json, text/event-stream",
-          "content-length": length,
+          "content-length": data.length,
         };
         if (req.headers["mcp-protocol-version"])
           headers["mcp-protocol-version"] = req.headers["mcp-protocol-version"];
@@ -336,7 +392,7 @@ export function createGateway(config, verifyOwner) {
             send(res, 502, { error: "upstream_unavailable" });
           else res.destroy();
         });
-        upstream.end(Buffer.concat(chunks));
+        upstream.end(data);
         return;
       }
       return send(res, 404, { error: "not_found" });
@@ -586,6 +642,8 @@ if (
     accessAudience: env.ACCESS_AUDIENCE,
     ownerEmail: env.ACCESS_OWNER_EMAIL,
     maxGrantSeconds: env.MCP_GRANT_MAX_SECONDS,
+    mcpBodyTimeoutMs: env.MCP_REQUEST_BODY_TIMEOUT_MS === undefined
+      ? undefined : Number(env.MCP_REQUEST_BODY_TIMEOUT_MS),
     onRequest: env.MCP_AUTH_LOG_REQUESTS === "1"
       ? (event) => console.error(JSON.stringify({ event: "oauth_http", ...event }))
       : undefined,
