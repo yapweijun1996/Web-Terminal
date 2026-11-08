@@ -69,3 +69,14 @@ iframe.active { visibility: visible; }
   .menu-panel .display-controls section { position: static; width: 100%; margin-top: 6px; padding: 6px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+
+/* Safari can pan the visual viewport while its keyboard covers the layout viewport. */
+body.terminal-visual-viewport { position: fixed; top: var(--terminal-viewport-top); left: 0; height: var(--terminal-viewport-height); }
+body.terminal-visual-viewport #main > :not(#views) { flex-shrink: 0; }
+@media (any-pointer: coarse) {
+  input, select { font-size: 16px; }
+  .terminal-visual-viewport .menu-panel { max-height: max(44px, calc(var(--terminal-viewport-height) - 70px)); }
+}
+@media (max-width: 700px) {
+  .terminal-visual-viewport #sidebar, .terminal-visual-viewport #sidebar-backdrop { top: var(--terminal-viewport-top); bottom: auto; height: var(--terminal-viewport-height); }
+}

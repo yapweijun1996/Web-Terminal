@@ -1,4 +1,107 @@
 'use strict';
+// Mobile viewport adapter: shipped in the existing hot-served outer asset.
+const terminalViewport = (() => {
+  // Small DOM fixtures and browsers without media queries retain normal layout.
+  if (!window.matchMedia || !window.requestAnimationFrame) return { install() {}, forget() {} };
+  const touch = window.matchMedia('(any-pointer: coarse)');
+  const viewport = window.visualViewport;
+  const installed = new WeakMap();
+  function forget(iframe) { installed.get(iframe)?.cleanup(); installed.delete(iframe); }
+  function install(iframe) {
+    // The existing /terminal/<session> proxy is same-origin. Do not relax it.
+    let win, term;
+    try { win = iframe.contentWindow; term = win?.term; } catch { return; }
+    if (!term?.textarea || !term.element) return;
+    if (installed.get(iframe)?.term === term) return;
+    forget(iframe);
+    const cleanups = [];
+    let disposed = false;
+    const originalResize = term.resize;
+    const resize = originalResize.bind(term);
+    cleanups.push(() => { term.resize = originalResize; });
+    term.resize = (cols, rows) => {
+      const buffer = term.buffer?.active;
+      const line = touch.matches && buffer?.type === 'normal' && buffer.viewportY < buffer.baseY && cols === term.cols ? buffer.viewportY : null;
+      // A full scrollback buffer can trim its first lines when rows shrink.
+      // Public markers follow that trim, keeping the same surviving history.
+      const marker = line === null ? null : term.registerMarker?.(line - buffer.baseY - buffer.cursorY);
+      try {
+        resize(cols, rows);
+        if (line !== null && term.buffer.active === buffer && !marker?.isDisposed) term.scrollToLine(marker?.line ?? line);
+      } finally { marker?.dispose(); }
+    };
+    const input = term.textarea;
+    if (input) {
+      const originalFocus = input.focus;
+      const originalFontSize = input.style.fontSize;
+      const focus = originalFocus.bind(input);
+      cleanups.push(() => { input.focus = originalFocus; input.style.fontSize = originalFontSize; });
+      input.focus = options => focus(touch.matches ? { ...options, preventScroll: true } : options);
+      const updateInput = () => { input.style.fontSize = touch.matches ? '16px' : ''; };
+      touch.addEventListener('change', updateInput);
+      cleanups.push(() => touch.removeEventListener('change', updateInput));
+      updateInput();
+    }
+    // ResizeObserver also covers parent toolbar/Keys/sidebar layout changes.
+    let pending = false, geometry = '';
+    const schedule = () => {
+      if (pending) return;
+      pending = true;
+      win.requestAnimationFrame(() => {
+        pending = false;
+        if (disposed || !touch.matches || (viewport && Math.abs(viewport.scale - 1) > 0.01)) return;
+        const box = term.element?.getBoundingClientRect();
+        if (!box || box.width <= 0 || box.height <= 0) return;
+        const next = `${box.width}|${box.height}`;
+        if (next !== geometry) { geometry = next; term.fit?.(); }
+      });
+    };
+    if (typeof win.ResizeObserver === 'function' && term.element) {
+      const observer = new win.ResizeObserver(schedule);
+      observer.observe(term.element);
+      cleanups.push(() => observer.disconnect());
+    }
+    win.addEventListener('resize', schedule);
+    cleanups.push(() => win.removeEventListener('resize', schedule));
+    schedule();
+
+    const cleanup = () => { disposed = true; for (const dispose of cleanups) dispose(); };
+    const unload = () => forget(iframe);
+    win.addEventListener('pagehide', unload, { once: true });
+    cleanups.push(() => win.removeEventListener('pagehide', unload));
+    installed.set(iframe, { term, cleanup });
+  }
+  let pending = false;
+  const schedule = () => {
+    if (pending) return;
+    pending = true;
+    window.requestAnimationFrame(() => {
+      pending = false;
+      // Preserve accessibility zoom; a pinch is not a request to resize the PTY.
+      if (touch.matches && viewport && Math.abs(viewport.scale - 1) > 0.01) return;
+      const height = viewport?.height ?? window.innerHeight;
+      if (touch.matches && (!Number.isFinite(height) || height <= 0)) return;
+      document.body.classList.toggle('terminal-visual-viewport', touch.matches);
+      const style = document.documentElement.style;
+      if (touch.matches) {
+        style.setProperty('--terminal-viewport-height', `${height}px`);
+        style.setProperty('--terminal-viewport-top', `${Math.max(0, viewport?.offsetTop || 0)}px`);
+      } else {
+        style.removeProperty('--terminal-viewport-height');
+        style.removeProperty('--terminal-viewport-top');
+      }
+    });
+  };
+  window.addEventListener('resize', schedule);
+  window.addEventListener('orientationchange', schedule);
+  window.addEventListener('pageshow', schedule);
+  viewport?.addEventListener('resize', schedule);
+  viewport?.addEventListener('scroll', schedule);
+  touch.addEventListener('change', schedule);
+  schedule();
+  return { install, forget };
+})();
+// End mobile viewport adapter.
 const tabs = document.querySelector('#tabs');
 const views = document.querySelector('#views');
 const status = document.querySelector('#status');
@@ -149,6 +252,7 @@ function activate(name, focusTab = false) {
   updateControls();
 }
 function installClipboard(iframe, name) {
+  terminalViewport.install(iframe);
   const win = iframe.contentWindow;
   win.addEventListener('pointerup', () => { if (name === active) copyGestureAt = Date.now(); }, true);
   win.addEventListener('keydown', event => {
@@ -263,6 +367,7 @@ async function copyTerminalSelection(selection) {
 copySelection.addEventListener('click', () => { if (pendingCopy) copyTerminalSelection(pendingCopy); });
 function removeView(name) {
   if (name === active) { pendingCopy = null; copySelection.hidden = true; }
+  terminalViewport.forget(frames.get(name));
   frames.get(name)?.remove(); frames.delete(name); connections.delete(name); scrollModes.delete(name);
   const next = active && sessions.includes(active) && !hidden.has(active) ? active : sessions.find(n => !hidden.has(n));
   if (next) activate(next, true);
@@ -595,6 +700,7 @@ window.addEventListener('message', event => {
   for (const [name, iframe] of frames) {
     if (event.source === iframe.contentWindow) {
       if (event.data?.type === 'terminal-connection' && ['Connecting', 'Connected', 'Disconnected', 'Connection error'].includes(event.data.state)) {
+        terminalViewport.install(iframe);
         connections.set(name, event.data.state);
         if (event.data.state !== 'Connected') scrollModes.delete(name);
         if (event.data.state === 'Connected') iframe.contentWindow?.term?.textarea?.setAttribute('aria-label', 'Terminal input. Press Control Alt Shift T to focus toolbar.');
@@ -618,5 +724,6 @@ window.addEventListener('message', event => {
     }
   }
 });
+window.addEventListener('pageshow', () => { for (const iframe of frames.values()) terminalViewport.install(iframe); });
 load();
 schedulePoll();
