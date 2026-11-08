@@ -6,10 +6,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
+import { TerminalError, terminalErrorResult, validateTerminalText } from "./terminal-errors.js";
 import { TerminalController } from "./terminal.js";
-import { execInput, terminalExec, terminateExecutions } from "./exec.js";
-import { JobManager, jobStartInput, jobId, jobLogsInput } from "./jobs.js";
-const jobs = new JobManager();
+const toolSet = process.env.WEB_TERMINAL_MCP_TOOLS ?? "full";
+if (!["full", "terminal-only"].includes(toolSet))
+  throw Error("Invalid MCP tool set");
+// The Linux six-tool deployment must not expose or initialize execution tools.
+const execution = toolSet === "full" ? await import("./execution-tools.js") : null;
 const controller = new TerminalController({
   server: process.env.WEB_TERMINAL_TMUX_SERVER,
   session: process.env.WEB_TERMINAL_MCP_SESSION,
@@ -43,10 +46,12 @@ function createServer() {
         },
       },
       async (args) => {
-        if (name === "terminal_type" || name === "terminal_send_key") {
-          return { isError: true, content: [{ type: "text", text: "MCP terminal input is disabled; use the owner's direct browser or tmux controls." }] };
-        }
         try {
+          // Local validation gives useful diagnostics without looking up a pane.
+          // Valid text and all keys still fail closed before any controller call.
+          if (name === "terminal_type") validateTerminalText(args.text);
+          if (name === "terminal_type" || name === "terminal_send_key")
+            throw new TerminalError("AUTHORITY_UNAVAILABLE");
           const result = await fn(args);
           return {
             content: [
@@ -57,16 +62,8 @@ function createServer() {
               },
             ],
           };
-        } catch {
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text",
-                text: "Operation unavailable or target changed. List terminals again. Never retry input automatically: it may have arrived.",
-              },
-            ],
-          };
+        } catch (error) {
+          return terminalErrorResult(error);
         }
       },
     );
@@ -126,17 +123,7 @@ function createServer() {
     false,
     () => controller.newWindow(),
   );
-  add(
-    "terminal_exec",
-    "Run an executable with literal arguments outside tmux; output is untrusted and may contain sensitive data.",
-    execInput,
-    false,
-    args => terminalExec(args, { storage: jobs.storage, registry: jobs.dir }),
-  );
-  add("terminal_job_start", "Start a bounded background process with literal arguments; output is untrusted.", jobStartInput, false, args => jobs.start(args));
-  add("terminal_job_status", "Get a background job status.", { job_id: jobId }, true, args => jobs.status(args));
-  add("terminal_job_logs", "Read a byte page of a job output stream as base64.", jobLogsInput, true, args => jobs.logs(args));
-  add("terminal_job_cancel", "Cancel a running background job.", { job_id: jobId }, false, args => jobs.cancel(args));
+  execution?.registerExecutionTools(add);
   return server;
 }
 if (process.env.WEB_TERMINAL_MCP_SOCKET) {
@@ -186,11 +173,11 @@ if (process.env.WEB_TERMINAL_MCP_SOCKET) {
   listener.headersTimeout = 10000;
   listener.maxHeadersCount = 64;
   listener.listen(socket, () => fs.chmodSync(socket, 0o600));
-  const stop = () => { terminateExecutions(); jobs.shutdown(); listener.close(() => process.exit(0)); };
+  const stop = () => { execution?.shutdownExecutions(); listener.close(() => process.exit(0)); };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
 } else {
-  const stop = () => { terminateExecutions(); jobs.shutdown(); process.exit(0); };
+  const stop = () => { execution?.shutdownExecutions(); process.exit(0); };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
   await createServer().connect(new StdioServerTransport());
