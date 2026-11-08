@@ -72,11 +72,13 @@ test("shared workspace input, selection and stale targets", async () => {
       second = windows.find((p) => p.windowId !== t.windowId);
     assert.ok(second);
     await ctl.select(second);
-    await ctl.type(t, "AUTOFOLLOW");
+    await ctl.type(t, "NO_FOCUS_CHANGE");
     assert.equal(
       tmux("display-message", "-p", "-t", "=view-test:", "#{window_id}").trim(),
-      t.windowId,
+      second.windowId,
     );
+    await ctl.key(t, "Left");
+    assert.equal(tmux("display-message", "-p", "-t", "=view-test:", "#{window_id}").trim(), second.windowId);
     await ctl.select(second);
     assert.equal(
       tmux("display-message", "-p", "-t", "=view-test:", "#{window_id}").trim(),

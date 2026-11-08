@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { GrantStore } from "./grant-store.mjs";
 import {
@@ -37,6 +38,59 @@ async function body(req) {
   }
   return data;
 }
+// This deadline covers the entire body, rather than resetting on each chunk.
+// Reject before opening the upstream connection; never log the received bytes.
+class McpBodyError extends Error {
+  constructor(status, code) {
+    super(code);
+    this.status = status;
+    this.code = code;
+  }
+}
+function readMcpBody(req, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let length = 0, settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      req.off("data", onData);
+      req.off("end", onEnd);
+      req.off("aborted", onAbort);
+      req.off("error", onError);
+      req.off("close", onClose);
+    };
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) {
+        // A response with Connection: close terminates incomplete bodies. An
+        // aborted IncomingMessage may emit an error after its aborted event.
+        req.pause();
+        req.once("error", () => {});
+        reject(error);
+      } else resolve(Buffer.concat(chunks, length));
+    };
+    const onData = chunk => {
+      length += chunk.length;
+      if (length > 1048576)
+        return finish(new McpBodyError(413, "request_too_large"));
+      chunks.push(chunk);
+    };
+    const onEnd = () => finish();
+    const onAbort = () => finish(new McpBodyError(400, "invalid_request"));
+    const onError = () => finish(new McpBodyError(400, "invalid_request"));
+    const onClose = () => { if (!req.complete) onAbort(); };
+    const timer = setTimeout(() => finish(new McpBodyError(408, "request_timeout")), timeoutMs);
+    timer.unref();
+    req.on("data", onData);
+    req.once("end", onEnd);
+    req.once("aborted", onAbort);
+    req.once("error", onError);
+    req.once("close", onClose);
+    if (req.aborted || req.destroyed) onAbort();
+  });
+}
 function validHttps(value) {
   const u = new URL(value);
   if (u.protocol !== "https:" || u.username || u.password || u.hash)
@@ -55,7 +109,7 @@ export function callbackFormSource(redirect) {
     )
   );
 }
-export function createAccessVerifier(config, keys) {
+export function createAccessIdentityVerifier(config, keys) {
   const accessIssuer = validHttps(config.accessIssuer).origin;
   if (!config.accessAudience) throw Error("Access audience required");
   const jwks =
@@ -75,14 +129,52 @@ export function createAccessVerifier(config, keys) {
         requiredClaims: ["exp", "iat", "sub", "email"],
       },
     );
-    return !config.ownerEmail || payload.email === config.ownerEmail;
+    if (typeof payload.sub !== "string" || !payload.sub || payload.sub.length > 1024 ||
+        typeof payload.email !== "string" || !Number.isSafeInteger(payload.exp * 1000))
+      throw Error("Invalid Access identity");
+    if (config.ownerEmail && payload.email !== config.ownerEmail) return null;
+    return Object.freeze({
+      ownerId: hash(accessIssuer + "\0" + payload.sub),
+      expires: payload.exp * 1000,
+    });
   };
+}
+export function createAccessVerifier(config, keys) {
+  const identity = createAccessIdentityVerifier(config, keys);
+  const verify = async req => Boolean(await identity(req));
+  verify.identity = identity;
+  return verify;
 }
 export function createGateway(config, verifyOwner) {
   const resource = validHttps(config.publicUrl).href,
     issuer = new URL(resource).origin,
     approval = validHttps(config.approvalUrl),
     publicHost = new URL(resource).host;
+  const mcpBodyTimeoutMs = config.mcpBodyTimeoutMs ?? 5000;
+  if (!Number.isInteger(mcpBodyTimeoutMs) || mcpBodyTimeoutMs < 1 || mcpBodyTimeoutMs > 30000)
+    throw Error("MCP body timeout must be an integer from 1 to 30000 milliseconds");
+  if (config.collaborationSocket !== undefined &&
+      (typeof config.collaborationSocket !== "string" || !path.isAbsolute(config.collaborationSocket)))
+    throw Error("Absolute collaboration socket required");
+  // Optional deployments do not require the coordinator or its modules.
+  const collaboration = config.collaborationSocket
+    ? createRequire(import.meta.url)("../runtime/gateway/collaboration-contract.cjs") : null;
+  const revocations = new Map();
+  const rememberRevocation = (key, state) => {
+    if (!revocations.has(key) && revocations.size >= 1000) {
+      const completed = [...revocations].find(([, value]) => value.confirmed);
+      if (completed) revocations.delete(completed[0]);
+    }
+    if (revocations.has(key) || revocations.size < 1000) revocations.set(key, state);
+  };
+  const revokeAdmission = async grantId => {
+    if (!collaboration) return true;
+    if (!grantId) return false;
+    try {
+      const result = await collaboration.privateCall(config.collaborationSocket, "/v1/revoke", { grantId });
+      return result?.revoked === true && !result.error;
+    } catch { return false; }
+  };
   const redirects = new Set(
     config.redirectUris.map((value) => validHttps(value).href),
   );
@@ -135,6 +227,9 @@ export function createGateway(config, verifyOwner) {
     send(res, status, {
       error: status === 401 ? "invalid_token" : "invalid_request",
     });
+  const unauthorizedMcp = res => send(res, 401, { error: "invalid_token" }, {
+    "WWW-Authenticate": `Bearer resource_metadata="${issuer}/.well-known/oauth-protected-resource/mcp"`,
+  });
   // Never log queries, bodies, headers, identities or credentials.
   const observe = (req, res, surface) => {
     if (!config.onRequest) return;
@@ -274,7 +369,20 @@ export function createGateway(config, verifyOwner) {
         )
           return fail(res);
         const q = new URLSearchParams(await body(req));
-        store.revokeToken(q.get("token") || "");
+        const token = q.get("token") || "";
+        const statusKey = store.digest("access-token", token);
+        const previous = revocations.get(statusKey);
+        const revokedId = store.revokeToken(token);
+        if (!collaboration) return send(res, 200, {});
+        const grantId = revokedId || previous?.grantId;
+        // An unknown token remains invalid, but after restart/eviction we cannot
+        // claim that its earlier in-flight coordinator work was drained.
+        if (!grantId) return send(res, 503, { error: "revocation_status_unavailable" });
+        if (previous?.confirmed && !revokedId) return send(res, 200, {});
+        rememberRevocation(statusKey, { grantId, confirmed: false });
+        if (!(await revokeAdmission(grantId)))
+          return send(res, 503, { error: "revocation_pending" });
+        rememberRevocation(statusKey, { grantId, confirmed: true });
         return send(res, 200, {});
       }
       if (url.pathname === "/mcp") {
@@ -282,14 +390,7 @@ export function createGateway(config, verifyOwner) {
           req.headers.authorization || "",
         );
         if (!match || !store.validToken(match[1]))
-          return send(
-            res,
-            401,
-            { error: "invalid_token" },
-            {
-              "WWW-Authenticate": `Bearer resource_metadata="${issuer}/.well-known/oauth-protected-resource/mcp"`,
-            },
-          );
+          return unauthorizedMcp(res);
         if (req.method !== "POST")
           return send(
             res,
@@ -299,21 +400,54 @@ export function createGateway(config, verifyOwner) {
           );
         if (Number(req.headers["content-length"] || 0) > 1048576)
           return send(res, 413, { error: "request_too_large" });
-        const chunks = [];
-        let length = 0;
-        for await (const chunk of req) {
-          length += chunk.length;
-          if (length > 1048576)
-            return send(res, 413, { error: "request_too_large" });
-          chunks.push(chunk);
+        let data;
+        try {
+          data = await readMcpBody(req, mcpBodyTimeoutMs);
+        } catch (error) {
+          if (req.destroyed || res.destroyed) return;
+          if (!(error instanceof McpBodyError)) throw error;
+          return send(res, error.status, { error: error.code }, { Connection: "close" });
         }
+        if (req.aborted || (!req.complete && req.destroyed) || res.destroyed) return;
+        // Revocation or expiry may occur while a client withholds body bytes.
+        // There is no asynchronous work between this check and upstream setup.
+        if (!store.validToken(match[1])) return unauthorizedMcp(res);
         const headers = {
           "content-type": req.headers["content-type"] || "application/json",
           accept: req.headers.accept || "application/json, text/event-stream",
-          "content-length": length,
+          "content-length": data.length,
         };
         if (req.headers["mcp-protocol-version"])
           headers["mcp-protocol-version"] = req.headers["mcp-protocol-version"];
+        if (collaboration) {
+          let message;
+          try { message = JSON.parse(data); } catch { /* SDK validates malformed JSON. */ }
+          const tool = message?.method === "tools/call" ? message.params?.name : null;
+          if (tool === "terminal_type" || tool === "terminal_send_key") {
+            const grant = store.grantForToken(match[1]);
+            if (!grant) return unauthorizedMcp(res);
+            let admission;
+            try {
+              const digest = collaboration.operationDigest(tool, message.params.arguments);
+              admission = await collaboration.privateCall(config.collaborationSocket, "/v1/admit", { grant, tool, digest });
+            } catch {
+              if (!store.validToken(match[1])) return unauthorizedMcp(res);
+              return send(res, 503, { error: "input_authority_unavailable" });
+            }
+            const current = store.grantForToken(match[1]);
+            if (!current || current.id !== grant.id || current.expires !== grant.expires) {
+              await revokeAdmission(grant.id);
+              return unauthorizedMcp(res);
+            }
+            if (!admission || !/^[A-Za-z0-9_-]{16,200}$/.test(admission.admission || "") ||
+                !Number.isSafeInteger(admission.expires) || admission.expires <= Date.now() ||
+                admission.expires > grant.expires || admission.expires > Date.now() + 15000)
+              return send(res, 503, { error: "input_authority_unavailable" });
+            if (req.aborted || res.destroyed) return;
+            // Never forward a caller-provided admission or bearer header.
+            headers["x-web-terminal-admission"] = admission.admission;
+          }
+        }
         const upstream = http.request(
           {
             socketPath: config.upstreamSocket,
@@ -336,7 +470,7 @@ export function createGateway(config, verifyOwner) {
             send(res, 502, { error: "upstream_unavailable" });
           else res.destroy();
         });
-        upstream.end(Buffer.concat(chunks));
+        upstream.end(data);
         return;
       }
       return send(res, 404, { error: "not_found" });
@@ -353,8 +487,18 @@ export function createGateway(config, verifyOwner) {
         new URL(req.url, approval).pathname !== approval.pathname
       )
         return fail(res);
-      if (!(await verifyOwner(req))) return fail(res, 401);
       const pageUrl = new URL(req.url, approval);
+      if (req.method === "GET" && pageUrl.searchParams.get("view") === "input-identity") {
+        // Only the cryptographically verified identity projection is accepted.
+        // Boolean-only test/legacy verifiers cannot synthesize an owner role.
+        if (typeof verifyOwner.identity !== "function") return fail(res, 401);
+        const identity = await verifyOwner.identity(req);
+        if (!identity || typeof identity.ownerId !== "string" || !identity.ownerId ||
+            !Number.isSafeInteger(identity.expires) || identity.expires <= Date.now())
+          return fail(res, 401);
+        return send(res, 200, { authorized: true, ownerId: identity.ownerId, expires: identity.expires });
+      }
+      if (!(await verifyOwner(req))) return fail(res, 401);
       const pageHeaders = {
         "Content-Type": "text/html; charset=utf-8",
         "Content-Security-Policy":
@@ -459,6 +603,21 @@ export function createGateway(config, verifyOwner) {
           );
         management.delete(csrf);
         store.revokeGrant(q.get("grantId"));
+        if (!(await revokeAdmission(q.get("grantId")))) {
+          if (management.size >= 100) management.delete(management.keys().next().value);
+          const retryCsrf = random();
+          management.set(retryCsrf, { expires: Date.now() + 300000 });
+          // These values are server-random or validated opaque IDs. Omitting
+          // action keeps native retry on this exact verified management URL.
+          const retry = `<form method="post"><input type="hidden" name="csrf" value="${retryCsrf}"><input type="hidden" name="action" value="revoke"><input type="hidden" name="grantId" value="${q.get("grantId")}"><button type="submit">Confirm input cancellation</button></form>`;
+          const page = renderError({
+            title: "Access revoked; input cancellation pending",
+            message: "This app can no longer make authorized requests. Confirmation that earlier terminal input has stopped is unavailable. Retry confirmation below or use the terminal controls to pause AI input and verify its status.",
+            retryUrl: approval.pathname + "?view=connections",
+            retryLabel: "Manage connections",
+          }).replace("</main>", retry + "</main>");
+          return send(res, 503, page, pageHeaders);
+        }
         return send(res, 303, "", {
           Location: approval.pathname + "?view=connections&revoked=1",
         });
@@ -536,6 +695,32 @@ export function createGateway(config, verifyOwner) {
       return fail(res, 401);
     }
   });
+  // This verifier is never routed through the public or approval surfaces.
+  // A failed lookup is an authority failure, never a cached positive result.
+  const grantVerifierServer = http.createServer(async (req, res) => {
+    try {
+      if (req.method !== "POST" || req.url !== "/v1/grant" ||
+          req.headers.host !== "localhost" || req.headers.origin)
+        return send(res, 404, { error: "not_found" });
+      if (Number(req.headers["content-length"] || 0) > 4096)
+        return send(res, 413, { error: "request_too_large" });
+      let data;
+      try { data = await readMcpBody(req, 1000); }
+      catch (error) {
+        if (req.destroyed || res.destroyed) return;
+        if (!(error instanceof McpBodyError)) throw error;
+        return send(res, error.status, { error: error.code }, { Connection: "close" });
+      }
+      if (data.length > 4096) return send(res, 413, { error: "request_too_large" });
+      let value;
+      try { value = JSON.parse(data); }
+      catch { return send(res, 400, { error: "invalid_request" }); }
+      if (!value || typeof value !== "object" || Array.isArray(value) ||
+          Object.keys(value).length !== 1 || !/^[A-Za-z0-9_-]{43}$/.test(value.grantId || ""))
+        return send(res, 400, { error: "invalid_request" });
+      return send(res, 200, store.activeGrant(value.grantId));
+    } catch { return send(res, 503, { error: "grant_authority_unavailable" }); }
+  });
   for (const server of [publicServer, approvalServer]) {
     server.requestTimeout = 30000;
     server.headersTimeout = 10000;
@@ -544,9 +729,15 @@ export function createGateway(config, verifyOwner) {
   let closed = 0;
   for (const server of [publicServer, approvalServer])
     server.once("close", () => {
-      if (++closed === 2) store.close();
+      if (++closed === 2) {
+        if (grantVerifierServer.listening) grantVerifierServer.close(() => store.close());
+        else store.close();
+      }
     });
-  return { publicServer, approvalServer };
+  grantVerifierServer.requestTimeout = 2000;
+  grantVerifierServer.headersTimeout = 1000;
+  grantVerifierServer.maxHeadersCount = 16;
+  return { publicServer, approvalServer, grantVerifierServer };
 }
 export function listenPrivate(server, socket) {
   if (!path.isAbsolute(socket)) throw Error("Absolute socket required");
@@ -582,19 +773,25 @@ if (
     approvalUrl: env.MCP_APPROVAL_URL,
     redirectUris: JSON.parse(env.MCP_REDIRECT_URIS || "[]"),
     upstreamSocket: env.MCP_UPSTREAM_SOCKET,
+    collaborationSocket: env.MCP_COLLABORATION_SOCKET,
     accessIssuer: env.ACCESS_ISSUER,
     accessAudience: env.ACCESS_AUDIENCE,
     ownerEmail: env.ACCESS_OWNER_EMAIL,
     maxGrantSeconds: env.MCP_GRANT_MAX_SECONDS,
+    mcpBodyTimeoutMs: env.MCP_REQUEST_BODY_TIMEOUT_MS === undefined
+      ? undefined : Number(env.MCP_REQUEST_BODY_TIMEOUT_MS),
     onRequest: env.MCP_AUTH_LOG_REQUESTS === "1"
       ? (event) => console.error(JSON.stringify({ event: "oauth_http", ...event }))
       : undefined,
   });
   listenPrivate(gateway.publicServer, env.MCP_AUTH_SOCKET);
   listenPrivate(gateway.approvalServer, env.MCP_APPROVAL_SOCKET);
+  if (env.MCP_GRANT_VERIFY_SOCKET !== undefined)
+    listenPrivate(gateway.grantVerifierServer, env.MCP_GRANT_VERIFY_SOCKET);
   for (const signal of ["SIGINT", "SIGTERM"])
     process.on(signal, () => {
       gateway.publicServer.close();
       gateway.approvalServer.close();
+      gateway.grantVerifierServer.close();
     });
 }

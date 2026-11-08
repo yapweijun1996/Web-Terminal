@@ -258,3 +258,37 @@ test("unissued pending grants expire with the shared authorization-code deadline
     store.close();
   }
 });
+
+test("verified token projection exposes only grant identity and absolute expiry", t => {
+  const store = new GrantStore(fixture(t));
+  try {
+    const { id } = grant(store), token = random();
+    const issued = store.bindToken(id, token);
+    const projection = store.grantForToken(token);
+    assert.deepEqual(projection, { id, expires: issued.expires });
+    assert.equal(Object.isFrozen(projection), true);
+    assert.equal(store.grantForToken("unknown-token"), null);
+    assert.equal(store.revokeToken(token), id);
+    assert.equal(store.grantForToken(token), null);
+    assert.equal(store.revokeToken(token), null);
+  } finally { store.close(); }
+});
+
+test("authoritative active-grant projection rejects pending, expired and revoked grants", t => {
+  const store = new GrantStore(fixture(t));
+  try {
+    const { id } = grant(store);
+    assert.deepEqual(store.activeGrant(id), { active: false });
+    const token = random(), bound = store.bindToken(id, token);
+    assert.deepEqual(store.activeGrant(id), { active: true, expires: bound.expires });
+    const realNow = Date.now;
+    t.mock.method(Date, "now", () => bound.expires);
+    assert.deepEqual(store.activeGrant(id), { active: false });
+    t.mock.restoreAll();
+    const next = grant(store); store.bindToken(next.id, random());
+    store.revokeGrant(next.id);
+    assert.deepEqual(store.activeGrant(next.id), { active: false });
+    assert.deepEqual(store.activeGrant("unknown"), { active: false });
+    assert.ok(realNow() < bound.expires);
+  } finally { store.close(); }
+});

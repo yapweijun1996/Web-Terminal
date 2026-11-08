@@ -46,3 +46,35 @@ The first Linux deployment exposed public metadata successfully but had no RFC 9
 After the issuer correction, public checks using an authoritative DNS address returned metadata 200, DCR 201 for the stable ChatGPT callback and `none`, authorization 302 to Access-protected approval, and MCP 401 without a bearer. No production grant was issued. Those partial checks did not establish browser form success.
 
 The owner subsequently reached real consent but received `invalid_request` on native submission within a minute. Focused KB recall and comparison with upstream revealed existing fixes absent from the stale Linux release: `no-referrer` makes Chrome send `Origin: null`, and `form-action 'self'` also blocks a successful POST's cross-origin callback. Reused the upstream styled consent, recovery pages, same-origin referrer policy and exact validated callback CSP. Native HTTPS regression reproduced null-Origin 400 before the fix and verified Allow/Deny 302 and Revoke 303 afterward. A second HTTPS origin verified callback arrival, issuer/state, PKCE exchange and MCP discovery; the old CSP reproduced a blocked callback despite server-side 302. One-hour deployment limits are enforced in both UI and token issuance. Actual owner's hosted-client tool acceptance remains a separate unconfirmed step.
+
+
+## Coordinated input release checks
+
+An approved OAuth client may act as a delegate without being the owner identity.
+For the Linux six-tool profile, source now supports an explicitly configured
+coordinated input mode; see [the collaborative contract](shared-terminal-mcp.md).
+Require positive literal text and separate Enter through the actual authenticated
+connector in an operator-provisioned disposable `/bin/cat` target. Fresh
+`terminal_list` includes `inputGeneration`; old generations are never refreshed
+and retried automatically. Keep all existing user panes untouched by smoke input.
+
+The UI coordinator, gateway private grant verifier and MCP adapter must be
+packaged together. Preserve `release/linux/ui`, `release/linux/node_modules`,
+`release/mcp`, and `release/runtime/gateway` relative layout. Do not include
+execution/job modules in the six-tool package. Verify startup failure does not
+leave a writable coordinator behind, and verify real native browser protocol
+replies do not falsely pause AI while keyboard/paste/mobile input does pause it.
+
+Before a UI restart, inspect the **live** Tunnel dependency graph. The older
+Linux unit uses `Requires=linux-web-terminal-ui.service`, causing UI stop to stop
+Tunnel. Prepare and independently validate a dependency-only change to `Wants`
+while retaining startup `After` ordering and unrelated dependencies. Reload the
+user manager without restarting Tunnel; prove its PID stayed fixed before UI
+activation. If this cannot be achieved safely, do not issue a naive UI restart.
+Never restart Tunnel without explicit authorization.
+
+Activation order is UI/coordinator, gateway/private grant verifier, then MCP
+coordinated mode, with ready-socket/state probes between steps. Preserve durable
+grant/key paths and the owner-selected duration policy. Unfinished OAuth approval
+requests/codes do not survive gateway restart; issued grants do. Roll back only
+the affected component and never restore old grant state as an input rollback.

@@ -17,7 +17,7 @@ function fixture(t) {
   const server = `errors-${randomUUID()}`;
   const env = { ...process.env, TMUX_TMPDIR: root, WEB_TERMINAL_TMUX_SERVER: server,
     WEB_TERMINAL_MCP_SESSION: "workspace", WEB_TERMINAL_MCP_LAYOUT: "grouped",
-    WEB_TERMINAL_MCP_SOCKET: "", WEB_TERMINAL_JOB_DIR: path.join(root, "jobs") };
+    WEB_TERMINAL_MCP_SOCKET: "", WEB_TERMINAL_MCP_INPUT_MODE: "disabled", WEB_TERMINAL_JOB_DIR: path.join(root, "jobs") };
   const tmux = (...args) => execFileSync("tmux", ["-L", server, ...args], { env, encoding: "utf8" });
   tmux("new-session", "-d", "-s", "workspace", "/bin/cat");
   const ctl = new TerminalController({ server, session: "workspace" });

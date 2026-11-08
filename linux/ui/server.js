@@ -34,6 +34,17 @@ function tmux(args) {
   return execFileSync('tmux', ['-L', tmuxSocket, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 const imageReceipts = createImageReceipts(tmux);
+const collaborationSocket = process.env.TERMINAL_COLLABORATION_SOCKET;
+let collaboration, managedWebSockets, verifyCollaborationOwner;
+const collaborationReady = collaborationSocket ? (async () => {
+  const { createCoordinator, createOwnerVerifier } = require('./collaboration');
+  // Resolve transport dependencies before publishing an input authority socket.
+  const { createManagedWebSockets } = require('./collaboration-websocket');
+  const { TerminalController } = await import('../../mcp/terminal.js');
+  verifyCollaborationOwner = createOwnerVerifier({ socket: process.env.TERMINAL_OWNER_VERIFY_SOCKET, url: process.env.TERMINAL_OWNER_VERIFY_URL });
+  collaboration = await createCoordinator({ socket: collaborationSocket, grantVerifySocket: process.env.TERMINAL_GRANT_VERIFY_SOCKET, controller: new TerminalController({ server: tmuxSocket, layout: 'linux-tabs' }) });
+  managedWebSockets = createManagedWebSockets({ coordinator: collaboration, verifyOwner: verifyCollaborationOwner });
+})() : Promise.resolve();
 let cachedSessionMetadata = null;
 let sessionMetadataExpires = 0;
 function sessionMetadata() {
@@ -168,6 +179,7 @@ function proxy(req, res, target, endpoint) {
             window.WebSocket = class extends Native {
               constructor(...args) {
                 super(...args);
+                window.installCollaborationInputProvenance?.(this, () => window.term);
                 const report = state => {
                   if (window.term) window.term.options.disableStdin = state !== 'Connected';
                   if (state !== 'Connected') window.webTerminalTarget = null;
@@ -207,7 +219,7 @@ function proxy(req, res, target, endpoint) {
             };
           })();
         </script>`;
-        const html = Buffer.concat(chunks).toString('utf8').replace('<head>', `<head>${shim}<script src="/clipboard-bridge.js"></script><script src="/touch-scroll.js"></script>`);
+        const html = Buffer.concat(chunks).toString('utf8').replace('<head>', `<head>${collaborationSocket ? '<script src="/collaboration-input.js"></script>' : ''}${shim}<script src="/clipboard-bridge.js"></script><script src="/touch-scroll.js"></script>`);
         const responseHeaders = { ...up.headers, 'cache-control': 'no-store', 'content-length': Buffer.byteLength(html) };
         delete responseHeaders['transfer-encoding']; delete responseHeaders['content-encoding'];
         res.writeHead(200, responseHeaders); res.end(html);
@@ -222,7 +234,26 @@ function proxy(req, res, target, endpoint) {
 }
 const server = http.createServer(async (req, res) => {
   try {
+    if (collaborationSocket && req.url === '/api/collaboration/state' && req.method === 'GET') {
+      await collaborationReady;
+      await verifyCollaborationOwner(req);
+      const result = await collaboration.list();
+      return send(res, 200, JSON.stringify({ enabled: true, sessions: Object.fromEntries(result.panes.map(p => [p.sessionName, p.collaboration])) }));
+    }
+    if (collaborationSocket && req.url === '/api/collaboration/control' && req.method === 'POST') {
+      if (!allowedMutation(req)) return send(res, 403, '{"error":"Forbidden"}');
+      await collaborationReady;
+      const owner = await verifyCollaborationOwner(req);
+      if (Number(req.headers['content-length'] || 0) > 1024) return send(res, 413, '{"error":"Request too large"}');
+      const chunks = []; let size = 0;
+      for await (const chunk of req) { size += chunk.length; if (size > 1024) return send(res, 413, '{"error":"Request too large"}'); chunks.push(chunk); }
+      const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      const result = await collaboration.control(input.session, input.action, owner, { serverPid: input.serverPid, sessionId: input.sessionId });
+      return send(res, 200, JSON.stringify(result));
+    }
     if (req.method === 'GET' && req.url === '/') return file(res, 'index.html', 'text/html; charset=utf-8');
+    if (req.method === 'GET' && req.url === '/collaboration-input.js') return file(res, 'collaboration-input.js', 'text/javascript; charset=utf-8');
+    if (req.method === 'GET' && req.url === '/collaboration-controls.js') return file(res, 'collaboration-controls.js', 'text/javascript; charset=utf-8');
     if (req.method === 'GET' && req.url === '/app.js') return file(res, 'app.js', 'text/javascript; charset=utf-8');
     if (req.method === 'GET' && req.url === '/clipboard-bridge.js') return file(res, 'clipboard-bridge.js', 'text/javascript; charset=utf-8');
     if (req.method === 'GET' && req.url === '/touch-scroll.js') return file(res, 'touch-scroll.js', 'text/javascript; charset=utf-8');
@@ -290,6 +321,13 @@ const server = http.createServer(async (req, res) => {
       if (req.headers['transfer-encoding'] || Number(req.headers['content-length'] || 0) !== 0) return send(res, 400, '{"error":"Unexpected body"}');
       try {
         const ticket = req.headers['x-image-receipt'];
+        if (collaborationSocket && req.url.endsWith('/insert')) {
+          await collaborationReady;
+          const owner = await verifyCollaborationOwner(req);
+          const target = imageReceipts.insertionTarget(ticket);
+          await collaboration.human(target.session, owner, () => imageReceipts.insert(ticket), target);
+          return send(res, 200, JSON.stringify({ inserted: true }));
+        }
         const result = req.url.endsWith('/prepare')
           ? imageReceipts.prepare({ session: req.headers['x-terminal-session'], sessionId: req.headers['x-terminal-session-id'], pane: req.headers['x-terminal-pane'], serverPid: req.headers['x-terminal-server-pid'] })
           : req.url.endsWith('/result') ? imageReceipts.result(ticket) : (imageReceipts.insert(ticket), { inserted: true });
@@ -322,13 +360,20 @@ const server = http.createServer(async (req, res) => {
       return proxy(req, res, target, route.endpoint);
     }
     return send(res, 404, '{"error":"Not found"}');
-  } catch { return send(res, 500, '{"error":"Terminal service error"}'); }
+  } catch (error) {
+    if (error?.code === 'AUTHORITY_UNAVAILABLE') return send(res, 401, '{"error":"Owner authorization unavailable"}');
+    if (['INPUT_BUSY', 'INPUT_PAUSED', 'STALE_TARGET'].includes(error?.code)) return send(res, 409, '{"error":"Input control changed or busy"}');
+    if (error?.code === 'OPERATION_UNAVAILABLE') return send(res, 503, '{"error":"Input outcome uncertain"}');
+    return send(res, 500, '{"error":"Terminal service error"}');
+  }
 });
 server.on('upgrade', async (req, client, head) => {
   const route = parseTerminal(req.url);
   if (!route || route.endpoint !== '/ws' || req.headers.origin !== `${scheme}://${req.headers.host}`) return client.destroy();
   try {
+    await collaborationReady;
     const target = ensureTtyd(route.name); await waitForSocket(target);
+    if (collaborationSocket) return await managedWebSockets.upgrade(req, client, head, { session: route.name, upstreamSocket: target });
     const upstream = net.createConnection(target);
     upstream.on('connect', () => {
       upstream.write(`${req.method} /ws HTTP/${req.httpVersion}\r\n`);
@@ -342,6 +387,11 @@ server.on('upgrade', async (req, client, head) => {
     upstream.on('error', () => client.destroy()); client.on('error', () => upstream.destroy());
   } catch { client.destroy(); }
 });
-server.listen(socket, () => fs.chmodSync(socket, 0o600));
-function shutdown() { server.close(); for (const child of children.values()) child.kill('SIGTERM'); }
+collaborationReady.then(() => server.listen(socket, () => fs.chmodSync(socket, 0o600))).catch(async () => {
+  managedWebSockets?.close();
+  server.close();
+  if (collaboration) await collaboration.close();
+  console.error('Collaboration configuration unavailable'); process.exitCode = 1;
+});
+function shutdown() { managedWebSockets?.close(); void collaboration?.close(); server.close(); for (const child of children.values()) child.kill('SIGTERM'); }
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);

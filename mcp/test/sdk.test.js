@@ -14,7 +14,7 @@ test("MCP rejects all tmux input without consulting the target", async () => {
   try {
     await client.connect(new StdioClientTransport({ command: process.execPath,
       args: [fileURLToPath(new URL("../server.js", import.meta.url))],
-      env: { ...process.env, WEB_TERMINAL_TMUX_SERVER: "fixture", WEB_TERMINAL_MCP_SESSION: "fixture" } }));
+      env: { ...process.env, WEB_TERMINAL_MCP_INPUT_MODE: "disabled", WEB_TERMINAL_TMUX_SERVER: "fixture", WEB_TERMINAL_MCP_SESSION: "fixture" } }));
     for (const text of ["r", "m", " -rf /", "echo pasted command"]) {
       const result = await client.callTool({ name: "terminal_type", arguments: { target, text } });
       assert.equal(result.isError, true);
@@ -60,6 +60,7 @@ test("SDK initializes and lists the same disposable workspace while direct tmux 
         args: [fileURLToPath(new URL("../server.js", import.meta.url))],
         env: {
           ...process.env,
+          WEB_TERMINAL_MCP_INPUT_MODE: "disabled",
           NODE_OPTIONS: `--import=${fileURLToPath(new URL("./fake-statfs.js", import.meta.url))}`,
           WEB_TERMINAL_JOB_DIR: jobDir,
           WEB_TERMINAL_TMUX_SERVER: name,

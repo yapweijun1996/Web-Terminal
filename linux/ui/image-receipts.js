@@ -61,6 +61,13 @@ function createImageReceipts(tmux) {
         '#{||:#{==:#{pane_mode},copy-mode},#{==:#{pane_mode},copy-mode-vi}}',
         `send-keys -X -t ${target.pane} cancel`]);
     },
+    insertionTarget(ticket) {
+      const receipt = lookup(ticket);
+      if (!receipt || receipt.state !== 'saved' || !receipt.target || receipt.attempted) throw Error('Target unavailable');
+      const target = getTarget(receipt.target);
+      if (!target) throw Error('Target unavailable');
+      return { ...target };
+    },
     insert(ticket) {
       const receipt = lookup(ticket);
       if (!receipt || receipt.state !== 'saved' || !receipt.target || receipt.attempted) throw Error('Target unavailable');

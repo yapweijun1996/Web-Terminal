@@ -15,8 +15,67 @@ For the Linux tab UI, set `WEB_TERMINAL_MCP_LAYOUT=linux-tabs` and the existing 
 For a deployment limited to the six terminal tools, set `WEB_TERMINAL_MCP_TOOLS=terminal-only`.
 This profile does not import execution/job modules or initialize a job registry. Its
 release may contain just `server.js`, `terminal.js`, `terminal-errors.js`, package
-files and dependencies. Both input tools still fail closed; this setting never
-supplies owner authorization. The default `full` profile retains all eleven tools
+files and dependencies. Tool-set selection never supplies owner authorization. The default `full` profile retains all eleven tools
 for existing source deployments. Unknown or empty values fail startup rather than
 silently choosing a broader profile. Do not switch a pinned six-tool deployment to
 `full` as part of a diagnostic update.
+
+
+Input is disabled by default. Set `WEB_TERMINAL_MCP_INPUT_MODE=delegated` only
+when the operator has enabled owner-approved delegated terminal access. For HTTP,
+keep the private Unix socket behind the existing bearer-validating OAuth gateway;
+this policy flag is not authentication. For stdio, the launching operator controls
+access. Unknown or empty input-mode values fail startup. Tool arguments and client
+headers cannot change the mode.
+
+Delegated mode allows literal single-line text and supported keys, with Enter a
+separate deliberate action. Input targets the captured pane without selecting or
+focusing another view; use `terminal_select` explicitly to navigate. PID, session,
+window, pane, Linux-session scope and copy-mode guards still apply. Multiline or
+control text is rejected entirely rather than split or submitted automatically.
+
+Overlapping writes to the same target are rejected with `INPUT_BUSY`, and total
+in-flight operations are bounded across controller instances in the process.
+This coordinates individual MCP operations, not the interval between text and a
+later Enter. Human direct ttyd/tmux input and other clients can still interleave;
+shared owner-priority arbitration is a separate stage. Never automatically retry
+an uncertain mutation, and treat `sent` as dispatch acknowledgement, not command
+success. The same-user socket/terminal is not an OS sandbox.
+
+
+For shared owner-priority input, use `WEB_TERMINAL_MCP_INPUT_MODE=coordinated`
+and an absolute `WEB_TERMINAL_COLLABORATION_SOCKET` pointing to the private Linux
+UI coordinator. This mode requires `coordinated-input.js` and the shared
+`runtime/gateway/collaboration-contract.cjs` in the release layout. It never falls
+back to direct controller input if the coordinator or admission is unavailable.
+`terminal_list` returns coordinator target metadata including `inputGeneration`;
+echo that exact current generation on each text/key request. Human takeover or
+sharing transitions invalidate old requests; do not refresh and automatically
+replay them.
+
+Only the bearer-validating gateway may create a single-use operation-bound
+admission and supply it on the private HTTP request. Tool arguments, claimed roles
+and owner flags do not supply admission. Coordinated stdio input cannot invent
+that HTTP request context and is denied; explicitly operator-controlled stdio
+fixtures can use delegated mode. Concurrent private requests keep separate
+admission contexts. Coordinator errors are mapped to fixed public diagnostics;
+raw upstream messages and authority values are not echoed. The private local
+socket remains a same-user trust boundary, not an OS sandbox.
+
+
+Trusted coordinator adapters may additionally call controller `type`/`key` with a
+third `{expectedPanePid}` option captured from the server's own pane-process
+snapshot. The final tmux guard checks `pane_pid` and alive state as well as the
+four public target IDs, preventing same-pane respawn from inheriting an old
+coordinated operation. This optional adapter field is not a public owner claim,
+does not pin the changing foreground command PID, and does not change the four-ID
+delegated target contract. Caller mutation after dispatch cannot rebind it.
+
+
+A trusted coordinator can also supply `beforeDispatch` in those controller
+options. The function is captured and validated before awaiting, then awaited
+after target/buffer preparation and immediately before tmux input dispatch. It
+must recheck the authoritative grant and then synchronously check admission
+expiry, generation, pause and revocation state. Rejection sends no input and
+still cleans the operation's buffer. Tool schemas do not accept or create this
+server-side callback; delegated/default behavior without it is unchanged.

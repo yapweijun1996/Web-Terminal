@@ -3,6 +3,29 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 const exec = promisify(execFile);
+// Shared across controller instances in this process, not per HTTP request.
+const activeWrites = new Set();
+const maxActiveWrites = 32;
+function snapshotTarget(t) {
+  if (!t || !["serverPid", "sessionId", "windowId", "paneId"].every(k => typeof t[k] === "string") ||
+      !/^\d+$/.test(t.serverPid) || !/^\$\d+$/.test(t.sessionId) ||
+      !/^@\d+$/.test(t.windowId) || !/^%\d+$/.test(t.paneId))
+    throw new TerminalError("INVALID_TARGET");
+  return Object.freeze(Object.fromEntries(["serverPid", "sessionId", "windowId", "paneId"].map(k => [k, t[k]])));
+}
+function expectedPanePid(options) {
+  const pid = options?.expectedPanePid;
+  if (pid === undefined) return undefined;
+  if (typeof pid !== "string" || !/^[1-9]\d{0,19}$/.test(pid))
+    throw new TerminalError("INVALID_TARGET");
+  return pid;
+}
+function dispatchCheck(options) {
+  const check = options?.beforeDispatch;
+  if (check !== undefined && typeof check !== "function")
+    throw new TerminalError("AUTHORITY_UNAVAILABLE");
+  return check;
+}
 export class TerminalController {
   constructor({ server, session, layout = "grouped", tmux = process.env.TMUX_BIN || "tmux" }) {
     if (
@@ -79,21 +102,16 @@ export class TerminalController {
     return panes.map((p) => ({ ...p, windowName: names.get(p.windowId) }));
   }
   async validate(t) {
-    if (
-      !t ||
-      !/^\d+$/.test(t.serverPid) ||
-      !/^\$\d+$/.test(t.sessionId) ||
-      !/^@\d+$/.test(t.windowId) ||
-      !/^%\d+$/.test(t.paneId)
-    )
-      throw new TerminalError("INVALID_TARGET");
+    t = snapshotTarget(t);
     const current = (await this.list()).find((p) =>
       ["serverPid", "sessionId", "windowId", "paneId"].every((k) => p[k] === t[k]),
     );
     if (!current) throw new TerminalError("STALE_TARGET");
     return current;
   }
-  async guarded(t, command, allowMode = false) {
+  async guarded(t, command, allowMode = false, panePid, beforeDispatch) {
+    panePid = expectedPanePid({ expectedPanePid: panePid });
+    beforeDispatch = dispatchCheck({ beforeDispatch });
     const current = await this.validate(t);
     const checks = [
       `#{==:#{pid},${t.serverPid}}`,
@@ -104,7 +122,14 @@ export class TerminalController {
     if (this.layout === "linux-tabs")
       checks.push(`#{==:#{session_name},${current.sessionName}}`);
     if (!allowMode) checks.push("#{==:#{pane_in_mode},0}");
+    // Optional trusted adapter snapshot fences a respawn within the same pane ID.
+    // This is the pane process, not the changing foreground command PID.
+    if (panePid !== undefined)
+      checks.push(`#{==:#{pane_pid},${panePid}}`, "#{==:#{pane_dead},0}");
     const cond = checks.reduce((a, b) => `#{&&:${a},${b}}`);
+    // Trusted adapters recheck admission after every awaited preparation step.
+    // Do not insert another async operation between this hook and dispatch.
+    if (beforeDispatch) await beforeDispatch();
     const result = await this.run([
       "if-shell",
       "-F",
@@ -133,19 +158,36 @@ export class TerminalController {
     return rows.slice(-lines).join("\n");
   }
 
-  async type(t, text) {
-    validateTerminalText(text);
-    const buffer = `web-terminal-mcp-${randomUUID()}`;
+  async input(t, execute) {
+    const target = snapshotTarget(t);
+    // Grouped sessions can expose the same physical pane through different IDs.
+    const id = [this.server, target.serverPid, target.paneId].join(":");
+    if (activeWrites.has(id) || activeWrites.size >= maxActiveWrites)
+      throw new TerminalError("INPUT_BUSY");
+    activeWrites.add(id);
     try {
-      await this.select(t);
-      await this.run(["set-buffer", "-b", buffer, "--", text]);
-      await this.guarded(t, `paste-buffer -p -d -b ${buffer} -t ${t.paneId}`);
-      return { sent: true, submitted: false };
+      return await execute(target);
     } finally {
-      await this.run(["delete-buffer", "-b", buffer]).catch(() => {});
+      activeWrites.delete(id);
     }
   }
-  async key(t, key) {
+  async type(t, text, options) {
+    validateTerminalText(text);
+    const panePid = expectedPanePid(options);
+    const beforeDispatch = dispatchCheck(options);
+    return this.input(t, async target => {
+      const buffer = `web-terminal-mcp-${randomUUID()}`;
+      try {
+        await this.validate(target);
+        await this.run(["set-buffer", "-b", buffer, "--", text]);
+        await this.guarded(target, `paste-buffer -p -d -b ${buffer} -t ${target.paneId}`, false, panePid, beforeDispatch);
+        return { sent: true, submitted: false };
+      } finally {
+        await this.run(["delete-buffer", "-b", buffer]).catch(() => {});
+      }
+    });
+  }
+  async key(t, key, options) {
     if (
       ![
         "Enter",
@@ -161,9 +203,12 @@ export class TerminalController {
       ].includes(key)
     )
       throw Error("Unsupported key");
-    await this.select(t);
-    await this.guarded(t, `send-keys -t ${t.paneId} ${key}`);
-    return { sent: true, submitted: key === "Enter" };
+    const panePid = expectedPanePid(options);
+    const beforeDispatch = dispatchCheck(options);
+    return this.input(t, async target => {
+      await this.guarded(target, `send-keys -t ${target.paneId} ${key}`, false, panePid, beforeDispatch);
+      return { sent: true, submitted: key === "Enter" };
+    });
   }
   async select(t) {
     await this.validate(t);

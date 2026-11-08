@@ -31,6 +31,70 @@ MCP_REDIRECT_URIS=["https://chatgpt.com/connector_platform_oauth_redirect","http
 
 Route the MCP hostname to the public socket. Route the exact approval path on the terminal hostname to the approval socket before the terminal catch-all, preserving existing origin-side Access validation. The MCP hostname uses application OAuth and must not require interactive Access login for metadata/token/MCP requests. Preserve terminal/upload protection. Back up and validate ingress before changing it. Do not restart ttyd or tmux.
 
+## MCP request-body authorization boundary
+
+The gateway authenticates a bearer before collecting an MCP request body, then
+checks the same token again immediately before opening the upstream connection.
+A grant revoked or expired while the body is being uploaded receives `401` with
+the normal resource-metadata challenge and sends no bytes upstream. The absolute
+grant expiry is unchanged. Requests already forwarded and commands already
+started cannot be retracted by this check.
+
+MCP bodies are limited to 1 MiB and a **total** five-second upload deadline; each
+chunk does not extend the deadline. Timeout returns a sanitized `408`, oversized
+content returns `413`, and an aborted upload is discarded. No partial body is
+forwarded. `MCP_REQUEST_BODY_TIMEOUT_MS` may set the server-owned deadline to an
+integer from 1 to 30000 milliseconds; invalid configuration fails startup. The
+limit does not alter the existing 30-day default/365-day maximum grant policy,
+owner verification, PKCE, callbacks, or durable authorization storage.
+
+## Optional coordinated-input adapter
+
+Set `MCP_COLLABORATION_SOCKET` to the absolute private coordinator socket only
+when the MCP server and UI are configured for coordinated input. After the final
+bearer check, each text/key RPC obtains a short-lived single-use admission bound
+to the server-owned grant ID/absolute expiry and the exact operation digest. The
+gateway rechecks that same grant after admission and forwards only the internally
+minted `x-web-terminal-admission`; caller-supplied admission/owner headers and raw
+bearers are never forwarded. Coordinator refusal or unavailability sends no
+mutation upstream and does not fall back to direct input. Read-only RPC does not
+need an admission. Token and protected owner-management revocation notify the
+coordinator without changing durable grant policy; already-dispatched bytes or
+commands cannot be undone. The coordinator independently bounds admission TTL
+and enforces grant revocation/expiry before delivery.
+
+For execute-time revocation authority, configure `MCP_GRANT_VERIFY_SOCKET` in
+the gateway's private owned runtime directory and `TERMINAL_GRANT_VERIFY_SOCKET`
+on the UI coordinator to that same socket. Only this new private listener serves
+`POST /v1/grant {grantId}`; it returns a live `{active:true,expires}` projection or
+`{active:false}` after pruning, never a bearer or owner claim. It is absent from
+the public/approval routes, rejects browser Origin, and uses the existing private
+socket ownership/mode checks. The coordinator must query it before actual
+mutation delivery; an unavailable verifier never permits cached authority. This
+closes the stale-admission window even if a revoke notification is lost.
+
+In coordinated mode, durable token revocation and confirmed input cancellation
+are different outcomes. A missing/failed drain acknowledgement returns sanitized
+`503 revocation_pending` after the token is already revoked. Bounded process-local
+HMAC-keyed status permits retrying confirmation without storing raw tokens; an
+unknown status after restart/eviction returns `revocation_status_unavailable`
+rather than claiming a drain completed. Owner management displays the pending
+state and a fresh one-use CSRF retry form. A successful notification/drain can
+then confirm cancellation. Without a coordinator, the existing idempotent OAuth
+revocation behavior is unchanged. No durable authorization state is rolled back
+to make a notification succeed.
+
+The existing exact Access-protected approval URL supports the read-only query
+`?view=input-identity`. It returns only `{authorized:true, ownerId, expires}` from
+the cryptographically verified Access issuer/subject/expiry; the identity is
+opaque and does not expose email or JWT. A boolean-only verifier cannot supply
+this identity. UI private calls forward the incoming signed Access JWT for this
+check, never a claimed owner role. The UI uses `TERMINAL_OWNER_VERIFY_SOCKET` and
+`TERMINAL_OWNER_VERIFY_URL` for the existing approval socket/URL. No new public
+route, relaxed callback allowlist, fake owner header, or independent-OS-principal
+claim is introduced. The same-UID private socket remains a trusted local adapter
+boundary rather than a sandbox against processes with that OS authority.
+
 ## Durable connections and revocation
 
 Create separate owned mode-0700 state and key directories before launch. Production requires both state paths. A new store creates a random 32-byte mode-0600 master key outside the state directory; keep the key out of state snapshots. Grant metadata and DCR registrations persist as an integrity-authenticated JSON envelope written through exclusive temporary files, fsync and atomic rename. Store contents contain client names, public client identifiers, grant timing and keyed token digests, never raw bearer tokens or authorization codes. Issuer and resource are bound to the envelope; reuse under a different public URL fails closed. A missing/wrong key, tampering, unsafe permissions or symlinks prevents startup. Persistence failures disable further authorization instead of falling back to memory.

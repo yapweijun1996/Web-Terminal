@@ -2,13 +2,53 @@
 
 For target identification, DNS checks and the difference between service health and real connector acceptance, read the [MCP connection runbook](mcp-connection-runbook.md).
 
+## Working human and MCP input
+
+The [collaborative-input plan and execution record](mcp-collaborative-input-plan.md)
+replaces the earlier recommendation to keep all AI input permanently disabled.
+The source supports three strict server-owned input policies:
+
+- `disabled` (default): no MCP text/key delivery.
+- `delegated`: the operator enables input behind the existing approved OAuth gateway;
+  individual MCP operations are bounded, but direct human input can interleave.
+- `coordinated`: the Linux UI process mediates human/AI writing through one private
+  coordinator. Every MCP text/key request requires an internally minted one-use,
+  content-bound admission and an echoed current `inputGeneration` from
+  `terminal_list`. Missing authority or coordinator failure never falls back to
+  direct input.
+
+Literal text does not append Enter, does not select another view, and rejects
+controls/multiline content in full. Enter is a separate deliberate key operation.
+`sent` acknowledges dispatch, not command success. Never retry uncertain input,
+substitute a fresh generation for an old action, or split rejected multiline text
+into automatic text/Enter calls.
+
+In coordinated mode, actual human input conservatively pauses AI across all managed sessions. Native tmux can switch a client to a different session, so the browser URL alone cannot safely identify every input destination. Explicit owner controls and resumption remain targeted to the selected session.
+**Pause AI**, **Take control**, and **Resume sharing** show authoritative state in
+Web Terminal. Resume rotates the generation; stale AI Enter remains rejected.
+Lease expiry/writer changes also retire old continuations. A confirmed pause or
+revoke waits for admitted in-flight work to drain; uncertainty stays blocked.
+Existing pages may need one reload to display newly shipped controls.
+
+The pinned ttyd/xterm adapter distinguishes native protocol replies from real
+user input using its verified `wasUserInput` provenance. Unknown implementations,
+binary/untagged input and unknown provenance retain conservative owner takeover.
+That classification exists only inside an independently verified owner's native
+WebSocket channel; it grants no owner identity to an MCP caller.
+
+The gateway preserves Access JWT verification, Origin/CSRF, exact callbacks,
+S256 PKCE, resource binding, grant expiry and revocation. A private grant verifier
+is queried immediately before dispatch. All four tmux target identities and a
+server-captured pane-process fence protect coordinated writes. Private sockets
+are a same-OS-account trust boundary, not a sandbox against that account.
+
 ## Linux independent tabs
 
 The Linux deployment uses `WEB_TERMINAL_MCP_LAYOUT=linux-tabs` with its existing dedicated tmux server. Listings expose only `shared` and `web-<12 hexadecimal digits>` sessions and include `sessionName`. The owner switches browser tabs manually and refreshes to discover a newly created session. Other sessions on the same server remain excluded.
 
 Linux OAuth uses the shared styled consent and recovery pages, exact Origin and CSRF validation, RFC 9207 issuer identification and durable grant storage. Per the owner's updated policy, `MCP_GRANT_MAX_SECONDS=31536000` allows exactly 1 hour, 1 day, 1 week, 1 month or 1 year, with 1 month (30 days) selected by default. Changing the gateway from the earlier in-memory release requires reconnecting once; subsequent registered clients and issued grants survive gateway restart. An unfinished authorization request remains short-lived and must be restarted from the client.
 
-The repository's newer MCP runtime has additional tools and deliberately disables direct tmux input. The Linux runtime deployed before this OAuth-only update remains on its separate six-tool release. Do not deploy all of `main` as part of an OAuth page update or infer runtime capabilities from the source tree.
+The source `full` profile includes execution/job tools; the Linux release uses `WEB_TERMINAL_MCP_TOOLS=terminal-only` and must remain a six-tool package. Input capability is an independently configured deployment policy described below. Do not deploy the full source runtime as an OAuth-page update or infer the running profile from a checkout.
 
 The MCP server can view the dedicated tmux workspace used by the browser terminal. MCP clients cannot type into it; the owner retains direct browser and tmux controls.
 
@@ -89,7 +129,7 @@ Defaults are NORMAL at or above 60 GiB, WARNING at or above 40 GiB, CRITICAL at 
 
 The server resolves paths and checks device and directory identity after sampling and immediately before spawning; the supervisor checks again before starting an executable. The child uses the sampled canonical working directory. These checks are not atomic: Node's path-based spawn has no dirfd-based chdir sandbox, and an attacker able to change paths or mounts can race the final check. Storage may also change immediately after sampling. This is neither a quota nor filesystem isolation. Existing jobs, other paths and other writers are not constrained.
 
-MCP tmux typing and key delivery are disabled at the API boundary: shared OAuth identity cannot establish whether a client is the owner or an agent, and keystroke filtering cannot reliably classify commands. No client-settable override is provided. This does not restrict the owner's browser or direct tmux access, and is not shell-level confinement; the separate execution tools have their own admission checks and are not a filesystem sandbox.
+MCP terminal input follows the server-owned `disabled`, `delegated`, or `coordinated` policy. An approved OAuth client is a delegate, not the owner's identity. Coordinated input uses the shared UI broker and request-bound admissions; caller-supplied owner flags cannot enable input. This is not shell-level confinement; same-account direct OS/tmux access is outside managed arbitration, and the separate full-profile execution tools are not a filesystem sandbox.
 Thresholds can be configured as positive, strictly descending integer byte values using `WEB_TERMINAL_STORAGE_NORMAL_BYTES`, `WEB_TERMINAL_STORAGE_WARNING_BYTES`, and `WEB_TERMINAL_STORAGE_CRITICAL_BYTES`. `WEB_TERMINAL_STORAGE_INTERVAL_MS` controls the sampling period (1,000–86,400,000 ms; default 300,000). Invalid configuration fails closed. While jobs run, an unreferenced timer samples their working directories and the registry into bounded memory only. After the first periodic sample, `terminal_job_status` includes `storage_monitor` for a running job; stale or unavailable observations report `UNAVAILABLE`. Monitoring does not cancel jobs or persist periodic samples. Shutdown clears the timer.
 
 
