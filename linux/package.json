@@ -1,0 +1,1 @@
+{"name":"web-terminal-linux","private":true,"version":"0.1.0","dependencies":{"ws":"8.22.1"},"scripts":{"test":"node --test test/*.test.js"}}
