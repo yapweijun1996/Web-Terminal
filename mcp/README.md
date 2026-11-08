@@ -41,3 +41,23 @@ later Enter. Human direct ttyd/tmux input and other clients can still interleave
 shared owner-priority arbitration is a separate stage. Never automatically retry
 an uncertain mutation, and treat `sent` as dispatch acknowledgement, not command
 success. The same-user socket/terminal is not an OS sandbox.
+
+
+For shared owner-priority input, use `WEB_TERMINAL_MCP_INPUT_MODE=coordinated`
+and an absolute `WEB_TERMINAL_COLLABORATION_SOCKET` pointing to the private Linux
+UI coordinator. This mode requires `coordinated-input.js` and the shared
+`runtime/gateway/collaboration-contract.cjs` in the release layout. It never falls
+back to direct controller input if the coordinator or admission is unavailable.
+`terminal_list` returns coordinator target metadata including `inputGeneration`;
+echo that exact current generation on each text/key request. Human takeover or
+sharing transitions invalidate old requests; do not refresh and automatically
+replay them.
+
+Only the bearer-validating gateway may create a single-use operation-bound
+admission and supply it on the private HTTP request. Tool arguments, claimed roles
+and owner flags do not supply admission. Coordinated stdio input cannot invent
+that HTTP request context and is denied; explicitly operator-controlled stdio
+fixtures can use delegated mode. Concurrent private requests keep separate
+admission contexts. Coordinator errors are mapped to fixed public diagnostics;
+raw upstream messages and authority values are not echoed. The private local
+socket remains a same-user trust boundary, not an OS sandbox.
