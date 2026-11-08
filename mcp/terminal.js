@@ -3,6 +3,16 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 const exec = promisify(execFile);
+// Shared across controller instances in this process, not per HTTP request.
+const activeWrites = new Set();
+const maxActiveWrites = 32;
+function snapshotTarget(t) {
+  if (!t || !["serverPid", "sessionId", "windowId", "paneId"].every(k => typeof t[k] === "string") ||
+      !/^\d+$/.test(t.serverPid) || !/^\$\d+$/.test(t.sessionId) ||
+      !/^@\d+$/.test(t.windowId) || !/^%\d+$/.test(t.paneId))
+    throw new TerminalError("INVALID_TARGET");
+  return Object.freeze(Object.fromEntries(["serverPid", "sessionId", "windowId", "paneId"].map(k => [k, t[k]])));
+}
 export class TerminalController {
   constructor({ server, session, layout = "grouped", tmux = process.env.TMUX_BIN || "tmux" }) {
     if (
@@ -79,14 +89,7 @@ export class TerminalController {
     return panes.map((p) => ({ ...p, windowName: names.get(p.windowId) }));
   }
   async validate(t) {
-    if (
-      !t ||
-      !/^\d+$/.test(t.serverPid) ||
-      !/^\$\d+$/.test(t.sessionId) ||
-      !/^@\d+$/.test(t.windowId) ||
-      !/^%\d+$/.test(t.paneId)
-    )
-      throw new TerminalError("INVALID_TARGET");
+    t = snapshotTarget(t);
     const current = (await this.list()).find((p) =>
       ["serverPid", "sessionId", "windowId", "paneId"].every((k) => p[k] === t[k]),
     );
@@ -133,17 +136,32 @@ export class TerminalController {
     return rows.slice(-lines).join("\n");
   }
 
+  async input(t, execute) {
+    const target = snapshotTarget(t);
+    // Grouped sessions can expose the same physical pane through different IDs.
+    const id = [this.server, target.serverPid, target.paneId].join(":");
+    if (activeWrites.has(id) || activeWrites.size >= maxActiveWrites)
+      throw new TerminalError("INPUT_BUSY");
+    activeWrites.add(id);
+    try {
+      return await execute(target);
+    } finally {
+      activeWrites.delete(id);
+    }
+  }
   async type(t, text) {
     validateTerminalText(text);
-    const buffer = `web-terminal-mcp-${randomUUID()}`;
-    try {
-      await this.select(t);
-      await this.run(["set-buffer", "-b", buffer, "--", text]);
-      await this.guarded(t, `paste-buffer -p -d -b ${buffer} -t ${t.paneId}`);
-      return { sent: true, submitted: false };
-    } finally {
-      await this.run(["delete-buffer", "-b", buffer]).catch(() => {});
-    }
+    return this.input(t, async target => {
+      const buffer = `web-terminal-mcp-${randomUUID()}`;
+      try {
+        await this.validate(target);
+        await this.run(["set-buffer", "-b", buffer, "--", text]);
+        await this.guarded(target, `paste-buffer -p -d -b ${buffer} -t ${target.paneId}`);
+        return { sent: true, submitted: false };
+      } finally {
+        await this.run(["delete-buffer", "-b", buffer]).catch(() => {});
+      }
+    });
   }
   async key(t, key) {
     if (
@@ -161,9 +179,10 @@ export class TerminalController {
       ].includes(key)
     )
       throw Error("Unsupported key");
-    await this.select(t);
-    await this.guarded(t, `send-keys -t ${t.paneId} ${key}`);
-    return { sent: true, submitted: key === "Enter" };
+    return this.input(t, async target => {
+      await this.guarded(target, `send-keys -t ${target.paneId} ${key}`);
+      return { sent: true, submitted: key === "Enter" };
+    });
   }
   async select(t) {
     await this.validate(t);

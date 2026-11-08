@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-for (const toolSet of ["full", "terminal-only"]) test(`private HTTP MCP (${toolSet}) initialize and tools list; browser Origin denied`, async () => {
+for (const toolSet of ["full", "terminal-only"]) for (const inputMode of ["disabled", "delegated"]) test(`private HTTP MCP (${toolSet}/${inputMode}) initialize and tools list; browser Origin denied`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-http-"));
   fs.chmodSync(root, 0o700);
   const socket = path.join(root, "mcp.sock");
@@ -17,6 +17,7 @@ for (const toolSet of ["full", "terminal-only"]) test(`private HTTP MCP (${toolS
       env: {
         ...process.env,
         WEB_TERMINAL_MCP_TOOLS: toolSet,
+        WEB_TERMINAL_MCP_INPUT_MODE: inputMode,
         WEB_TERMINAL_MCP_SOCKET: socket,
         WEB_TERMINAL_TMUX_SERVER: "fixture-unused",
         WEB_TERMINAL_MCP_SESSION: "workspace",

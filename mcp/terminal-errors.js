@@ -1,10 +1,11 @@
 // Only locally constructed errors may select a public, fixed diagnostic.
 const messages = Object.freeze({
-  CONTROL_CHAR_OR_MULTILINE: "Text contains a control character or multiple lines. Nothing was sent. Do not split it into automatic typing/Enter calls. Review multiline content in the owner's direct editor or terminal; MCP input still requires independently verified owner authorization.",
+  CONTROL_CHAR_OR_MULTILINE: "Text contains a control character or multiple lines. Nothing was sent. Do not split it into automatic typing/Enter calls. Review multiline content in the owner's direct editor or terminal; Use only an owner-approved delegated connection for MCP input.",
+  INPUT_BUSY: "Another input operation is active for this target, or the write capacity is full. Nothing was sent. Wait for that operation to finish and verify the pane before a new deliberate action.",
   INVALID_INPUT: "Text must be a non-empty string of at most 8192 UTF-8 bytes. Nothing was sent.",
   INVALID_TARGET: "Invalid terminal target. List terminals to obtain a current target.",
   STALE_TARGET: "The target changed or its input guard rejected the operation. List terminals and verify the intended pane. Never retry input automatically: an earlier operation may have arrived.",
-  AUTHORITY_UNAVAILABLE: "MCP terminal input is disabled: independently verified owner authorization is unavailable. Use the owner's direct browser or tmux controls. Nothing was sent.",
+  AUTHORITY_UNAVAILABLE: "MCP terminal input is disabled by deployment policy. Use the owner's direct browser or tmux controls. Nothing was sent.",
   OPERATION_UNAVAILABLE: "Operation unavailable. Never retry input automatically: it may have arrived.",
 });
 const codes = new WeakMap();
