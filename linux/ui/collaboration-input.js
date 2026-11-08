@@ -15,7 +15,7 @@
     // The shipped ttyd/xterm method explicitly defaults its second parameter to
     // false. Recognize that feature before normalizing an omitted parameter;
     // unknown implementations keep omitted/null provenance fail-safe.
-    const omittedMeansProtocol = /triggerDataEvent\([^,]+,[^=,)]+=(?:!1|false)\)/.test(Function.prototype.toString.call(trigger).replace(/\s+/g, '')); 
+    const omittedMeansProtocol = /triggerDataEvent\([^,]+,[^=,)]+=(?:!1|false)\)/.test(Function.prototype.toString.call(trigger).replace(/\s+/g, ''));
     const restore = [];
     try {
     service.triggerDataEvent = function (data, wasUserInput) {
