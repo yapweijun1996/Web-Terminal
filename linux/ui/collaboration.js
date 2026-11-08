@@ -61,7 +61,8 @@ async function createCoordinator({ socket, controller, now = () => performance.n
   const paneKey = p => `${p.serverPid}:${p.paneId}`;
   // A tmux client can switch sessions through native prefix/mouse input. The
   // WebSocket URL is its original attachment, not authority over its destination.
-  let pauseNewSessions = false, humanPending = 0;
+  // Restart cannot restore an owner pause from volatile state. Start fail closed.
+  let pauseNewSessions = true, humanPending = 0;
   const broker = new InputBroker({ verifyTarget: t => controller.validate(t), now,
     execute: async (target, op) => {
       const activeSession = sessions.get(op.sessionKey);

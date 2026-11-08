@@ -138,3 +138,14 @@ Thresholds can be configured as positive, strictly descending integer byte value
 Exec and job starts share a process-local per-volume reservation pool. Each admitted execution reserves the configured `WEB_TERMINAL_STORAGE_JOB_BUDGET_BYTES` (default 1 GiB) on each distinct registry and working-directory device, above the normal threshold and `WEB_TERMINAL_STORAGE_MIN_RESERVE_BYTES` (default 1 GiB). Unknown free space fails closed. Reservations remain until the supervisor closes, including while a job is starting. This accounting does not limit spawned process writes, reserve physical blocks, account for other processes, or guarantee free space. Use independently enforced OS isolation and quotas for hard limits.
 
 Recovered records, including records that could have been forged by another process with the same OS identity, are not eligible for automatic retention deletion. The current process only deletes eligible records it finished itself. File permissions and a same-identity lock cannot authenticate record provenance against that identity. A future security architecture would isolate the registry writer under a separate OS identity and protect its storage and signing or verification authority from command processes; recovery and deletion must rely on independently verifiable ownership and a reviewed migration policy. Until that boundary exists, preserve unsigned legacy records and require an authorized operator to investigate capacity pressure. No HMAC is implemented or implied.
+
+### Mobile context editor
+
+Use **Paste context** in the browser toolbar/actions menu. Paste into the editor;
+for multiline content create a private temporary text file, then copy or separately
+confirm and insert its path. Ask the AI to read the file. Raw multiline content is
+never inserted into the terminal. Single-line/path insertion adds no Enter and
+pauses managed AI until explicit Resume sharing. Context files expire after one
+hour or can be deleted early. See [mobile context paste](mobile-context-paste-plan.md)
+for limits, target confirmation, recovery and privacy. After coordinator/UI restart,
+AI input starts paused and requires explicit owner Resume sharing.

@@ -41,6 +41,7 @@ test('owner controls require independent owner verification and CSRF; image inse
   assert.equal(denied.status, 403);
   const secondaryName = 'web-abcdef012345';
   f.tmux('new-session', '-d', '-s', secondaryName, '/bin/cat');
+  await f.control('resume', secondaryName);
   const all = await f.list(), target = all.find(p => p.sessionName === 'shared'), secondary = all.find(p => p.sessionName === secondaryName);
   assert.deepEqual(await f.mutate('terminal_type', { target: secondary, text: 'SECONDARY_AI_DRAFT' }), { sent: true, submitted: false });
   const headers = { Origin: 'http://fixture.invalid', 'Content-Type': 'application/json', 'X-Terminal-Request': f.tokens.token,
@@ -99,6 +100,7 @@ test('native tmux next-session switching cannot leave the destination AI writer 
   const webName = 'web-012345abcdef';
   f.tmux('new-session', '-d', '-s', webName, '/bin/cat');
   const { client } = await f.connect();
+  await f.control('resume', webName);
   const web = (await f.list()).find(p => p.sessionName === webName);
   assert.deepEqual(await f.mutate('terminal_type', { target: web, text: 'AI_WEB_DRAFT_' }), { sent: true, submitted: false });
   // Native tmux C-b ')' switches the existing ttyd client away from its URL's

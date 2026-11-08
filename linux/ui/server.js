@@ -35,14 +35,16 @@ function tmux(args) {
 }
 const imageReceipts = createImageReceipts(tmux);
 const collaborationSocket = process.env.TERMINAL_COLLABORATION_SOCKET;
-let collaboration, managedWebSockets, verifyCollaborationOwner;
+let collaboration, managedWebSockets, verifyCollaborationOwner, contextPaste;
 const collaborationReady = collaborationSocket ? (async () => {
   const { createCoordinator, createOwnerVerifier } = require('./collaboration');
   // Resolve transport dependencies before publishing an input authority socket.
   const { createManagedWebSockets } = require('./collaboration-websocket');
   const { TerminalController } = await import('../../mcp/terminal.js');
   verifyCollaborationOwner = createOwnerVerifier({ socket: process.env.TERMINAL_OWNER_VERIFY_SOCKET, url: process.env.TERMINAL_OWNER_VERIFY_URL });
-  collaboration = await createCoordinator({ socket: collaborationSocket, grantVerifySocket: process.env.TERMINAL_GRANT_VERIFY_SOCKET, controller: new TerminalController({ server: tmuxSocket, layout: 'linux-tabs' }) });
+  const controller = new TerminalController({ server: tmuxSocket, layout: 'linux-tabs' });
+  collaboration = await createCoordinator({ socket: collaborationSocket, grantVerifySocket: process.env.TERMINAL_GRANT_VERIFY_SOCKET, controller });
+  contextPaste = require('./context-paste').createContextPaste({ tmux, controller, coordinator: collaboration, directory: process.env.TERMINAL_CONTEXT_DIR || path.join(runtime, 'contexts') });
   managedWebSockets = createManagedWebSockets({ coordinator: collaboration, verifyOwner: verifyCollaborationOwner });
 })() : Promise.resolve();
 let cachedSessionMetadata = null;
@@ -234,6 +236,22 @@ function proxy(req, res, target, endpoint) {
 }
 const server = http.createServer(async (req, res) => {
   try {
+    if (collaborationSocket && req.method === 'POST' && ['/api/context/prepare', '/api/context/file', '/api/context/insert', '/api/context/delete'].includes(req.url)) {
+      if (!allowedMutation(req)) return send(res, 403, '{"error":"Forbidden"}');
+      await collaborationReady;
+      const owner = await verifyCollaborationOwner(req);
+      const chunks = []; let size = 0;
+      const deadline = setTimeout(() => req.destroy(), 5000);
+      let input;
+      try {
+        for await (const chunk of req) { size += chunk.length; if (size > 400000) return send(res, 413, '{"error":"Context request too large"}'); chunks.push(chunk); }
+        try { input = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return send(res, 400, '{"error":"Invalid context request"}'); }
+      } finally { clearTimeout(deadline); }
+      const result = req.url.endsWith('/prepare') ? contextPaste.prepare(input, owner)
+        : req.url.endsWith('/file') ? contextPaste.createFile(input, owner)
+        : req.url.endsWith('/delete') ? contextPaste.deleteFile(input, owner) : await contextPaste.insert(input, owner);
+      return send(res, 200, JSON.stringify(result));
+    }
     if (collaborationSocket && req.url === '/api/collaboration/state' && req.method === 'GET') {
       await collaborationReady;
       await verifyCollaborationOwner(req);
@@ -254,6 +272,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/') return file(res, 'index.html', 'text/html; charset=utf-8');
     if (req.method === 'GET' && req.url === '/collaboration-input.js') return file(res, 'collaboration-input.js', 'text/javascript; charset=utf-8');
     if (req.method === 'GET' && req.url === '/collaboration-controls.js') return file(res, 'collaboration-controls.js', 'text/javascript; charset=utf-8');
+    if (req.method === 'GET' && req.url === '/context-paste.js') return file(res, 'context-paste-client.js', 'text/javascript; charset=utf-8');
+    if (req.method === 'GET' && req.url === '/context-paste.css') return file(res, 'context-paste.css', 'text/css; charset=utf-8');
     if (req.method === 'GET' && req.url === '/app.js') return file(res, 'app.js', 'text/javascript; charset=utf-8');
     if (req.method === 'GET' && req.url === '/clipboard-bridge.js') return file(res, 'clipboard-bridge.js', 'text/javascript; charset=utf-8');
     if (req.method === 'GET' && req.url === '/touch-scroll.js') return file(res, 'touch-scroll.js', 'text/javascript; charset=utf-8');
@@ -361,6 +381,7 @@ const server = http.createServer(async (req, res) => {
     }
     return send(res, 404, '{"error":"Not found"}');
   } catch (error) {
+    if (['STALE_CONTEXT', 'INVALID_CONTEXT', 'CONTEXT_CAPACITY', 'CONTEXT_UNAVAILABLE'].includes(error?.code)) return send(res, error.code === 'INVALID_CONTEXT' ? 400 : 409, JSON.stringify({ error: error.code }));
     if (error?.code === 'AUTHORITY_UNAVAILABLE') return send(res, 401, '{"error":"Owner authorization unavailable"}');
     if (['INPUT_BUSY', 'INPUT_PAUSED', 'STALE_TARGET'].includes(error?.code)) return send(res, 409, '{"error":"Input control changed or busy"}');
     if (error?.code === 'OPERATION_UNAVAILABLE') return send(res, 503, '{"error":"Input outcome uncertain"}');
@@ -393,5 +414,5 @@ collaborationReady.then(() => server.listen(socket, () => fs.chmodSync(socket, 0
   if (collaboration) await collaboration.close();
   console.error('Collaboration configuration unavailable'); process.exitCode = 1;
 });
-function shutdown() { managedWebSockets?.close(); void collaboration?.close(); server.close(); for (const child of children.values()) child.kill('SIGTERM'); }
+function shutdown() { contextPaste?.close(); managedWebSockets?.close(); void collaboration?.close(); server.close(); for (const child of children.values()) child.kill('SIGTERM'); }
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);

@@ -10,7 +10,7 @@ const { spawn, execFileSync } = require('node:child_process');
 const { WebSocket } = require('ws');
 const { privateCall, operationDigest } = require('../../runtime/gateway/collaboration-contract.cjs');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function createFixture({ realGateway = false } = {}) {
+async function createFixture({ realGateway = false, startPaused = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-c-'));
   const uiSocket = path.join(root, 'ui.sock'), authSocket = path.join(root, 'auth.sock'), collaborationSocket = path.join(root, 'c.sock'), grantSocket = path.join(root, 'g.sock'), publicAuthSocket = path.join(root, 'p.sock'), mcpSocket = path.join(root, 'm.sock');
   const tmuxServer = 'collab-' + crypto.randomBytes(6).toString('hex');
@@ -103,6 +103,7 @@ async function createFixture({ realGateway = false } = {}) {
   }
   const tokens = (await request('GET', '/api/sessions')).data;
   const control = async (action, session = 'shared', owner = true) => { const p = (await privateCall(collaborationSocket, '/v1/list', {})).panes.find(p => p.sessionName === session); return request('POST', '/api/collaboration/control', { owner, body: { action, session, serverPid: p?.serverPid, sessionId: p?.sessionId }, headers: { Origin: 'http://fixture.invalid', 'Content-Type': 'application/json', 'X-Terminal-Request': tokens.token } }); };
+  if (!startPaused) { const resumed = await control('resume'); if (resumed.status !== 200) throw Error('Fixture owner Resume failed'); }
   const publicServer = http.createServer((req, res) => {
     const upstream = http.request({ socketPath: uiSocket, method: req.method, path: req.url, headers: req.headers }, response => { res.writeHead(response.statusCode, response.headers); response.pipe(res); });
     upstream.on('error', () => { res.writeHead(502); res.end(); }); req.pipe(upstream);

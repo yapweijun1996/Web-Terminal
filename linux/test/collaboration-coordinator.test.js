@@ -22,6 +22,7 @@ async function fixture(t, options = {}) {
   Object.assign(controller, options.controller);
   const coordinator = await createCoordinator({ verifyGrant: async grant => ({ active: true, expires: grant.expires }), ...options, socket, controller });
   t.after(async () => { await coordinator.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  if (options.startPaused !== true) for (const pane of panes) await coordinator.control(pane.sessionName, 'resume', owner());
   const args = async (overrides = {}) => ({ target: (await coordinator.list()).panes[0], text: 'literal 中文', ...overrides });
   const defaultGrant = { id: 'test-grant', expires: Date.now() + 60000 };
   const admit = (tool, args, grant = defaultGrant) => coordinator.admit({ grant, tool, digest: operationDigest(tool, args) });
@@ -174,6 +175,7 @@ test('human input fences all sessions, waits for cross-session writes and pauses
   } } });
   const web = { ...base, sessionId: '$2', windowId: '@2', paneId: '%3', sessionName: 'web-012345abcdef' };
   f.panes.push(web);
+  await f.coordinator.control(web.sessionName, 'resume', owner());
   const target = (await f.coordinator.list()).panes.find(p => p.sessionName === web.sessionName);
   const args = { target, text: 'AI_WEB_DRAFT' }, grant = { id: 'cross-session-grant', expires: Date.now() + 60000 };
   const writing = f.coordinator.execute({ ...f.admit('terminal_type', args, grant), tool: 'terminal_type', arguments: args });
@@ -199,4 +201,13 @@ test('human input fences all sessions, waits for cross-session writes and pauses
   assert.equal((await f.coordinator.state('shared')).paused, true, 'resume is explicit and local, not an all-session grant');
   const current = { target: fresh, text: 'FRESH_DELIBERATE_WEB_ACTION' };
   assert.deepEqual(await f.coordinator.execute({ ...f.admit('terminal_type', current, grant), tool: 'terminal_type', arguments: current }), { sent: true, submitted: false });
+});
+
+test('new coordinator starts paused until explicit owner Resume', async t => {
+  const f = await fixture(t, { startPaused: true });
+  const args = await f.args();
+  assert.equal((await f.coordinator.list()).panes[0].collaboration.paused, true);
+  await assert.rejects(f.coordinator.execute({ ...f.admit('terminal_type', args), tool: 'terminal_type', arguments: args }), code('INPUT_PAUSED'));
+  await f.coordinator.control('shared', 'resume', owner());
+  assert.deepEqual(await f.coordinator.execute({ ...f.admit('terminal_type', await f.args()), tool: 'terminal_type', arguments: await f.args() }), { sent: true, submitted: false });
 });
