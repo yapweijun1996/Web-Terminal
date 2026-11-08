@@ -645,7 +645,14 @@ newTab.addEventListener('click', async () => {
   const drawerOpen = sidebar.isDrawerOpen();
   try {
     const response = await fetch('/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Terminal-Request': token }, body: '{}' });
-    if (!response.ok) throw Error('Unable to create terminal');
+    if (!response.ok) {
+      const failure = await response.json().catch(() => ({}));
+      if (response.status === 503 && failure.code === 'START_DIRECTORY_UNAVAILABLE') {
+        showStatus('New session folder is unavailable — contact the administrator');
+        return;
+      }
+      throw Error('Unable to create terminal');
+    }
     const data = await response.json(); sessions = [...sessions, data.name]; activate(data.name, drawerOpen); sidebar.closeDrawer();
   } catch { sessionReady = false; showStatus('Unable to create terminal — check connection or sign in', 'load', connections.get(active) || 'Unknown'); } finally { creating = false; updateControls(); }
 });

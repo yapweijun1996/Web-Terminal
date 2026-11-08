@@ -42,10 +42,16 @@ function fixture({ rejectStorage = false, narrow = false } = {}) {
   const store = {}, calls = [], timers = new Map(), documentListeners = {}, windowListeners = {};
   let sessionList = ['shared', 'web-aaaaaaaaaaaa', 'web-bbbbbbbbbbbb'], timerId = 0;
   let pollStatus = 200, command = 'bash', drawerOpen = narrow, splitStatus = 200;
+  let createStatus = 201, createCode = null;
   let identity = { sessionId: '$1', serverPid: '123' }, identityWait = null;
   const localStorage = { getItem: key => store[key] ?? null, setItem: (key, value) => { if (rejectStorage) throw Error('Storage denied'); store[key] = value; } };
   const fetch = async (url, options = {}) => {
     calls.push({ url, method: options.method || 'GET' });
+    if (url === '/api/sessions' && options.method === 'POST') {
+      const name = 'web-cccccccccccc';
+      if (createStatus === 201) sessionList.push(name);
+      return { ok: createStatus === 201, status: createStatus, json: async () => createStatus === 201 ? { name } : { code: createCode } };
+    }
     if (url === '/api/sessions' && !options.method && pollStatus !== 200) return { ok: false, status: pollStatus };
     if (url.endsWith('/identity')) {
       if (identityWait) await identityWait;
@@ -81,6 +87,7 @@ function fixture({ rejectStorage = false, narrow = false } = {}) {
     setCommand: value => { command = value; },
     setIdentity: value => { identity = value; },
     setSplitStatus: value => { splitStatus = value; },
+    setCreateResponse: (status, code = null) => { createStatus = status; createCode = code; },
     delayIdentity: () => { let resolve; identityWait = new Promise(done => { resolve = done; }); return resolve; },
     message: (frame, data) => windowListeners.message({ origin: 'http://fixture.test', source: frame.contentWindow, data }),
     connect: frame => windowListeners.message({ origin: 'http://fixture.test', source: frame.contentWindow, data: { type: 'terminal-connection', state: 'Connected' } }),
@@ -90,6 +97,33 @@ function fixture({ rejectStorage = false, narrow = false } = {}) {
     tick: async () => { for (const timer of [...timers.values()]) await timer.callback(); },
   };
 }
+
+test('New Session folder errors preserve existing controls and allow retry after repair', async () => {
+  const f = fixture(); await flush();
+  const frame = f.nodes.views.children[0];
+  f.connect(frame);
+  f.setCreateResponse(503, 'START_DIRECTORY_UNAVAILABLE');
+  f.nodes['new-session'].click(); await flush();
+  assert.equal(f.nodes.status.textContent, 'New session folder is unavailable — contact the administrator');
+  assert.equal(f.nodes['rename-tab'].disabled, false, 'a folder error must not mark the live session list disconnected');
+  assert.equal(f.nodes['new-session'].disabled, false, 'creation can be retried after configuration is repaired');
+  assert.equal(f.nodes.views.children[0], frame, 'the existing live terminal is preserved');
+  assert.equal(f.nodes.views.children.length, 1, 'the failed request does not activate a nonexistent terminal');
+  f.setCreateResponse(201);
+  f.nodes['new-session'].click(); await flush();
+  assert.equal(f.nodes.views.children.length, 2, 'retry creates a terminal without a page reload');
+});
+
+test('New Session retains connection handling for authentication and unrelated service failures', async () => {
+  for (const status of [401, 503]) {
+    const f = fixture(); await flush();
+    f.setCreateResponse(status, 'UNRELATED_ERROR');
+    f.nodes['new-session'].click(); await flush();
+    assert.match(f.nodes.status.textContent, /check connection or sign in/);
+    assert.equal(f.nodes['rename-tab'].disabled, true);
+    assert.equal(f.nodes['new-session'].disabled, true);
+  }
+});
 
 test('keyboard navigation keeps focus and hiding another view preserves the active view', async () => {
   const f = fixture(); await flush();

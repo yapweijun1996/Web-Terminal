@@ -14,6 +14,10 @@ function fixture() {
   const calls = [], logs = [];
   let handler, now = 0, listing = 'shared|/usr/bin/sh\n', failure = null, mutationResult = '';
   const filesystem = {
+    constants: fs.constants,
+    realpathSync: filename => filename,
+    statSync: () => ({ isDirectory: () => true }),
+    accessSync() {},
     mkdirSync() {},
     chmodSync() {},
     lstatSync(filename) {

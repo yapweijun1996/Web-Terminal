@@ -10,6 +10,7 @@ const { createImageReceipts } = require('./image-receipts');
 
 const runtime = process.env.TERMINAL_RUNTIME || `/run/user/${process.getuid()}/linux-web-terminal-ui`;
 const tmuxSocket = process.env.TERMINAL_TMUX_SOCKET || 'linux-web-terminal';
+const startDir = process.env.TERMINAL_START_DIR ?? '/srv/agent-workstation';
 const uploadDir = process.env.TERMINAL_UPLOAD_DIR || path.join(require('node:os').homedir(), '.local/share/linux-web-terminal/uploads');
 const maxUploadBytes = 10 * 1024 * 1024;
 let activeUploads = 0;
@@ -32,6 +33,13 @@ try {
 
 function tmux(args) {
   return execFileSync('tmux', ['-L', tmuxSocket, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+function sessionStartDirectory() {
+  if (!path.isAbsolute(startDir)) throw new Error('Invalid terminal start directory');
+  const directory = fs.realpathSync(startDir);
+  if (directory === path.parse(directory).root || !fs.statSync(directory).isDirectory()) throw new Error('Invalid terminal start directory');
+  fs.accessSync(directory, fs.constants.R_OK | fs.constants.W_OK | fs.constants.X_OK);
+  return directory;
 }
 const imageReceipts = createImageReceipts(tmux);
 const collaborationSocket = process.env.TERMINAL_COLLABORATION_SOCKET;
@@ -358,9 +366,16 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && req.url === '/api/sessions') {
       if (!allowedMutation(req)) return send(res, 403, '{"error":"Forbidden"}');
       if (sessions().length >= maxSessions) return send(res, 409, '{"error":"Terminal limit reached"}');
+      let directory;
+      // Recheck on every creation: config may become unavailable after UI startup.
+      try { directory = sessionStartDirectory(); }
+      catch { return send(res, 503, '{"code":"START_DIRECTORY_UNAVAILABLE","error":"Terminal start directory unavailable; check TERMINAL_START_DIR"}'); }
       const name = `web-${crypto.randomBytes(6).toString('hex')}`;
       // Pi runs on the host, but the clipboard belongs to the remote browser.
-      tmux(['new-session', '-d', '-e', 'PI_CLIPBOARD_OSC52=1', '-s', name]);
+      // tmux expands -c as a format even with execFileSync's literal arguments.
+      // Emit literal hashes using its ASCII modifier: doubling alone preserves
+      // special ##[ style sequences and would change valid directory names.
+      tmux(['new-session', '-d', '-e', 'PI_CLIPBOARD_OSC52=1', '-s', name, '-c', directory.replace(/#/g, '#{a:35}')]);
       cachedSessionMetadata = null;
       return send(res, 201, JSON.stringify({ name }));
     }

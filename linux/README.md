@@ -1,5 +1,36 @@
 # Linux terminal collaboration
 
+## New Session start directory
+
+New Session starts its shell in `/srv/agent-workstation` by default. Set
+`TERMINAL_START_DIR` in the UI service's persistent environment to use another
+existing absolute directory, for example in a systemd service drop-in:
+
+```ini
+[Service]
+Environment=TERMINAL_START_DIR=/srv/agent-workstation
+```
+
+Reload the service manager and restart only the UI service after updating its
+configuration, following the deployment runbook's dependency and rollback checks.
+The configured directory must resolve to a non-root directory readable, writable,
+and searchable by the service account. Spaces and quotes in a directory name are
+passed literally to tmux, including names containing tmux format syntax such as
+`#{pid}`. The UI resolves and checks the directory on every
+creation; an empty, relative, missing, inaccessible, non-directory, or root path
+(including a symlink to `/`) returns HTTP 503 without creating a session. There
+is no fallback to `/` and the UI does not create the directory automatically.
+Existing sessions remain available even when this configuration is invalid.
+Keep the configured directory stable: validation and tmux creation are separate
+operations, not an atomic lock against external directory removal or replacement.
+
+This setting affects only newly created sessions. Existing shells and resumed
+Codex threads keep their own working directories; it does not migrate them or
+change Codex sandbox permissions. It prevents a new terminal from inheriting `/`
+as its start directory, but does not claim to fix every possible `bwrap` error.
+
+## Collaboration
+
 The default UI transport is unchanged. Configure collaboration only as a coordinated
 release with the matching MCP and OAuth gateway adapters. Keep the release directory
 layout: `linux/ui`, `linux/node_modules`, `mcp/terminal.js`, `mcp/terminal-errors.js`,
