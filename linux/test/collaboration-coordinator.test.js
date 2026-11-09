@@ -20,7 +20,7 @@ async function fixture(t, options = {}) {
   key: async (target, key, options) => { await options.beforeDispatch(); writes.push({ target, key }); return { sent: true, submitted: key === 'Enter' }; } };
   controller.run = async values => { const paneId = /%\d+/.exec(values[values.indexOf('-t') + 1])?.[0]; const p = panes.find(p => p.paneId === paneId); return `${p.serverPid}|${p.sessionId}|${p.windowId}|${p.paneId}|1000|0\n`; };
   Object.assign(controller, options.controller);
-  const coordinator = await createCoordinator({ verifyGrant: async grant => ({ active: true, expires: grant.expires }), ...options, socket, controller });
+  const coordinator = await createCoordinator({ verifyGrant: async grant => ({ active: true, expires: grant.expires }), verifyAutoOwner: async saved => saved, ...options, socket, controller });
   t.after(async () => { await coordinator.close(); fs.rmSync(root, { recursive: true, force: true }); });
   if (options.startPaused !== true) for (const pane of panes) await coordinator.control(pane.sessionName, 'resume', owner());
   const args = async (overrides = {}) => ({ target: (await coordinator.list()).panes[0], text: 'literal 中文', ...overrides });
@@ -77,7 +77,7 @@ test('pause invalidates admission immediately but confirms only after real in-fl
   const current = await f.args();
   await assert.rejects(f.coordinator.execute({ ...f.admit('terminal_type', current, grant), tool: 'terminal_type', arguments: current }), code('INPUT_PAUSED'));
   release(); await writing;
-  assert.equal((await pause).state, 'paused');
+  assert.equal((await pause).state, 'manual-paused');
   assert.equal(confirmed, true);
 });
 test('uncertain delivery remains paused and cannot falsely confirm resume or human dispatch', async t => {
@@ -210,4 +210,124 @@ test('new coordinator starts paused until explicit owner Resume', async t => {
   await assert.rejects(f.coordinator.execute({ ...f.admit('terminal_type', args), tool: 'terminal_type', arguments: args }), code('INPUT_PAUSED'));
   await f.coordinator.control('shared', 'resume', owner());
   assert.deepEqual(await f.coordinator.execute({ ...f.admit('terminal_type', await f.args()), tool: 'terminal_type', arguments: await f.args() }), { sent: true, submitted: false });
+});
+
+test('owner-authorized sharing resumes after 10s human idle and rejects stale Enter', async t => {
+  const f = await fixture(t, { humanIdleMs: 45 });
+  const previous = await f.args();
+  await f.coordinator.human('shared', owner(), async () => {});
+  assert.equal((await f.coordinator.state('shared')).paused, true);
+  const stale = { target: previous.target, key: 'Enter' };
+  await new Promise(resolve => setTimeout(resolve, 80));
+  assert.equal((await f.coordinator.state('shared')).state, 'sharing');
+  await assert.rejects(f.coordinator.execute({ ...f.admit('terminal_send_key', stale), tool: 'terminal_send_key', arguments: stale }), code('STALE_INPUT_GENERATION'));
+  assert.equal(f.writes.length, 0);
+});
+
+test('repeated human input resets idle clock; manual Pause never auto-resumes', async t => {
+  const f = await fixture(t, { humanIdleMs: 90 });
+  await f.coordinator.human('shared', owner(), async () => {});
+  await new Promise(resolve => setTimeout(resolve, 55));
+  await f.coordinator.human('shared', owner(), async () => {});
+  await new Promise(resolve => setTimeout(resolve, 55));
+  assert.equal((await f.coordinator.state('shared')).paused, true);
+  await new Promise(resolve => setTimeout(resolve, 65));
+  assert.equal((await f.coordinator.state('shared')).state, 'sharing');
+  await f.coordinator.control('shared', 'pause', owner());
+  await new Promise(resolve => setTimeout(resolve, 125));
+  assert.equal((await f.coordinator.state('shared')).state, 'manual-paused');
+});
+
+test('fresh coordinator starts paused and never auto-resumes without explicit owner consent', async t => {
+  const f = await fixture(t, { startPaused: true, humanIdleMs: 25 });
+  await f.coordinator.human('shared', owner(), async () => {});
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal((await f.coordinator.state('shared')).paused, true);
+});
+
+test('expired owner approval prevents automatic resumption', async t => {
+  const f = await fixture(t, { startPaused: true, humanIdleMs: 50 });
+  await f.coordinator.control('shared', 'resume', { ...owner(), expires: Date.now() + 15 });
+  await f.coordinator.human('shared', owner(), async () => {});
+  await new Promise(resolve => setTimeout(resolve, 90));
+  assert.equal((await f.coordinator.state('shared')).paused, true);
+});
+
+test('auto sharing resumes previously authorized sessions but not unapproved sessions', async t => {
+  const f = await fixture(t, { startPaused: true, humanIdleMs: 35 });
+  const second = { ...base, sessionId: '$2', windowId: '@2', paneId: '%3', sessionName: 'web-012345abcdef' };
+  f.panes.push(second);
+  await f.coordinator.control('shared', 'resume', owner());
+  await f.coordinator.human('shared', owner(), async () => {});
+  await new Promise(resolve => setTimeout(resolve, 65));
+  assert.equal((await f.coordinator.state('shared')).state, 'sharing');
+  assert.equal((await f.coordinator.state(second.sessionName)).paused, true);
+});
+
+test('unknown delivery cannot auto resume after idle', async t => {
+  const f = await fixture(t, { humanIdleMs: 35, controller: { type: async () => { throw Error('uncertain dispatch'); } } });
+  const args = await f.args();
+  await assert.rejects(f.coordinator.execute({ ...f.admit('terminal_type', args), tool: 'terminal_type', arguments: args }), code('OPERATION_UNAVAILABLE'));
+  await assert.rejects(f.coordinator.human('shared', owner(), async () => {}), code('OPERATION_UNAVAILABLE'));
+  await new Promise(resolve => setTimeout(resolve, 65));
+  assert.equal((await f.coordinator.state('shared')).state, 'unknown');
+});
+
+test('revoked active grant prevents idle auto-resume', async t => {
+  const f = await fixture(t, { humanIdleMs: 35 });
+  const args = await f.args();
+  await f.coordinator.execute({ ...f.admit('terminal_type', args), tool: 'terminal_type', arguments: args });
+  await f.coordinator.human('shared', owner(), async () => {});
+  await f.coordinator.revoke({ grantId: 'test-grant' });
+  await new Promise(resolve => setTimeout(resolve, 65));
+  assert.equal((await f.coordinator.state('shared')).paused, true);
+});
+
+test('owner authority revoked before idle deadline never auto resumes', async t => {
+  let active = true;
+  const f = await fixture(t, { humanIdleMs: 35, verifyAutoOwner: async saved => active ? saved : null });
+  await f.coordinator.human('shared', owner(), async () => {});
+  active = false;
+  await new Promise(resolve => setTimeout(resolve, 65));
+  assert.equal((await f.coordinator.state('shared')).paused, true);
+  assert.equal((await f.coordinator.state('shared')).idleRemainingMs, null);
+});
+
+test('authority verifier failure stays closed and does not retry automatically', async t => {
+  let checks = 0;
+  const f = await fixture(t, { humanIdleMs: 30, verifyAutoOwner: async () => { checks++; throw Error('verifier offline'); } });
+  await f.coordinator.human('shared', owner(), async () => {});
+  await new Promise(resolve => setTimeout(resolve, 85));
+  assert.equal((await f.coordinator.state('shared')).paused, true);
+  assert.equal(checks, 1);
+});
+
+test('in-flight write draining after idle deadline re-arms auto resume', async t => {
+  let release, began;
+  const started = new Promise(resolve => { began = resolve; });
+  const f = await fixture(t, { humanIdleMs: 35, controller: { type: async (_target, _text, options) => {
+    began(); await new Promise(resolve => { release = resolve; }); await options.beforeDispatch(); return { sent: true, submitted: false };
+  } } });
+  const args = await f.args();
+  const writing = f.coordinator.execute({ ...f.admit('terminal_type', args), tool: 'terminal_type', arguments: args });
+  await started;
+  const human = f.coordinator.human('shared', owner(), async () => {});
+  await new Promise(resolve => setTimeout(resolve, 55));
+  assert.equal((await f.coordinator.state('shared')).paused, true);
+  release();
+  await assert.rejects(writing, code('STALE_INPUT_GENERATION'));
+  await human;
+  await new Promise(resolve => setTimeout(resolve, 70));
+  assert.equal((await f.coordinator.state('shared')).state, 'sharing');
+});
+
+test('server-side OAuth grant revocation cancels auto sharing even without active writer', async t => {
+  const f = await fixture(t, { humanIdleMs: 35 });
+  const args = await f.args();
+  f.admit('terminal_type', args);
+  await f.coordinator.human('shared', owner(), async () => {});
+  await f.coordinator.revoke({ grantId: 'test-grant' });
+  await new Promise(resolve => setTimeout(resolve, 65));
+  assert.equal((await f.coordinator.state('shared')).state, 'manual-paused');
+  assert.equal((await f.coordinator.state('shared')).idleRemainingMs, null);
 });
