@@ -186,7 +186,12 @@ const displayControls = window.createTerminalDisplayControls({
 });
 document.querySelector('#view-actions').append(displayControls.element);
 const collaborationControls = window.createCollaborationControls?.({ getSession: () => active, getToken: () => token });
-if (collaborationControls) document.querySelector('#view-actions').append(collaborationControls.element);
+if (collaborationControls) {
+  document.querySelector('#view-actions').append(collaborationControls.element);
+  // The toolbar controls move into a closed menu on mobile. Keep failures
+  // visible outside that menu, where polling and focus changes cannot hide them.
+  document.querySelector('header').append(collaborationControls.notice);
+}
 const contextPaste = window.createContextPaste?.({ getSession: () => active, getToken: () => token,
   getTarget: () => active && connections.get(active) === 'Connected' ? frames.get(active)?.contentWindow?.webTerminalTarget : null });
 if (contextPaste) document.querySelector('#session-actions').append(contextPaste.button);

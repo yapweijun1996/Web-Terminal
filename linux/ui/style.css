@@ -11,6 +11,7 @@ header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding:
 .current-session span { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .toolbar-actions, .state-toolbar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .action-group { display: contents; }
+.collaboration-error { color: var(--error); font-size: 12px; flex: 1 0 100%; overflow-wrap: anywhere; }
 .state-toolbar { flex: 1 0 100%; }
 button, summary, input, select { font: inherit; }
 button, summary, select { color: inherit; background: var(--control); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; cursor: pointer; }
@@ -58,6 +59,7 @@ iframe.active { visibility: visible; }
   .current-session { grid-column: 2; grid-row: 1; min-width: 0; }
   #latest { grid-column: 3; grid-row: 1; padding-inline: 8px; }
   #toolbar-menu { grid-column: 4; grid-row: 1; }
+  header > .collaboration-error { grid-column: 1 / -1; grid-row: 3; padding-inline: 4px; }
   #toolbar-menu > summary { display: flex; align-items: center; justify-content: center; min-width: 44px; }
   .connection { grid-column: 1 / -1; grid-row: 2; flex-wrap: nowrap; overflow: hidden; }
   #status, #scroll-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
