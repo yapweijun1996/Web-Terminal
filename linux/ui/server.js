@@ -51,7 +51,10 @@ const collaborationReady = collaborationSocket ? (async () => {
   const { TerminalController } = await import('../../mcp/terminal.js');
   verifyCollaborationOwner = createOwnerVerifier({ socket: process.env.TERMINAL_OWNER_VERIFY_SOCKET, url: process.env.TERMINAL_OWNER_VERIFY_URL });
   const controller = new TerminalController({ server: tmuxSocket, layout: 'linux-tabs' });
-  collaboration = await createCoordinator({ socket: collaborationSocket, grantVerifySocket: process.env.TERMINAL_GRANT_VERIFY_SOCKET, controller });
+  collaboration = await createCoordinator({ socket: collaborationSocket, grantVerifySocket: process.env.TERMINAL_GRANT_VERIFY_SOCKET, verifyAutoOwner: async saved => {
+    const owner = await verifyCollaborationOwner(saved.request);
+    return owner;
+  }, controller });
   contextPaste = require('./context-paste').createContextPaste({ tmux, controller, coordinator: collaboration, directory: process.env.TERMINAL_CONTEXT_DIR || path.join(runtime, 'contexts') });
   managedWebSockets = createManagedWebSockets({ coordinator: collaboration, verifyOwner: verifyCollaborationOwner });
 })() : Promise.resolve();
@@ -274,7 +277,7 @@ const server = http.createServer(async (req, res) => {
       const chunks = []; let size = 0;
       for await (const chunk of req) { size += chunk.length; if (size > 1024) return send(res, 413, '{"error":"Request too large"}'); chunks.push(chunk); }
       const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      const result = await collaboration.control(input.session, input.action, owner, { serverPid: input.serverPid, sessionId: input.sessionId });
+      const result = await collaboration.control(input.session, input.action, owner, { serverPid: input.serverPid, sessionId: input.sessionId }, req);
       return send(res, 200, JSON.stringify(result));
     }
     if (req.method === 'GET' && req.url === '/') return file(res, 'index.html', 'text/html; charset=utf-8');

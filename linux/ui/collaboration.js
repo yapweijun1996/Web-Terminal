@@ -49,7 +49,7 @@ function createOwnerVerifier({ socket, url }) {
     upstream.on('close', () => clearTimeout(deadline)); upstream.on('error', fail); upstream.end();
   });
 }
-async function createCoordinator({ socket, controller, now = () => performance.now(), wallNow = () => Date.now(), pauseTimeoutMs = 6000, grantVerifySocket, verifyGrant }) {
+async function createCoordinator({ socket, controller, now = () => performance.now(), wallNow = () => Date.now(), pauseTimeoutMs = 6000, humanIdleMs = 10000, verifyAutoOwner, grantVerifySocket, verifyGrant }) {
   if (!path.isAbsolute(socket || '')) throw Error('Private collaboration socket required');
   if (!verifyGrant && !path.isAbsolute(grantVerifySocket || '')) throw Error('Private grant verifier required');
   const verifyAuthority = verifyGrant || (grant => privateCall(grantVerifySocket, '/v1/grant', { grantId: grant.id }));
@@ -62,7 +62,41 @@ async function createCoordinator({ socket, controller, now = () => performance.n
   // A tmux client can switch sessions through native prefix/mouse input. The
   // WebSocket URL is its original attachment, not authority over its destination.
   // Restart cannot restore an owner pause from volatile state. Start fail closed.
-  let pauseNewSessions = true, humanPending = 0;
+  let pauseNewSessions = true, humanPending = 0, idleTimer = null, lastHumanAt = 0;
+  // Auto-sharing is opt-in per session, volatile and never restored after restart.
+  // An Owner's explicit Pause is sticky. Human input is a temporary global fence.
+  function cancelIdleTimer() { if (idleTimer !== null) clearTimeout(idleTimer); idleTimer = null; }
+  let idleEpoch = 0;
+  function scheduleIdle() {
+    cancelIdleTimer();
+    const epoch = ++idleEpoch;
+    if (humanPending || ![...sessions.values()].some(s => s.autoOwner && !s.manualPause && s.paused && !s.unknown)) return;
+    const remaining = Math.max(0, humanIdleMs - (now() - lastHumanAt));
+    idleTimer = setTimeout(async () => {
+      idleTimer = null;
+      if (epoch !== idleEpoch || humanPending) return;
+      if (now() - lastHumanAt < humanIdleMs) return scheduleIdle();
+      const candidates = [...sessions.values()].filter(s => s.autoOwner && !s.manualPause && s.paused && !s.unknown);
+      // Never unpause on a cached identity alone. A deployment must supply
+      // a fresh trusted owner verification callback; failures stay closed.
+      for (const s of candidates) {
+        if (epoch !== idleEpoch || humanPending) return;
+        if (s.inFlight.size) continue;
+        const saved = s.autoOwner;
+        let verified;
+        try { verified = await verifyAutoOwner?.(saved); } catch { verified = null; }
+        if (epoch !== idleEpoch || humanPending) return;
+        if (!ownerValid(saved) || !ownerValid(verified) || verified.ownerId !== saved.ownerId || verified.expires !== saved.expires) {
+          s.autoOwner = null; invalidate(s); continue;
+        }
+        if (!s.paused || s.manualPause || s.unknown || s.inFlight.size) continue;
+        invalidate(s); s.paused = false;
+      }
+      // In-flight writes may finish after the deadline. Their completion
+      // re-arms the timer; a failed authority check must not spin or retry.
+    }, remaining);
+    idleTimer.unref?.();
+  }
   const broker = new InputBroker({ verifyTarget: t => controller.validate(t), now,
     execute: async (target, op) => {
       const activeSession = sessions.get(op.sessionKey);
@@ -108,11 +142,11 @@ async function createCoordinator({ socket, controller, now = () => performance.n
     const key = sessionKey(p);
     if (!sessions.has(key)) {
       if (sessions.size >= 100) throw fault('INPUT_BUSY');
-      sessions.set(key, { key, serverPid: p.serverPid, sessionId: p.sessionId, sessionName: p.sessionName, generation: randomUUID(), paused: pauseNewSessions, unknown: false, writer: null, writers: new Map(), inFlight: new Set(), jobs: new Map() });
+      sessions.set(key, { key, serverPid: p.serverPid, sessionId: p.sessionId, sessionName: p.sessionName, generation: randomUUID(), paused: pauseNewSessions, unknown: false, manualPause: false, autoOwner: null, usedGrants: new Set(), writer: null, writers: new Map(), inFlight: new Set(), jobs: new Map() });
     }
     return sessions.get(key);
   }
-  function projection(s) { return { serverPid: s.serverPid, sessionId: s.sessionId, paused: s.paused, writer: s.writer ? 'AI' : s.paused ? 'Owner' : 'Shared', state: s.unknown ? 'unknown' : s.inFlight.size && s.paused ? 'pause-pending' : humanPending ? 'owner-active' : s.paused ? 'paused' : 'sharing', inputGeneration: s.generation }; }
+  function projection(s) { return { serverPid: s.serverPid, sessionId: s.sessionId, paused: s.paused, writer: s.writer ? 'AI' : s.paused ? 'Owner' : 'Shared', state: s.unknown ? 'unknown' : s.manualPause && s.paused ? 'manual-paused' : s.inFlight.size && s.paused ? 'pause-pending' : humanPending ? 'owner-active' : s.paused ? 'paused' : 'sharing', inputGeneration: s.generation, idleRemainingMs: s.paused && s.autoOwner && !s.manualPause && !s.unknown ? Math.max(0, humanIdleMs - (now() - lastHumanAt)) : null }; }
   async function captureIdentity(pane) {
     const raw = await controller.run(['display-message', '-p', '-t', `${pane.sessionId}:${pane.windowId}.${pane.paneId}`,
       '#{pid}|#{session_id}|#{window_id}|#{pane_id}|#{pane_pid}|#{pane_dead}']);
@@ -169,6 +203,7 @@ async function createCoordinator({ socket, controller, now = () => performance.n
     retireExpired(s);
     if (typeof generation !== 'string' || !generation) throw fault('STALE_INPUT_GENERATION');
     check(s, generation, admission.grant, admission.deadline, admission.expires);
+    s.usedGrants.add(admission.grant.id);
     if (s.inFlight.size || [...sessions.values()].reduce((n, item) => n + item.inFlight.size, 0) >= 32) throw fault('INPUT_BUSY');
     let finish;
     const tracked = new Promise(resolve => { finish = resolve; });
@@ -197,19 +232,24 @@ async function createCoordinator({ socket, controller, now = () => performance.n
       if (/Lease held/.test(error?.message || '')) throw fault('INPUT_BUSY');
       if (/Permission denied|Lease unavailable/.test(error?.message || '')) throw fault(s.paused ? 'INPUT_PAUSED' : 'AUTHORITY_UNAVAILABLE');
       throw fault('OPERATION_UNAVAILABLE');
-    } finally { s.inFlight.delete(tracked); s.jobs.delete(tracked); finish(); }
+    } finally { s.inFlight.delete(tracked); s.jobs.delete(tracked); finish(); if (s.paused && s.autoOwner && !s.unknown) scheduleIdle(); }
   }
   async function revoke({ grantId } = {}) {
     const grant = grants.get(grantId), affected = [];
     if (grant) {
       grant.revoked = true;
       for (const [nonce, item] of admissions) if (item.grant === grant) admissions.delete(nonce);
+      // The trusted OAuth gateway has revoked a server-side grant. Revoke
+      // *all* volatile auto-sharing consent rather than relying on a writer
+      // still being present when the notification arrives.
       for (const s of sessions.values()) {
-        if ([...s.writers.values()].some(record => record.grant === grant) || [...s.jobs.values()].includes(grant)) {
+        if (s.autoOwner) { s.autoOwner = null; s.manualPause = true; }
+        if (s.usedGrants.has(grantId) || s.manualPause || [...s.writers.values()].some(record => record.grant === grant) || [...s.jobs.values()].includes(grant)) {
           invalidate(s); affected.push(s);
         }
       }
     }
+    scheduleIdle();
     await Promise.all(affected.map(drain));
     return { revoked: true };
   }
@@ -228,14 +268,16 @@ async function createCoordinator({ socket, controller, now = () => performance.n
     return projection(s);
   }
   function checkedBinding(s, binding) { if (binding && (binding.serverPid !== s.serverPid || binding.sessionId !== s.sessionId)) throw fault('STALE_TARGET'); }
-  async function control(name, action, owner, binding) {
+  async function control(name, action, owner, binding, ownerRequest) {
     if (!ownerValid(owner)) throw fault('AUTHORITY_UNAVAILABLE');
     const s = await resolveSession(name); checkedBinding(s, binding);
-    if (action === 'pause' || action === 'takeover') return pauseSession(s);
+    if (action === 'pause') { s.manualPause = true; s.autoOwner = null; cancelIdleTimer(); const result = await pauseSession(s); scheduleIdle(); return result; }
+    if (action === 'takeover') { const result = await pauseSession(s); lastHumanAt = now(); scheduleIdle(); return result; }
     if (action !== 'resume') throw fault('INVALID_INPUT');
     if (humanPending) throw fault('INPUT_BUSY');
     if (s.inFlight.size || s.unknown) throw fault('OPERATION_UNAVAILABLE');
-    invalidate(s); s.paused = false; return projection(s);
+    invalidate(s); s.manualPause = false; s.autoOwner = Object.freeze({ ...owner, request: ownerRequest ? { headers: { 'cf-access-jwt-assertion': ownerRequest.headers['cf-access-jwt-assertion'] } } : null });
+    s.paused = false; scheduleIdle(); return projection(s);
   }
   function beginHuman(binding, owner) {
     if (!ownerValid(owner)) throw fault('AUTHORITY_UNAVAILABLE');
@@ -244,10 +286,11 @@ async function createCoordinator({ socket, controller, now = () => performance.n
     // Conservatively fence every managed AI writer before forwarding native
     // bytes: this client's next byte may address a different tmux session.
     pauseNewSessions = true;
+    lastHumanAt = now(); cancelIdleTimer();
     for (const current of sessions.values()) invalidate(current);
     humanPending++;
     let finished = false;
-    return () => { if (!finished) { finished = true; humanPending--; } };
+    return () => { if (!finished) { finished = true; humanPending--; lastHumanAt = now(); scheduleIdle(); } };
   }
   async function human(name, owner, dispatch, binding) {
     if (!ownerValid(owner)) throw fault('AUTHORITY_UNAVAILABLE');
@@ -273,7 +316,7 @@ async function createCoordinator({ socket, controller, now = () => performance.n
   server.requestTimeout = 10000; server.headersTimeout = 5000;
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socket, () => { fs.chmodSync(socket, 0o600); resolve(); }); });
   return { list, admit, execute, revoke, control, human, beginHuman, binding: async name => { const s = await resolveSession(name); return { serverPid: s.serverPid, sessionId: s.sessionId }; }, state: async name => projection(await resolveSession(name)),
-    close: () => new Promise(resolve => { for (const s of sessions.values()) invalidate(s); server.close(() => { try { fs.unlinkSync(socket); } catch {} resolve(); }); server.closeAllConnections(); }),
+    close: () => new Promise(resolve => { cancelIdleTimer(); for (const s of sessions.values()) invalidate(s); server.close(() => { try { fs.unlinkSync(socket); } catch {} resolve(); }); server.closeAllConnections(); }),
   };
 }
 module.exports = { createCoordinator, createOwnerVerifier, ownerValid };
