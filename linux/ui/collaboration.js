@@ -49,7 +49,7 @@ function createOwnerVerifier({ socket, url }) {
     upstream.on('close', () => clearTimeout(deadline)); upstream.on('error', fail); upstream.end();
   });
 }
-async function createCoordinator({ socket, controller, now = () => performance.now(), wallNow = () => Date.now(), pauseTimeoutMs = 6000, humanIdleMs = 10000, verifyAutoOwner, grantVerifySocket, verifyGrant }) {
+async function createCoordinator({ socket, controller, now = () => performance.now(), wallNow = () => Date.now(), pauseTimeoutMs = 6000, humanIdleMs = 10000, verifyAutoOwner, grantVerifySocket, verifyGrant, diagnostic = () => {} }) {
   if (!path.isAbsolute(socket || '')) throw Error('Private collaboration socket required');
   if (!verifyGrant && !path.isAbsolute(grantVerifySocket || '')) throw Error('Private grant verifier required');
   const verifyAuthority = verifyGrant || (grant => privateCall(grantVerifySocket, '/v1/grant', { grantId: grant.id }));
@@ -81,16 +81,17 @@ async function createCoordinator({ socket, controller, now = () => performance.n
       // a fresh trusted owner verification callback; failures stay closed.
       for (const s of candidates) {
         if (epoch !== idleEpoch || humanPending) return;
-        if (s.inFlight.size) continue;
+        if (s.inFlight.size) { diagnostic({ event: 'auto_resume', reason: 'in_flight', state: 'paused' }); continue; }
         const saved = s.autoOwner;
         let verified;
         try { verified = await verifyAutoOwner?.(saved); } catch { verified = null; }
         if (epoch !== idleEpoch || humanPending) return;
         if (!ownerValid(saved) || !ownerValid(verified) || verified.ownerId !== saved.ownerId || verified.expires !== saved.expires) {
-          s.autoOwner = null; invalidate(s); continue;
+          const reason = !ownerValid(saved) ? 'owner_expired' : !ownerValid(verified) ? 'owner_unavailable' : 'owner_changed';
+          s.autoOwner = null; invalidate(s); diagnostic({ event: 'auto_resume', reason, state: 'paused' }); continue;
         }
         if (!s.paused || s.manualPause || s.unknown || s.inFlight.size) continue;
-        invalidate(s); s.paused = false;
+        invalidate(s); s.paused = false; diagnostic({ event: 'auto_resume', reason: 'accepted', state: 'sharing' });
       }
       // In-flight writes may finish after the deadline. Their completion
       // re-arms the timer; a failed authority check must not spin or retry.
@@ -249,6 +250,7 @@ async function createCoordinator({ socket, controller, now = () => performance.n
         }
       }
     }
+    if (affected.length) diagnostic({ event: 'pause', reason: 'grant_revoked', state: 'paused' });
     scheduleIdle();
     await Promise.all(affected.map(drain));
     return { revoked: true };
@@ -271,13 +273,13 @@ async function createCoordinator({ socket, controller, now = () => performance.n
   async function control(name, action, owner, binding, ownerRequest) {
     if (!ownerValid(owner)) throw fault('AUTHORITY_UNAVAILABLE');
     const s = await resolveSession(name); checkedBinding(s, binding);
-    if (action === 'pause') { s.manualPause = true; s.autoOwner = null; cancelIdleTimer(); const result = await pauseSession(s); scheduleIdle(); return result; }
-    if (action === 'takeover') { const result = await pauseSession(s); lastHumanAt = now(); scheduleIdle(); return result; }
+    if (action === 'pause') { s.manualPause = true; s.autoOwner = null; cancelIdleTimer(); const result = await pauseSession(s); diagnostic({ event: 'pause', reason: 'manual', state: 'manual-paused' }); scheduleIdle(); return result; }
+    if (action === 'takeover') { const result = await pauseSession(s); diagnostic({ event: 'pause', reason: 'manual', state: 'paused' }); lastHumanAt = now(); scheduleIdle(); return result; }
     if (action !== 'resume') throw fault('INVALID_INPUT');
     if (humanPending) throw fault('INPUT_BUSY');
     if (s.inFlight.size || s.unknown) throw fault('OPERATION_UNAVAILABLE');
     invalidate(s); s.manualPause = false; s.autoOwner = Object.freeze({ ...owner, request: ownerRequest ? { headers: { 'cf-access-jwt-assertion': ownerRequest.headers['cf-access-jwt-assertion'] } } : null });
-    s.paused = false; scheduleIdle(); return projection(s);
+    s.paused = false; diagnostic({ event: 'resume', action: 'resume', reason: 'accepted', state: 'sharing', binding: 'matched' }); scheduleIdle(); return projection(s);
   }
   function beginHuman(binding, owner) {
     if (!ownerValid(owner)) throw fault('AUTHORITY_UNAVAILABLE');
@@ -288,6 +290,7 @@ async function createCoordinator({ socket, controller, now = () => performance.n
     pauseNewSessions = true;
     lastHumanAt = now(); cancelIdleTimer();
     for (const current of sessions.values()) invalidate(current);
+    diagnostic({ event: 'pause', reason: 'human_input', state: 'paused' });
     humanPending++;
     let finished = false;
     return () => { if (!finished) { finished = true; humanPending--; lastHumanAt = now(); scheduleIdle(); } };

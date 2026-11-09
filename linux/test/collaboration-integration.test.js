@@ -138,3 +138,48 @@ test('owner control errors distinguish 401 authentication, 403 Origin/CSRF, and 
   assert.equal(latest.state, 'sharing', 'rejected request cannot pause a valid session');
   assert.equal(latest.inputGeneration, original.inputGeneration, 'rejected request cannot rotate input authority');
 });
+
+test('completed control HTTP telemetry reports exact written response status, not intended status', async t => {
+  const f = await createFixture({ startPaused: true, captureDiagnostics: true });
+  t.after(() => f.close());
+  const state = (await f.request('GET', '/api/collaboration/state')).data.sessions.shared;
+  const headers = { Origin: 'http://fixture.invalid', 'Content-Type': 'application/json', 'X-Terminal-Request': f.tokens.token };
+  const action = { session: 'shared', action: 'resume', serverPid: state.serverPid, sessionId: state.sessionId };
+  const replies = [];
+  replies.push(await f.request('POST', '/api/collaboration/control', { headers: { ...headers, 'X-Terminal-Request': 'bad' }, body: action }));
+  replies.push(await f.request('POST', '/api/collaboration/control', { owner: false, headers, body: action }));
+  replies.push(await f.request('POST', '/api/collaboration/control', { headers, body: { ...action, extra: 'a'.repeat(1200) } }));
+  replies.push(await f.request('POST', '/api/collaboration/control', { headers, body: Buffer.from('{invalid json') }));
+  replies.push(await f.request('POST', '/api/collaboration/control', { headers, body: { ...action, sessionId: '$999' } }));
+  replies.push(await f.request('POST', '/api/collaboration/control', { headers, body: { ...action, action: 'bogus' } }));
+  replies.push(await f.request('POST', '/api/collaboration/control', { headers, body: action }));
+  assert.deepEqual(replies.map(r => r.status), [403, 401, 413, 400, 409, 500, 200]);
+  const events = await until(() => f.diagnostics().filter(x => x.event === 'control'), items => items.length >= replies.length);
+  assert.equal(events.length, replies.length, 'finish and close must not double-log one request');
+  assert.deepEqual(events.map(e => e.status), replies.map(r => r.status));
+  assert.deepEqual(events.map(e => e.reason), ['csrf', 'owner_auth', 'invalid', 'invalid', 'binding', 'invalid', 'accepted']);
+  assert.equal(events[4].binding, 'rejected');
+  assert.equal(events.at(-1).binding, 'matched');
+  assert.equal(events.at(-1).state, 'sharing');
+  assert.equal(events.at(-1).action, 'resume');
+  assert.doesNotMatch(JSON.stringify(events), /fixture-csrf-token|test-only-owner|invalid json|cf-access|JWT|Cookie|Authorization/i);
+});
+
+test('aborted control request never records a completed HTTP response', async t => {
+  const http = require('node:http');
+  const f = await createFixture({ startPaused: true, captureDiagnostics: true });
+  t.after(() => f.close());
+  const request = http.request({ socketPath: f.uiSocket, path: '/api/collaboration/control', method: 'POST', headers: {
+    Host: 'fixture.invalid', Origin: 'http://fixture.invalid',
+    'CF-Access-Jwt-Assertion': f.jwt, 'X-Terminal-Request': f.tokens.token,
+    'Content-Type': 'application/json', 'Content-Length': '128',
+  } });
+  request.on('error', () => {});
+  request.flushHeaders();
+  await sleep(30);
+  request.destroy();
+  const events = await until(() => f.diagnostics().filter(e => e.event === 'control'), list => list.length > 0);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].status, 0, 'client-aborted request has no completed HTTP status');
+  assert.equal(events[0].reason, 'aborted');
+});

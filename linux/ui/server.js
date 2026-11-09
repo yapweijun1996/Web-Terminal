@@ -7,6 +7,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn, execFileSync } = require('node:child_process');
 const { createImageReceipts } = require('./image-receipts');
+const { createTelemetry } = require('./collaboration-telemetry');
+const diagnostic = createTelemetry();
 
 const runtime = process.env.TERMINAL_RUNTIME || `/run/user/${process.getuid()}/linux-web-terminal-ui`;
 const tmuxSocket = process.env.TERMINAL_TMUX_SOCKET || 'linux-web-terminal';
@@ -54,7 +56,7 @@ const collaborationReady = collaborationSocket ? (async () => {
   collaboration = await createCoordinator({ socket: collaborationSocket, grantVerifySocket: process.env.TERMINAL_GRANT_VERIFY_SOCKET, verifyAutoOwner: async saved => {
     const owner = await verifyCollaborationOwner(saved.request);
     return owner;
-  }, controller });
+  }, controller, diagnostic });
   contextPaste = require('./context-paste').createContextPaste({ tmux, controller, coordinator: collaboration, directory: process.env.TERMINAL_CONTEXT_DIR || path.join(runtime, 'contexts') });
   managedWebSockets = createManagedWebSockets({ coordinator: collaboration, verifyOwner: verifyCollaborationOwner });
 })() : Promise.resolve();
@@ -270,14 +272,42 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, JSON.stringify({ enabled: true, sessions: Object.fromEntries(result.panes.map(p => [p.sessionName, p.collaboration])) }));
     }
     if (collaborationSocket && req.url === '/api/collaboration/control' && req.method === 'POST') {
-      if (!allowedMutation(req)) return send(res, 403, '{"error":"Forbidden"}');
+      // Observe the HTTP response that Node actually finished writing, not an
+      // intended status before an async action or send(). No client identity,
+      // request body, headers or terminal content enters the telemetry record.
+      const trace = { event: 'control', action: 'none', reason: 'unknown', state: 'none', binding: 'not_checked' };
+      let recorded = false;
+      const complete = aborted => {
+        if (recorded) return;
+        recorded = true;
+        diagnostic({ ...trace, reason: aborted ? 'aborted' : trace.reason, status: aborted ? 0 : res.statusCode });
+      };
+      res.once('finish', () => complete(false));
+      res.once('close', () => complete(true));
+      if (!allowedMutation(req)) { trace.reason = 'csrf'; return send(res, 403, '{"error":"Forbidden"}'); }
       await collaborationReady;
-      const owner = await verifyCollaborationOwner(req);
-      if (Number(req.headers['content-length'] || 0) > 1024) return send(res, 413, '{"error":"Request too large"}');
+      let owner;
+      try { owner = await verifyCollaborationOwner(req); }
+      catch (error) { trace.reason = error?.code === 'AUTHORITY_UNAVAILABLE' ? 'owner_auth' : 'unknown'; throw error; }
+      if (Number(req.headers['content-length'] || 0) > 1024) { trace.reason = 'invalid'; return send(res, 413, '{"error":"Request too large"}'); }
       const chunks = []; let size = 0;
-      for await (const chunk of req) { size += chunk.length; if (size > 1024) return send(res, 413, '{"error":"Request too large"}'); chunks.push(chunk); }
-      const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      const result = await collaboration.control(input.session, input.action, owner, { serverPid: input.serverPid, sessionId: input.sessionId }, req);
+      for await (const chunk of req) {
+        size += chunk.length;
+        if (size > 1024) { trace.reason = 'invalid'; return send(res, 413, '{"error":"Request too large"}'); }
+        chunks.push(chunk);
+      }
+      let input;
+      try { input = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+      catch { trace.reason = 'invalid'; return send(res, 400, '{"error":"Invalid control request"}'); }
+      trace.action = input?.action;
+      let result;
+      try { result = await collaboration.control(input?.session, input?.action, owner, { serverPid: input?.serverPid, sessionId: input?.sessionId }, req); }
+      catch (error) {
+        trace.reason = error?.code === 'STALE_TARGET' ? 'binding' : error?.code === 'AUTHORITY_UNAVAILABLE' ? 'owner_auth' : error?.code === 'INPUT_BUSY' || error?.code === 'INPUT_PAUSED' ? 'busy' : error?.code === 'OPERATION_UNAVAILABLE' ? 'uncertain' : 'invalid';
+        if (trace.reason === 'binding') trace.binding = 'rejected';
+        throw error;
+      }
+      trace.reason = 'accepted'; trace.binding = 'matched'; trace.state = result.state;
       return send(res, 200, JSON.stringify(result));
     }
     if (req.method === 'GET' && req.url === '/') return file(res, 'index.html', 'text/html; charset=utf-8');
