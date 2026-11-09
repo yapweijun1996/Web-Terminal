@@ -10,7 +10,7 @@ const { spawn, execFileSync } = require('node:child_process');
 const { WebSocket } = require('ws');
 const { privateCall, operationDigest } = require('../../runtime/gateway/collaboration-contract.cjs');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function createFixture({ realGateway = false, startPaused = false } = {}) {
+async function createFixture({ realGateway = false, startPaused = false, captureDiagnostics = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-c-'));
   const uiSocket = path.join(root, 'ui.sock'), authSocket = path.join(root, 'auth.sock'), collaborationSocket = path.join(root, 'c.sock'), grantSocket = path.join(root, 'g.sock'), publicAuthSocket = path.join(root, 'p.sock'), mcpSocket = path.join(root, 'm.sock');
   const tmuxServer = 'collab-' + crypto.randomBytes(6).toString('hex');
@@ -52,7 +52,26 @@ async function createFixture({ realGateway = false, startPaused = false } = {}) 
     await Promise.all([[gateway.publicServer, publicAuthSocket], [gateway.approvalServer, authSocket], [gateway.grantVerifierServer, grantSocket]].map(([server, socket]) => new Promise(resolve => server.listen(socket, resolve))));
   } else await new Promise(resolve => verifier.listen(authSocket, resolve));
   tmux('new-session', '-d', '-s', 'shared', '-x', '100', '-y', '30', '/bin/cat');
-  let ui = spawn(process.execPath, [path.resolve(__dirname, '../ui/server.js')], { env, stdio: 'ignore' });
+  const diagnostics = [];
+  let ui = spawn(process.execPath, [path.resolve(__dirname, '../ui/server.js')], {
+    env, stdio: captureDiagnostics ? ['ignore', 'ignore', 'pipe'] : 'ignore',
+  });
+  if (captureDiagnostics) {
+    let pending = '';
+    ui.stderr.on('data', chunk => {
+      pending += chunk.toString('utf8');
+      if (pending.length > 16384) { pending = ''; return; }
+      let newline;
+      while ((newline = pending.indexOf('\n')) !== -1) {
+        const line = pending.slice(0, newline); pending = pending.slice(newline + 1);
+        try {
+          const value = JSON.parse(line);
+          if (value.type === 'web_terminal_collaboration_diagnostic_v1' && diagnostics.length < 128) diagnostics.push(value);
+        } catch { /* only fixed-schema events are accepted by tests */ }
+      }
+    });
+  }
+
   for (let i = 0; i < 200 && !fs.existsSync(uiSocket); i++) { if (ui.exitCode !== null) throw Error('Fixture UI startup failed'); await sleep(25); }
   if (!fs.existsSync(uiSocket)) throw Error('Fixture UI startup timeout');
   let mcp;
@@ -139,7 +158,7 @@ async function createFixture({ realGateway = false, startPaused = false } = {}) 
     const admission = await privateCall(collaborationSocket, '/v1/admit', { grant: selectedGrant, tool, digest: operationDigest(tool, args) });
     return privateCall(collaborationSocket, '/v1/execute', { ...admission, tool, arguments: args });
   }
-  return { root, uiSocket, collaborationSocket, request, rpc, revoke: () => authRequest(publicAuthSocket, '/oauth/revoke', 'POST', new URLSearchParams({ token: bearer }).toString(), { 'Content-Type': 'application/x-www-form-urlencoded' }), control, tmux, connect, url, jwt, tokens, mutate, grant, verifierRequests: () => verifierRequests,
+  return { root, uiSocket, collaborationSocket, request, rpc, revoke: () => authRequest(publicAuthSocket, '/oauth/revoke', 'POST', new URLSearchParams({ token: bearer }).toString(), { 'Content-Type': 'application/x-www-form-urlencoded' }), control, tmux, connect, url, jwt, tokens, mutate, grant, diagnostics: () => diagnostics.slice(), verifierRequests: () => verifierRequests,
     list: async () => realGateway ? JSON.parse((await rpc('tools/call', { name: 'terminal_list', arguments: {} })).data.result.content[0].text) : (await privateCall(collaborationSocket, '/v1/list', {})).panes,
     async close() {
       for (const client of clients) client.terminate();

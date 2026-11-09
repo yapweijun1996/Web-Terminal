@@ -60,6 +60,7 @@ function fixture() {
         },
       };
       if (name === './image-receipts') return require('../ui/image-receipts');
+      if (name === './collaboration-telemetry') return { createTelemetry: () => () => {} };
       assert.ok(['node:net', 'node:path', 'node:crypto', 'node:os'].includes(name), `unexpected require: ${name}`);
       return require(name);
     },

@@ -331,3 +331,25 @@ test('server-side OAuth grant revocation cancels auto sharing even without activ
   assert.equal((await f.coordinator.state('shared')).state, 'manual-paused');
   assert.equal((await f.coordinator.state('shared')).idleRemainingMs, null);
 });
+
+test('diagnostics capture successful resume, human pause and manual pause without session identifiers', async t => {
+  const events = [];
+  const f = await fixture(t, { startPaused: true, diagnostic: event => events.push(event) });
+  await f.coordinator.control('shared', 'resume', owner());
+  await f.coordinator.human('shared', owner(), async () => {});
+  await f.coordinator.control('shared', 'pause', owner());
+  assert.ok(events.some(e => e.event === 'resume' && e.action === 'resume' && e.reason === 'accepted' && e.state === 'sharing' && !e.status));
+  assert.ok(events.some(e => e.event === 'pause' && e.reason === 'human_input'));
+  assert.ok(events.some(e => e.event === 'pause' && e.reason === 'manual'));
+  assert.doesNotMatch(JSON.stringify(events), /shared|test-owner|sessionId|inputGeneration|token/);
+});
+
+test('diagnostics capture auto-resume authority failure and never reopen sharing', async t => {
+  const events = [];
+  const f = await fixture(t, { humanIdleMs: 20, diagnostic: event => events.push(event), verifyAutoOwner: async () => null });
+  await f.coordinator.human('shared', owner(), async () => {});
+  await new Promise(resolve => setTimeout(resolve, 55));
+  assert.equal((await f.coordinator.state('shared')).paused, true);
+  assert.ok(events.some(e => e.event === 'auto_resume' && e.reason === 'owner_unavailable'));
+  assert.ok(!events.some(e => e.event === 'auto_resume' && e.reason === 'accepted'));
+});
