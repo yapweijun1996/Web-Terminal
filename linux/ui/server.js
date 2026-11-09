@@ -401,7 +401,8 @@ const server = http.createServer(async (req, res) => {
   } catch (error) {
     if (['STALE_CONTEXT', 'INVALID_CONTEXT', 'CONTEXT_CAPACITY', 'CONTEXT_UNAVAILABLE'].includes(error?.code)) return send(res, error.code === 'INVALID_CONTEXT' ? 400 : 409, JSON.stringify({ error: error.code }));
     if (error?.code === 'AUTHORITY_UNAVAILABLE') return send(res, 401, '{"error":"Owner authorization unavailable"}');
-    if (['INPUT_BUSY', 'INPUT_PAUSED', 'STALE_TARGET'].includes(error?.code)) return send(res, 409, '{"error":"Input control changed or busy"}');
+    if (error?.code === 'STALE_TARGET') return send(res, 409, '{"error":"Session binding changed","code":"STALE_TARGET"}');
+    if (['INPUT_BUSY', 'INPUT_PAUSED'].includes(error?.code)) return send(res, 409, '{"error":"Input control changed or busy"}');
     if (error?.code === 'OPERATION_UNAVAILABLE') return send(res, 503, '{"error":"Input outcome uncertain"}');
     return send(res, 500, '{"error":"Terminal service error"}');
   }

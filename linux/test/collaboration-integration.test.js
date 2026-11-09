@@ -120,3 +120,21 @@ test('native tmux next-session switching cannot leave the destination AI writer 
   assert.deepEqual(await f.mutate('terminal_type', { target: fresh, text: '_EXPLICIT_RESUME' }), { sent: true, submitted: false });
   assert.equal((await f.request('GET', '/api/collaboration/state')).data.sessions.shared.paused, true);
 });
+
+test('owner control errors distinguish 401 authentication, 403 Origin/CSRF, and 409 stale session binding', async t => {
+  const f = await createFixture(); t.after(() => f.close());
+  const original = (await f.request('GET', '/api/collaboration/state')).data.sessions.shared;
+  const headers = { Origin: 'http://fixture.invalid', 'Content-Type': 'application/json', 'X-Terminal-Request': f.tokens.token };
+  const action = { action: 'pause', session: 'shared', serverPid: original.serverPid, sessionId: original.sessionId };
+  const authFailed = await f.request('POST', '/api/collaboration/control', { owner: false, headers, body: action });
+  assert.equal(authFailed.status, 401);
+  const csrfFailed = await f.request('POST', '/api/collaboration/control', { headers: { ...headers, 'X-Terminal-Request': 'invalid' }, body: action });
+  assert.equal(csrfFailed.status, 403);
+  const stale = await f.request('POST', '/api/collaboration/control', { headers, body: { ...action, sessionId: '$999' } });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.data.code, 'STALE_TARGET');
+  assert.equal(stale.data.error, 'Session binding changed');
+  const latest = (await f.request('GET', '/api/collaboration/state')).data.sessions.shared;
+  assert.equal(latest.state, 'sharing', 'rejected request cannot pause a valid session');
+  assert.equal(latest.inputGeneration, original.inputGeneration, 'rejected request cannot rotate input authority');
+});
