@@ -15,7 +15,7 @@ corepack yarn install --immutable --mode=skip-build
 corepack yarn inline
 ```
 
-The output is `dist/inline.html`. The build also copies shared mobile-key and display-control sources from `../linux/ui`, so keep that directory in the checkout. The lockfile fixes the dependency graph; verify a clean install and compare output when changing toolchain versions. Upstream's legacy dependencies emit warnings and require a separate upgrade assessment. From the repository root, run `node --test tests/*.test.js` for the local runtime and macOS upload fixture tests.
+The output is `dist/inline.html`. The build also copies shared mobile-key, display-control, design-token and status-model sources from `../linux/ui`, so keep that directory in the checkout. The inline page includes the shared tokens and status model. The lockfile fixes the dependency graph; verify a clean install and compare output when changing toolchain versions. Upstream's legacy dependencies emit warnings and require a separate upgrade assessment. From the repository root, run `node --test tests/*.test.js` for the local runtime and macOS upload fixture tests.
 
 ## Windows browser clipboard
 
@@ -31,11 +31,13 @@ The scripts in `../runtime` are an isolated development candidate and require ex
 
 ## Mac workspace tabs
 
-The IDE-style strip is 38px high. Its inline × hides only a browser-local tab, preserving the tmux window, jobs and unsent input. Hiding the active tab selects its next visible neighbor; hiding every tab displays an empty view and an All windows restoration action while the terminal stays attached. The separate End window action always confirms a stable window/view/server identity and protects the last window. Ending affects all panes in that window and its other grouped views; detached processes may continue.
+The header is 50px high and the IDE-style strip is 42px high (44px for coarse pointers). The interface follows the system light or dark appearance using the shared design tokens; the terminal canvas palette is unchanged. The strip's inline × hides only a browser-local tab, preserving the tmux window, jobs and unsent input. Hiding the active tab selects its next visible neighbor; hiding every tab displays an empty view and an All windows restoration action while the terminal stays attached. The separate End window action always confirms a stable window/view/server identity and protects the last window. Ending affects all panes in that window and its other grouped views; detached processes may continue.
 
 All windows searches display names, indexes and confirmed process basenames across visible and hidden windows. Actions restore, rename, pin/unpin, move and end a window. Drag/drop and Move left/right change local order; crossing the pin boundary adopts the destination pin state. Display names never rename tmux windows. Preferences use server PID plus stable window ID in localStorage, not numeric index; invalid values are ignored and unavailable storage is reported. Process basenames and connection availability are observations, not task-health proof; no command arguments or terminal contents are read.
 
 Workspace tools retains Display, Keys, previous/next, Return to live, Details and Upload image. Cmd+Tab, Cmd+W and Ctrl+Tab remain OS/browser shortcuts. Ctrl+Alt+Left/Right switches visible tabs, Ctrl+Alt+W hides the current tab, and Ctrl+Alt+P opens All windows without sending bytes to the terminal. On a focused tab, Arrow keys, Home and End switch with visible focus.
+
+The status line separately reports the connection, confirmed active window and process basename, input, and sharing. The header does not repeat the connected state; Details retains the reminder to check the active window after reconnecting. Input and sharing are shown as not reported because this Mac client does not receive those states. A disconnected browser does not establish task health. At widths up to 520px, the four indicators occupy two rows; the process detail remains available in the session indicator's accessible description.
 
 A successful browser-list request hides the native status only in that validated browser view. Workspace/global defaults and other views stay unchanged. A reachable listing failure restores saved native status and hides browser tabs; a new connection starts with native defaults. Complete control-service unavailability requires recovery or reconnect. Lists above 100 fail closed, hidden pages pause polling, and requests time out after five seconds. TASK.md records live acceptance separately from isolated fixture evidence.
 

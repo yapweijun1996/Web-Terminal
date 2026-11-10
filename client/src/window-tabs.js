@@ -4,6 +4,10 @@
     const storageKey = 'web-terminal-tabs-v1';
     let windows = [], scope = '', preferences = {}, available = false, busy = false, polling = false;
     let endSnapshot = null, renameId = null, draggedId = null, storageWarning = '', actionError = '', lastSignature = '', switcherGeneration = 0;
+    let targetGeneration = 0, lastTarget = targetKey(window.webTerminalTarget), lastActiveSignature, pendingTabFocus = null;
+    function targetKey(target) {
+        return target && [target.session, target.sessionId, target.serverPid, target.windowIndex, target.pane].join('|');
+    }
     const identity = target => target && [target.session, target.sessionId, target.serverPid].join('|');
     const ready = () => Boolean(window.mbaTerminalReady?.() && window.webTerminalTarget && !document.hidden);
     const currentId = () => windows.find(item => item.active)?.id;
@@ -38,7 +42,9 @@
     tabs.append(list, all); bar.after(tabs); document.body.append(status); tabs.hidden = true;
     const empty = el('section', {id:'window-empty-state', hidden:''});
     empty.append(el('h2', {}, 'All tabs hidden'), el('p', {}, 'Your windows and tasks are still attached. Restore a tab to view it.'), button('All windows', 'all'));
-    tabs.after(empty);
+    const workspaceStatus = document.getElementById('workspace-status');
+    tabs.after(workspaceStatus);
+    workspaceStatus.after(empty);
     const switcher = el('dialog', {id:'window-switcher', 'aria-labelledby':'window-switcher-title'});
     switcher.innerHTML = '<header><h2 id="window-switcher-title">All windows</h2><button type="button" data-dismiss aria-label="Close window switcher">×</button></header><p class="window-help">Switch or restore a hidden tab. Hiding keeps its tasks running.</p><input id="window-search" type="search" aria-label="Search windows" placeholder="Search name, process or number"><div id="window-results"></div><p data-switcher-status role="status"></p>';
     const search = switcher.querySelector('#window-search'), results = switcher.querySelector('#window-results');
@@ -84,10 +90,31 @@
         } finally { clearTimeout(timeout); }
     }
     function layout() { document.documentElement.style.setProperty('--window-tabs-height', `${tabs.getBoundingClientRect().height}px`); window.term?.fit(); }
+    function emitActiveWindow() {
+        const target = window.webTerminalTarget;
+        const item = available && ready() && !busy && windows.find(entry => entry.active && entry.index === target.windowIndex);
+        const rawProcess = typeof item?.process === 'string' ? item.process.trim() : '';
+        const process = rawProcess && !/\s/.test(rawProcess) ? rawProcess.split(/[\\/]/).pop() : '';
+        const detail = item ? {name:name(item), process} : null;
+        const signature = JSON.stringify(detail);
+        if (signature === lastActiveSignature) return;
+        lastActiveSignature = signature;
+        window.dispatchEvent(new CustomEvent('web-terminal-active-window', {detail}));
+    }
+    function restoreTabFocus() {
+        if (!pendingTabFocus || !available || !ready() || busy) return;
+        if (document.activeElement !== document.body && !list.contains(document.activeElement)) { pendingTabFocus = null; return; }
+        const node = list.querySelector(`[data-action=select][data-window="${pendingTabFocus}"][aria-selected=true]`);
+        if (node && !node.disabled) { pendingTabFocus = null; node.focus({preventScroll:true}); }
+    }
     const closeMenu = () => { menu.hidden = true; for (const node of list.querySelectorAll('[data-action=menu]')) node.setAttribute('aria-expanded','false'); };
     function state() {
+        emitActiveWindow();
         tabs.dataset.connection = available && ready() ? 'connected' : 'disconnected';
-        status.textContent = actionError || storageWarning || (busy ? 'Switching window…' : '') || (available && ready() ? '' : 'Windows unavailable — tasks may still be running.');
+        status.textContent = actionError || storageWarning || (busy ? 'Switching window…' : '') || (available && ready() ? '' : 'Windows unavailable');
+        const statusDetail = status.textContent === 'Windows unavailable' ? 'Windows unavailable — tasks may still be running.' : status.textContent;
+        status.title = statusDetail;
+        status.setAttribute('aria-label', statusDetail);
         for (const node of list.querySelectorAll('[data-action=select]')) {
             node.disabled = !available || !ready() || busy;
             const item = windows.find(entry => entry.id === node.dataset.window);
@@ -98,6 +125,7 @@
             else if (node.dataset.action === 'hide') node.disabled = busy;
         }
         switcher.querySelector('[data-switcher-status]').textContent = status.textContent;
+        restoreTabFocus();
     }
     function render(force = false) {
         const signature = JSON.stringify([windows,preferences]); if (!force && signature === lastSignature) { state(); return; } lastSignature = signature;
@@ -136,7 +164,7 @@
     function openSwitcher() { closeMenu(); search.value = ''; renderResults(); switcherGeneration++; switcher.showModal(); search.focus(); }
     async function selectWindow(id, focusTab = false, closeSwitcher = true) {
         if (busy || !available || !ready()) return;
-        const target = {...window.webTerminalTarget};
+        const target = {...window.webTerminalTarget}, generation = targetGeneration;
         // An async selection may finish after a new search was opened. Only
         // dismiss the exact switcher opening that initiated this selection.
         const initiatingSwitcher = switcher.open ? switcherGeneration : null;
@@ -144,9 +172,10 @@
         try {
             const response = await request('select-window',target,id);
             if (identity(target) !== identity(window.webTerminalTarget)) throw Error('Connection changed.');
-            pref(id).hidden = false; persist(); windows = response; available = true;
+            pref(id).hidden = false; persist();
+            if (generation === targetGeneration) { windows = response; available = true; }
             if (switcher.open && closeSwitcher && initiatingSwitcher !== null && initiatingSwitcher === switcherGeneration) switcher.close(); busy = false; render(true);
-            if (focusTab) list.querySelector(`button[data-action=select][data-window="${id}"]`)?.focus(); else window.term?.focus();
+            if (focusTab) { pendingTabFocus = id; restoreTabFocus(); } else window.term?.focus();
         } catch (error) { actionError = error.message; }
         finally { busy = false; state(); }
     }
@@ -212,10 +241,14 @@
     endDialog.addEventListener('cancel',event => { if (busy) event.preventDefault(); }); endDialog.addEventListener('close',() => { endSnapshot = null; if (!switcher.open) all.focus(); });
     endDialog.querySelector('[data-confirm]').addEventListener('click',async () => {
         if (busy || !endSnapshot) return;
-        const snapshot = endSnapshot, confirm = endDialog.querySelector('[data-confirm]'), cancel = endDialog.querySelector('[data-cancel]'); confirm.disabled = true;
+        const snapshot = endSnapshot, generation = targetGeneration, confirm = endDialog.querySelector('[data-confirm]'), cancel = endDialog.querySelector('[data-cancel]'); confirm.disabled = true;
         if (!available || !ready() || identity(snapshot.target) !== identity(window.webTerminalTarget)) { endDialog.querySelector('[data-error]').textContent = 'Connection changed. Cancel and confirm again.'; return; }
         busy = true; cancel.disabled = true;
-        try { windows = await request('close-window',snapshot.target,snapshot.item.id); delete preferences[snapshot.item.id]; persist(); endDialog.close(); render(true); }
+        try {
+            const response = await request('close-window',snapshot.target,snapshot.item.id);
+            if (generation === targetGeneration) windows = response;
+            delete preferences[snapshot.item.id]; persist(); endDialog.close(); render(true);
+        }
         catch (error) { endDialog.querySelector('[data-error]').textContent = error.message; }
         finally { busy = false; cancel.disabled = false; state(); }
     });
@@ -236,15 +269,35 @@
     });
     async function refresh() {
         if (polling || !ready()) return;
-        polling = true; const target = {...window.webTerminalTarget};
+        polling = true; const target = {...window.webTerminalTarget}, generation = targetGeneration;
         try {
             const response = await request('windows',target);
-            if (ready() && identity(target) === identity(window.webTerminalTarget)) { if (scope !== target.serverPid) load(target.serverPid); windows = response; available = true; tabs.hidden = false; actionError = ''; render(); }
-        } catch { await request('native-tabs',target).catch(() => {}); available = false; tabs.hidden = true; layout(); state(); }
-        finally { polling = false; }
+            if (generation === targetGeneration && ready() && targetKey(target) === targetKey(window.webTerminalTarget)) { if (scope !== target.serverPid) load(target.serverPid); windows = response; available = true; tabs.hidden = false; actionError = ''; render(); }
+        } catch {
+            if (generation === targetGeneration) {
+                await request('native-tabs',target).catch(() => {});
+                if (generation === targetGeneration) { available = false; tabs.hidden = true; layout(); state(); }
+            }
+        } finally {
+            polling = false;
+            if (generation !== targetGeneration && ready()) refresh();
+        }
     }
-    window.addEventListener('web-terminal-target',refresh);
-    window.addEventListener('web-terminal-connection',() => { if (!ready()) { available = false; tabs.hidden = windows.length === 0; layout(); closeMenu(); state(); if (endDialog.open) { endDialog.querySelector('[data-confirm]').disabled = true; endDialog.querySelector('[data-error]').textContent = 'Connection changed. Cancel and confirm again.'; } } else refresh(); });
+    window.addEventListener('web-terminal-target',() => {
+        const next = targetKey(window.webTerminalTarget);
+        if (next !== lastTarget) { lastTarget = next; targetGeneration++; available = false; state(); }
+        refresh();
+    });
+    window.addEventListener('web-terminal-connection',event => {
+        if (event.detail !== 'connected' || !ready()) {
+            targetGeneration++; available = false; tabs.hidden = windows.length === 0; layout(); closeMenu(); state();
+            if (endDialog.open) { endDialog.querySelector('[data-confirm]').disabled = true; endDialog.querySelector('[data-error]').textContent = 'Connection changed. Cancel and confirm again.'; }
+        } else refresh();
+    });
+    document.addEventListener('visibilitychange',() => {
+        if (document.hidden) { targetGeneration++; available = false; state(); }
+        else refresh();
+    });
     addEventListener('resize',() => { closeMenu(); layout(); });
     setInterval(() => { if (!busy && !endDialog.open && !renameDialog.open) refresh(); },2000);
     layout(); state(); refresh();

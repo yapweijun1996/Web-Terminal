@@ -6,9 +6,10 @@
     max-width: min(90vw, 32rem);
     padding: 10px 12px;
     border-radius: 8px;
-    background: #25374a;
-    color: #fff;
-    box-shadow: 0 2px 12px #0008;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    box-shadow: 0 2px 12px rgb(0 0 0 / 50%);
     font: 14px system-ui;
     overflow-wrap: anywhere;
 }
@@ -34,9 +35,25 @@
     margin-top: 8px;
     padding: 10px;
     border-radius: 8px;
-    background: #25374a;
-    color: #fff;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--border);
     overflow-wrap: anywhere;
 }
 #upload-results input { width: 100%; margin: 8px 0 4px; }
 #upload-results button { margin: 4px 6px 0 0; padding: 6px 10px; }
+#upload-status button, #upload-results button {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-control);
+    background: var(--control);
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+}
+#upload-status button:focus-visible, #upload-results button:focus-visible, #upload-results input:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+}
+@media (pointer: coarse) {
+    #upload-status button, #upload-results button { min-height: 44px; }
+}

@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Linux Terminal</title>
+  <link rel="stylesheet" href="/tokens.css">
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/sidebar.css">
   <link rel="stylesheet" href="/mobile-keys.css">
@@ -14,6 +15,7 @@
   <script src="/collaboration-controls.js" defer></script>
   <link rel="stylesheet" href="/context-paste.css">
   <script src="/context-paste.js" defer></script>
+  <script src="/status-model.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -31,7 +33,7 @@
   <main id="main">
     <header>
       <button id="sidebar-toggle" type="button" aria-label="Open session sidebar" aria-controls="sidebar" aria-expanded="false">☰</button>
-      <div class="current-session"><strong id="current-name">No session</strong><span id="current-secondary">Disconnected</span></div>
+      <div class="current-session"><strong id="current-name">No session</strong><span id="current-secondary" class="sr-only">Disconnected</span></div>
       <div class="toolbar-actions">
         <div id="session-actions" class="action-group">
           <button id="new-session" type="button">New Session</button>
@@ -63,16 +65,17 @@
           </div>
         </details>
       </div>
-      <div class="state-toolbar">
+    </header>
+    <nav id="mobile-session-tabs" aria-label="Terminal sessions"></nav>
+    <div class="state-toolbar">
         <div id="view-actions" class="action-group"></div>
         <button id="latest" type="button" title="Exit tmux copy mode; application scroll position is separate">Return to live</button>
         <div class="connection">
-          <span id="status" role="status" aria-live="polite" tabindex="-1"></span>
+          <span id="status" class="sr-only" role="status" aria-live="polite" tabindex="-1"></span>
           <span id="scroll-status" role="status" aria-live="polite">tmux scroll unknown</span>
           <button id="retry" type="button" hidden>Retry</button>
         </div>
-      </div>
-    </header>
+    </div>
     <form id="rename-form" hidden>
       <label for="rename-input">View name</label>
       <input id="rename-input" type="text" maxlength="40" autocomplete="off">
@@ -84,6 +87,12 @@
     <div id="image-notice" role="status" aria-live="polite" hidden></div>
     <section id="image-results" aria-label="Saved image paths"></section>
     <section id="views" aria-label="Terminal views"></section>
+    <div class="status-bar" aria-label="Terminal status" tabindex="0">
+      <span id="status-connection" role="status" aria-live="polite">◌ Connection: Not reported</span>
+      <span id="status-session" role="status" aria-live="polite">◌ Session: Not reported</span>
+      <span id="status-input" role="status" aria-live="polite">◌ Input: Not reported</span>
+      <span id="status-sharing" role="status" aria-live="polite">◌ Sharing: Not reported</span>
+    </div>
   </main>
   <dialog id="close-dialog" aria-labelledby="close-title" aria-describedby="close-description">
     <div class="dialog-heading"><h2 id="close-title">Close terminal?</h2><button id="close-dismiss" type="button" aria-label="Cancel">×</button></div>

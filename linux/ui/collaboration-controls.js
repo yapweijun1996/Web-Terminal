@@ -1,10 +1,10 @@
 'use strict';
 // Status comes from the authoritative coordinator. Failed actions remain
 // visible separately so the 2-second status poll cannot erase their cause.
-window.createCollaborationControls = function ({ getSession, getToken }) {
+window.createCollaborationControls = function ({ getSession, getToken, onState = () => {} }) {
   const element = document.createElement('div'); element.className = 'action-group'; element.hidden = true;
   element.title = 'Human typing or image insertion pauses AI in all managed terminals. Resume sharing applies only to this terminal.';
-  const status = document.createElement('span'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+  const status = document.createElement('span'); status.className = 'sr-only'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
   const error = document.createElement('span'); error.className = 'collaboration-error'; error.setAttribute('role', 'alert'); error.hidden = true;
   const pause = document.createElement('button'); pause.type = 'button'; pause.textContent = 'Pause AI';
   const takeover = document.createElement('button'); takeover.type = 'button'; takeover.textContent = 'Take control';
@@ -19,6 +19,7 @@ window.createCollaborationControls = function ({ getSession, getToken }) {
   }
   function render(state) {
     known = state;
+    onState(state, displayedSession);
     status.textContent = state?.state === 'sharing' ? 'AI sharing enabled' : state?.state === 'manual-paused' ? 'AI paused manually' : state?.state === 'paused' && state?.idleRemainingMs != null ? `Human control · AI resumes in ${Math.ceil(state.idleRemainingMs / 1000)}s` : ['paused', 'owner-active'].includes(state?.state) ? 'Owner control' : state?.state === 'pause-pending' ? 'Pausing AI…' : 'AI input unavailable';
     pause.disabled = takeover.disabled = busy || !state || state.state !== 'sharing';
     resume.disabled = busy || !state || !['paused', 'manual-paused'].includes(state.state);
@@ -43,7 +44,7 @@ window.createCollaborationControls = function ({ getSession, getToken }) {
     try {
       const response = await fetch('/api/collaboration/state', { cache: 'no-store', redirect: 'manual' });
       if (session !== getSession() || version !== actionVersion || busy) return;
-      if (response.status === 404) { element.hidden = true; return; }
+      if (response.status === 404) { element.hidden = true; render(null); return; }
       element.hidden = false;
       if (!response.ok || response.redirected || response.type === 'opaqueredirect') throw Error('Unavailable');
       const value = await response.json();

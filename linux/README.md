@@ -1,5 +1,24 @@
 # Linux terminal collaboration
 
+## Workspace interface
+
+The header identifies the active session; secondary view controls are in the
+session-actions menu. At widths up to 1000px the session sidebar opens as a
+drawer, and the horizontally scrollable session strip shows the active session
+and each connection state. Hiding a view does not end its tmux session.
+The status bar separately reports connection, session, input and sharing. Input
+is not reported unless an explicit backend input state is available; sharing
+uses the active session's coordinator state and is not reported when absent.
+Neither connection nor process state establishes task health. At widths up to
+520px, the four indicators occupy two rows without horizontal scrolling.
+Retrying a disconnected view reports Reconnecting until the replacement
+connection opens or fails; it does not create a new tmux session.
+
+The UI server explicitly allows `tokens.css` and `status-model.js`. A live
+port requires a separately authorized Linux UI process restart to load the new
+allowlist; replacing static files alone does not activate these routes. See
+[live-port guidance](../docs/ui-redesign-live-port.md).
+
 ## New Session start directory
 
 New Session starts its shell in `/srv/agent-workstation` by default. Set

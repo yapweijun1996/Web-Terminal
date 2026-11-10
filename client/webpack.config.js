@@ -53,6 +53,8 @@ const baseConfig = {
                 { from: '../../linux/ui/mobile-keys.css', to: '.' },
                 { from: '../../linux/ui/display-controls.js', to: '.' },
                 { from: '../../linux/ui/display-controls.css', to: '.' },
+                { from: '../../linux/ui/tokens.css', to: '.' },
+                { from: '../../linux/ui/status-model.js', to: '.' },
             ],
         }),
         new MiniCssExtractPlugin({

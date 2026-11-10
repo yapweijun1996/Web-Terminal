@@ -316,6 +316,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/context-paste.js') return file(res, 'context-paste-client.js', 'text/javascript; charset=utf-8');
     if (req.method === 'GET' && req.url === '/context-paste.css') return file(res, 'context-paste.css', 'text/css; charset=utf-8');
     if (req.method === 'GET' && req.url === '/app.js') return file(res, 'app.js', 'text/javascript; charset=utf-8');
+    if (req.method === 'GET' && req.url === '/status-model.js') return file(res, 'status-model.js', 'text/javascript; charset=utf-8');
+    if (req.method === 'GET' && req.url === '/tokens.css') return file(res, 'tokens.css', 'text/css; charset=utf-8');
     if (req.method === 'GET' && req.url === '/clipboard-bridge.js') return file(res, 'clipboard-bridge.js', 'text/javascript; charset=utf-8');
     if (req.method === 'GET' && req.url === '/touch-scroll.js') return file(res, 'touch-scroll.js', 'text/javascript; charset=utf-8');
     if (req.method === 'GET' && req.url === '/mobile-keys.js') return file(res, 'mobile-keys.js', 'text/javascript; charset=utf-8');

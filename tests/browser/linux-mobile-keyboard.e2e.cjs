@@ -21,7 +21,7 @@ let browser, child, tmuxPath;
 const fixtureUI = path.join(dir, 'ui');
 const baseline = file => execFileSync('git', ['show', `origin/main:linux/ui/${file}`]);
 fs.cpSync(path.join(root, 'linux/ui'), fixtureUI, {recursive:true});
-for (const file of ['server.js','index.html','app.js','style.css']) fs.writeFileSync(path.join(fixtureUI,file), baseline(file));
+for (const file of ['app.js', 'style.css', ...(process.env.KEYBOARD_BASELINE === '1' ? ['server.js', 'index.html'] : [])]) fs.writeFileSync(path.join(fixtureUI,file), baseline(file));
 const streams = new Set();
 const proxy = http.createServer((req, res) => {
   const upstream = http.request({ socketPath: socket, method: req.method, path: req.url, headers: req.headers }, response => { res.writeHead(response.statusCode, response.headers); response.pipe(res); });
@@ -75,9 +75,8 @@ async function waitForSocket() {
     }
     assert.equal(child.pid, fixturePid); assert.equal(child.exitCode, null);
     assert.equal(await (await fetch(origin)).text(), htmlBefore, 'hot replacement keeps served HTML identical');
-    assert.deepEqual(fs.readFileSync(path.join(fixtureUI,'server.js')), baseline('server.js'));
-    assert.deepEqual(fs.readFileSync(path.join(root,'linux/ui/server.js')), baseline('server.js'));
-    assert.deepEqual(fs.readFileSync(path.join(root,'linux/ui/index.html')), baseline('index.html'));
+    const expectedServer = process.env.KEYBOARD_BASELINE === '1' ? baseline('server.js') : fs.readFileSync(path.join(root, 'linux/ui/server.js'));
+    assert.deepEqual(fs.readFileSync(path.join(fixtureUI,'server.js')), expectedServer);
     const engine = process.env.BROWSER === 'webkit' ? webkit : chromium;
     browser = await engine.launch({headless:true, ...(process.env.BROWSER === 'webkit' ? {executablePath:process.env.WEBKIT_BIN || undefined} : {executablePath:process.env.CHROME_BIN || '/usr/bin/google-chrome',args:['--no-sandbox']})});
     const errors = [];
@@ -207,7 +206,7 @@ async function waitForSocket() {
     assert.equal(await frame.evaluate(() => getComputedStyle(term.textarea).fontSize),'16px');
     await page.setViewportSize({width:844,height:390}); await page.evaluate(() => setViewport(240)); await settle();
     const landscape = await measure();
-    assert.ok(landscape.frame.height > 0 && landscape.screen.bottom <= landscape.frame.height,'landscape screen fits');
+    assert.ok(landscape.frame.height > 0 && landscape.screen.bottom <= landscape.frame.height, `landscape screen fits: ${JSON.stringify(landscape)}`);
     // Alternate screen and tmux copy mode remain owned by their application.
     await frame.evaluate(() => new Promise(resolve => term.write('\x1b[?1049hALT',resolve)));
     await page.evaluate(() => setViewport(260)); await settle();

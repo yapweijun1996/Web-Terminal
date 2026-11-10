@@ -3,6 +3,11 @@
 // App behavior fixtures isolate browser layout; the browser smoke covers the real controller.
 function installSidebarFixture(window, document, nodes, Element) {
   for (const id of ['new-session', 'reconnect', 'current-name', 'current-secondary', 'search-results', 'session-search', 'toolbar-menu', 'view-actions', 'split-right', 'split-down']) nodes[id] = new Element();
+  nodes.tabs.contains = target => {
+    const contains = node => node === target || (node.children || []).some(contains);
+    return contains(nodes.tabs);
+  };
+  document.getElementById = id => nodes[id] || null;
   document.addEventListener = () => {};
   window.setInterval = () => 1;
   window.clearInterval = () => {};

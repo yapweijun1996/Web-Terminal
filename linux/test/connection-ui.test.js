@@ -82,9 +82,11 @@ test('session auth failure and iframe disconnect offer safe explicit recovery', 
   const second = nodes.views.children[0];
   assert.notEqual(second, first, 'retry creates a new view for the same session');
   assert.equal(second.src, first.src);
-  assert.equal(nodes.status.textContent, 'Connecting');
+  assert.equal(nodes.status.textContent, 'Reconnecting');
+  message(second.contentWindow, 'Connecting');
+  assert.equal(nodes.status.textContent, 'Reconnecting', 'a retry remains distinguishable from the initial connection');
   message(first.contentWindow, 'Disconnected');
-  assert.equal(nodes.status.textContent, 'Connecting', 'late messages from the removed view are ignored');
+  assert.equal(nodes.status.textContent, 'Reconnecting', 'late messages from the removed view are ignored');
   message(second.contentWindow, 'Connected');
   assert.equal(nodes.status.textContent, 'Connected');
   assert.equal(nodes.retry.hidden, true);

@@ -17,11 +17,13 @@
 <% for (const js in htmlWebpackPlugin.files.js) { %>
 <script inline type="text/javascript" src="<%= htmlWebpackPlugin.files.js[js] %>"></script>
 <% } %>
+<link inline rel="stylesheet" href="tokens.css">
 <link inline rel="stylesheet" href="toolbar.css">
 <link inline rel="stylesheet" href="mobile-keys.css">
 <script inline src="mobile-keys.js"></script>
 <link inline rel="stylesheet" href="display-controls.css">
 <script inline src="display-controls.js"></script>
+<script inline src="status-model.js"></script>
 <script inline src="toolbar.js"></script>
 <script inline src="window-tabs.js"></script>
 <link inline rel="stylesheet" href="upload.css">

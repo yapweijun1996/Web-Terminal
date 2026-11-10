@@ -1,4 +1,8 @@
 (() => {
+    const systemTheme = window.matchMedia?.('(prefers-color-scheme: dark)');
+    const applySystemTheme = () => { document.documentElement.dataset.theme = systemTheme?.matches === false ? 'light' : 'dark'; };
+    systemTheme?.addEventListener('change', applySystemTheme);
+    applySystemTheme();
     const bar = document.createElement('nav');
     bar.id = 'remote-toolbar';
     bar.setAttribute('aria-label', 'Terminal windows');
@@ -32,6 +36,68 @@
     const detailView = diagnostics.querySelector('[data-view]');
     const detailLink = diagnostics.querySelector('[data-link]');
     let returning = false;
+    const workspaceStatus = document.createElement('div');
+    workspaceStatus.id = 'workspace-status';
+    workspaceStatus.setAttribute('role', 'region');
+    workspaceStatus.setAttribute('aria-label', 'Workspace status');
+    workspaceStatus.tabIndex = 0;
+    workspaceStatus.addEventListener('keydown', event => {
+        if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+            event.preventDefault();
+            workspaceStatus.scrollLeft += event.key === 'ArrowRight' ? 80 : -80;
+        } else if (event.key === 'Home' || event.key === 'End') {
+            event.preventDefault();
+            workspaceStatus.scrollLeft = event.key === 'Home' ? 0 : workspaceStatus.scrollWidth;
+        }
+    });
+    const indicators = {};
+    for (const key of ['connection', 'session', 'input', 'sharing']) {
+        const node = document.createElement('span');
+        node.id = `status-${key}`;
+        node.className = 'workspace-status-item';
+        node.setAttribute('role', 'status');
+        node.setAttribute('aria-live', 'polite');
+        workspaceStatus.append(node);
+        indicators[key] = node;
+    }
+    let connectionState = window.webTerminalConnectionState || 'connecting', activeWindow = null;
+    function renderWorkspaceStatus() {
+        const connection = connectionState === 'offline' ? 'disconnected'
+            : connectionState === 'auth-required' ? 'auth-expired' : connectionState;
+        const model = window.TerminalStatus.deriveStatus({ connection, session: activeWindow });
+        for (const [key, item] of Object.entries(model)) {
+            const node = indicators[key];
+            const label = key[0].toUpperCase() + key.slice(1);
+            node.dataset.level = item.level;
+            node.textContent = `${item.icon} ${label}: ${item.label}`;
+            if (key === 'session' && activeWindow) {
+                const process = document.createElement('span');
+                process.className = 'workspace-status-process';
+                process.textContent = ` · ${item.detail.replace(/\. Task health unknown\.$/, '')}`;
+                node.append(process);
+            }
+            node.title = item.detail;
+            node.setAttribute('aria-label', `${label}: ${item.label}. ${item.detail}`);
+        }
+    }
+    function layoutWorkspaceStatus() {
+        const height = `${workspaceStatus.getBoundingClientRect().height}px`;
+        if (document.documentElement.style.getPropertyValue('--workspace-status-height') !== height) {
+            document.documentElement.style.setProperty('--workspace-status-height', height);
+            window.term?.fit();
+        }
+    }
+    window.addEventListener('web-terminal-active-window', e => {
+        activeWindow = e.detail;
+        renderWorkspaceStatus();
+    });
+    window.addEventListener('web-terminal-connection', e => {
+        connectionState = e.detail;
+        if (e.detail !== 'connected') activeWindow = null;
+        renderWorkspaceStatus();
+    });
+    renderWorkspaceStatus();
     function showTarget(target) {
         activeTarget.textContent = target ? `Window ${target.windowIndex}, pane ${target.paneIndex}` : 'Window unknown';
         detailView.textContent = target ? `Window ${target.windowIndex}, pane ${target.paneIndex}` : 'Unknown';
@@ -55,6 +121,7 @@
         'auth-required': 'Sign-in may be required',
     };
     function showConnection(state) {
+        status.hidden = state === 'connected';
         status.textContent = labels[state] || 'Connection state unknown';
         detailLink.textContent = labels[state] || 'Unknown';
         status.title = 'Check the active window after reconnecting; background job status is unknown.';
@@ -102,6 +169,10 @@
     showConnection(window.webTerminalConnectionState || 'connecting');
     showTarget(window.webTerminalTarget);
     document.body.prepend(bar);
+    bar.after(workspaceStatus);
+    if (typeof ResizeObserver === 'function') new ResizeObserver(layoutWorkspaceStatus).observe(workspaceStatus);
+    addEventListener('resize', layoutWorkspaceStatus);
+    layoutWorkspaceStatus();
     const mobileKeys = window.createMobileKeys({
         getTerminal: () => window.mbaTerminalReady?.() && window.webTerminalTarget ? window.term : null,
         getTargetKey: () => {

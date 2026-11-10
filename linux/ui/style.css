@@ -24,6 +24,9 @@ input { color: inherit; background: var(--bg); border: 1px solid var(--border); 
 #toolbar-menu > summary { list-style: none; font-weight: bold; }
 .menu-panel { position: absolute; z-index: 20; right: 0; top: calc(100% + 6px); width: 230px; max-height: 70dvh; overflow: auto; padding: 10px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px #0005; }
 .menu-panel > button, .menu-panel > select { width: 100%; margin-bottom: 6px; text-align: left; }
+.menu-panel .action-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+.menu-panel .action-group > button { width: 100%; text-align: left; }
+.menu-panel .display-controls section { position: static; width: 100%; margin-top: 6px; padding: 6px; }
 .menu-panel > label { display: block; margin: 10px 0 6px; }
 #terminal-diagnostics summary { padding: 7px 10px; }
 #terminal-diagnostics section { padding: 0 4px; font-size: 12px; overflow-wrap: anywhere; }
@@ -37,7 +40,7 @@ dialog::backdrop { background: #000b; }
 #close-error:empty { display: none; }
 #rename-form:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 #rename-input { max-width: 100%; }
-#rename-form small { flex: 1 0 100%; color: var(--muted); }
+#rename-form small { flex: 1 0 100%; color: var(--muted); font-size: 12px; }
 #status, #scroll-status { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 #image-notice:not([hidden]) { padding: 6px 10px; }
 #image-results { max-height: 35vh; overflow: auto; }
@@ -51,7 +54,7 @@ iframe { position: absolute; width: 100%; height: 100%; inset: 0; border: 0; vis
 iframe.active { visibility: visible; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* Narrow header: primary actions on row one, one ellipsized live-status line below. */
-@media (max-width: 700px) {
+@media (max-width: 1000px) {
   header { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto 44px; gap: 4px 6px; padding: 6px; }
   button, summary, select, input { min-height: 44px; }
   .toolbar-actions, .state-toolbar { display: contents; }
@@ -66,9 +69,6 @@ iframe.active { visibility: visible; }
   #status { flex: 0 1 auto; }
   #scroll-status { flex: 1; }
   .menu-panel { width: min(280px, calc(100vw - 12px)); }
-  .menu-panel .action-group { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
-  .menu-panel .action-group > button { width: 100%; text-align: left; }
-  .menu-panel .display-controls section { position: static; width: 100%; margin-top: 6px; padding: 6px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
 
@@ -79,6 +79,61 @@ body.terminal-visual-viewport #main > :not(#views) { flex-shrink: 0; }
   input, select { font-size: 16px; }
   .terminal-visual-viewport .menu-panel { max-height: max(44px, calc(var(--terminal-viewport-height) - 70px)); }
 }
-@media (max-width: 700px) {
+@media (max-width: 1000px) {
   .terminal-visual-viewport #sidebar, .terminal-visual-viewport #sidebar-backdrop { top: var(--terminal-viewport-top); bottom: auto; height: var(--terminal-viewport-height); }
+}
+
+/* Workspace chrome: the frame remains the flexible, resizeable surface. */
+body { height: 100dvh; }
+#main { overflow: hidden; }
+header { flex: 0 0 50px; height: 50px; flex-wrap: nowrap; padding: 4px 12px; }
+.current-session { flex: 1 1 120px; }
+.current-session span { margin-top: 1px; }
+.toolbar-actions { flex: 0 1 auto; flex-wrap: nowrap; }
+.state-toolbar { flex: 0 0 auto; flex-wrap: nowrap; min-height: 42px; padding: 4px 12px; border-bottom: 1px solid var(--border); background: var(--panel); overflow-x: auto; }
+.connection { flex: 1 0 auto; flex-wrap: nowrap; }
+button, summary, select { min-height: 32px; }
+.menu-panel { width: min(320px, calc(100vw - 16px)); }
+#views { margin: 12px 14px; min-width: 0; }
+.status-bar { flex: 0 0 30px; min-width: 0; display: flex; align-items: center; gap: 18px; padding: 0 12px; overflow-x: auto; white-space: nowrap; border-top: 1px solid var(--border); color: var(--muted); background: var(--panel); font-size: 12px; }
+.status-bar > span { flex: 0 0 auto; }
+.status-bar [data-level="ok"] { color: var(--status-ok); }
+.status-bar [data-level="warn"] { color: var(--status-warn); }
+.status-bar [data-level="error"] { color: var(--status-error); }
+.status-bar [data-level="unknown"] { color: var(--status-unknown); }
+.status-bar [data-level="busy"] { color: var(--status-busy); }
+@media (max-width: 520px) {
+  .status-bar { flex-basis: 62px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 0 8px; overflow: hidden; white-space: normal; line-height: 15px; }
+  .status-bar > span { min-width: 0; }
+  #status-session { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+#mobile-session-tabs { display: none; }
+@media (max-width: 1000px) {
+  #mobile-session-tabs { display: flex; flex: 0 0 42px; min-width: 0; overflow-x: auto; background: var(--panel); border-bottom: 1px solid var(--border); }
+  #mobile-session-tabs button { flex: 0 0 auto; height: 42px; min-height: 0; border: 0; border-radius: 0; border-bottom: 2px solid transparent; background: transparent; }
+  #mobile-session-tabs button[aria-pressed="true"] { border-bottom-color: var(--focus); background: var(--active); }
+  #mobile-session-tabs button:focus-visible { outline-offset: -3px; }
+  #mobile-session-tabs .session-dot { color: var(--status-unknown); margin-right: 6px; }
+  #mobile-session-tabs .session-dot[data-level="ok"] { color: var(--status-ok); }
+  #mobile-session-tabs .session-dot[data-level="error"] { color: var(--status-error); }
+  #mobile-session-tabs .session-dot[data-level="busy"] { color: var(--status-busy); }
+}
+@media (max-width: 1000px) {
+  header { display: flex; gap: 6px; padding: 3px 6px; }
+  .toolbar-actions { display: flex; }
+  .state-toolbar { display: flex; padding: 3px 6px; }
+  #sidebar-toggle, .current-session, #toolbar-menu { grid-column: auto; grid-row: auto; }
+  .connection { grid-column: auto; grid-row: auto; overflow: visible; }
+  #status, #scroll-status { overflow: visible; }
+  #views { margin: 12px; }
+}
+@media (any-pointer: coarse) {
+  button, summary, select { min-height: 44px; }
+  .state-toolbar { min-height: 48px; }
+}
+
+/* Keep at least a terminal row visible when a soft keyboard leaves little height. */
+@media (any-pointer: coarse) {
+  .terminal-visual-viewport .state-toolbar { min-height: 44px; padding-block: 0; }
+  .terminal-visual-viewport #views { margin-block: clamp(0px, calc(var(--terminal-viewport-height) - 240px), 12px); }
 }

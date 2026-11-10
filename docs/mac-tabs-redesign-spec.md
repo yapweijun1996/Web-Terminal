@@ -4,7 +4,7 @@
 Implement the owner supplied IDE-style reference, preserving all terminal sessions and jobs. Keep the single browser tab strip and mouse-menu repair. No release beyond this Mac service, no Git push.
 
 ## Exact behavior
-- 38px tab strip; inline small close icon; subtle accent active state, distinct hover/focus/disconnected. Touch targets remain usable.
+- 42px tab strip (44px for coarse pointers); inline close icon; subtle accent active state, distinct hover/focus/disconnected. Touch targets remain usable.
 - Close icon hides a browser-local tab only, never terminates a window. Hidden tabs remain searchable/restorable in the session switcher. End window is a separate explicit action with confirmation, stable identity and last-window protection. Confirm all ends because active-job state is not authoritative.
 - Custom display name, pin, unpin, reorder via drag/drop and keyboard/menu Move left/right. Preferences are local to the browser, keyed by tmux server PID and window ID, not numeric index. No tmux rename/reorder/global mutation. Invalid/stale stored values are ignored; report unavailable storage.
 - Horizontal scrolling contains 10–30 tabs inside the strip; selected tab scrolls into view. Searchable All windows switcher includes visible/hidden tabs and metadata plus actions. Mobile uses same compact strip and switcher. Menus/dialogs stay inside viewport and scroll internally.

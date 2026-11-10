@@ -1,5 +1,34 @@
 # Web Terminal Tasks
 
+**Linux and Mac UI redesign candidate (2026-11-10):** The Linux UI serves the
+shared status assets through explicit routes and reports connection, session,
+input and sharing separately. Its compact session strip preserves the sidebar
+and existing tmux lifecycle; the Mac chrome follows the system theme and keeps
+the reconnect window-check reminder in Details. This is not a deployment.
+The Linux UI process must be restarted under separate authorization for the
+new asset routes; static replacement alone is insufficient. See
+[live-port guidance](docs/ui-redesign-live-port.md).
+
+Isolated verification on macOS: the root Node suite passed 54 tests; the Mac
+inline build passed with existing Browserslist and Node deprecation warnings;
+the Linux unit files passed individually except the five known-bad baseline
+files intentionally excluded. The focused static-asset HTTP test passed.
+Window-tabs, touch-scroll and Linux mobile-keyboard browser fixtures passed
+separately with disposable tmux/ttyd; Linux used a temporary macOS ttyd-path
+adapter, and keyboard viewport events were synthetic. The light/dark status
+palette measured at least 6.89:1 against its panel background. Physical touch,
+physical soft keyboards, Safari/VoiceOver, production Access and live
+deployment remain unverified.
+
+Chromium screenshots of the real candidate pages cover four widths and both
+themes: 56 Linux state captures plus six scrolled status captures, and 24 Mac
+connection captures under `/private/tmp/omp-shots/final/`. Linux used simulated
+collaboration and authentication responses, a simulated iframe disconnect,
+and a real Retry with the replacement socket held; Mac reconnect/offline used
+an actual disposable ttyd stop. Ten Linux fixture sessions scrolled at 390 and
+768 pixels with 42px tabs and no page overflow. Simulated explicit input true,
+false and missing values displayed enabled, disabled and Not reported.
+
 **Native Windows owner acceptance (2026-11-06):** The owner confirmed the public terminal works and supplied a Chrome screenshot showing a connected terminal running a CLI. Basic authenticated browser, WebSocket and interactive input/output acceptance is now owner-confirmed. This supersedes the owner-login-pending statements below. Full browser hide/restore/reconnect, unauthorized identity denial, live revocation and actual at-logon behavior remain unverified. No existing terminal session or job was restarted for Git publication.
 
 **Native Windows public route update (2026-11-06):** The owner added the DNS route. Public unauthenticated root, script, session API and actual WebSocket upgrade requests all returned 302 to the configured Access team domain. The new and both existing connectors each reported four ready connections. The dedicated at-logon task is registered for the owner with limited interactive logon, no runtime limit and duplicate-run rejection; it was not started separately because the current launcher is running. Actual owner browser sign-in/terminal use, at-logon behavior, unauthorized identity denial and live revocation remain unverified. No reboot or logout was performed. This supersedes the DNS-pending state below.

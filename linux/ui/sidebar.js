@@ -66,7 +66,7 @@ const TerminalSidebar = (() => {
     try { storage = window.localStorage; } catch {}
     const prefs = readPrefs(storage);
     const systemTheme = window.matchMedia?.('(prefers-color-scheme: dark)');
-    const narrow = window.matchMedia?.('(max-width: 700px)');
+    const narrow = window.matchMedia?.('(max-width: 1000px)');
     let scheduled = false;
 
     // Reparent the original controls, so menu navigation and event handlers stay shared.
@@ -80,11 +80,11 @@ const TerminalSidebar = (() => {
       const movingFocus = sessionActions.contains(focused) || viewActions.contains(focused);
       if (narrow?.matches) {
         panel.prepend(sessionActions, viewActions);
-        // Retry stays beside the status text: on a dropped connection it must be visible without opening the menu.
+        // Retry stays beside the status text after a dropped connection.
         if (movingFocus) menu.open = true;
       } else {
+        panel.prepend(viewActions);
         menu.before(sessionActions);
-        latest.before(viewActions);
       }
       if (movingFocus) focused.focus();
     }

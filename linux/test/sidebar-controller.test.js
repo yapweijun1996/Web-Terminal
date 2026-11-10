@@ -249,12 +249,13 @@ test('toolbar menu leaves form-control arrow and boundary keys native while pres
   }
   nodes['menu-summary'].focus();
   assert.equal(nodes['menu-summary'].dispatch('keydown', { key: 'ArrowDown' }).defaultPrevented, true);
-  assert.equal(document.activeElement, nodes['rename-tab']);
+  const firstAction = document.activeElement;
+  assert.equal(menu.contains(firstAction), true);
   nodes['rename-tab'].dispatch('keydown', { key: 'End' });
   assert.equal(document.activeElement, nodes['menu-textarea']);
   nodes['rename-tab'].focus();
   nodes['rename-tab'].dispatch('keydown', { key: 'Home' });
-  assert.equal(document.activeElement, nodes['rename-tab']);
+  assert.equal(document.activeElement, firstAction);
   nodes.theme.focus();
   assert.equal(nodes.theme.dispatch('keydown', { key: 'Escape' }).defaultPrevented, true);
   assert.equal(menu.open, false);
@@ -315,7 +316,6 @@ test('narrow menu preserves action identity, keyboard activation and focus acros
   create.click();
   assert.equal(creations, 2, 'resizing never installs another action handler');
   assert.equal(nodes['toolbar-menu'].contains(create), false);
-  assert.equal(nodes['toolbar-menu'].contains(nodes['keys-toggle']), false);
   assert.equal(nodes.retry.parentElement, nodes.connection);
 });
 

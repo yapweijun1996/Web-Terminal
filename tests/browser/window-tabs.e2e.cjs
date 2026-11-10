@@ -154,7 +154,7 @@ async function stop(child, cleanup = false) {
    await page.setViewportSize({width,height}); await choose(windows[29]);
    await page.waitForFunction(() => document.querySelector('#window-tab-list [role=tab][aria-selected=true]'));
    const geometry = await page.evaluate(() => { const strip=document.querySelector('#window-tabs').getBoundingClientRect(), list=document.querySelector('#window-tab-list'), selected=list.querySelector('[role=tab][aria-selected=true]')?.getBoundingClientRect(), bounds=list.getBoundingClientRect(); return {documentWidth:document.documentElement.scrollWidth,viewport:innerWidth,height:strip.height,overflow:list.scrollWidth>list.clientWidth,selected:selected&&{left:selected.left,right:selected.right},bounds:{left:bounds.left,right:bounds.right}}; });
-   assert.ok(geometry.documentWidth<=geometry.viewport+1,'no horizontal document overflow'); assert.ok(Math.abs(geometry.height-38)<=1,'38px tab strip'); assert.ok(geometry.overflow,'30 tabs scroll inside strip');
+   assert.ok(geometry.documentWidth<=geometry.viewport+1,'no horizontal document overflow'); assert.ok(geometry.height>=40&&geometry.height<=44,'40–44px tab strip'); assert.ok(geometry.overflow,'30 tabs scroll inside strip');
    assert.ok(geometry.selected && geometry.selected.left>=geometry.bounds.left-1 && geometry.selected.right<=geometry.bounds.right+1,'selected tab scrolled into view');
    await capture(`${name}-tabs.png`); if(width===1440) await capture('desktop-strip-preview.png',{x:0,y:0,width,height:120});
    await openWindows(); await assertBox('#window-switcher',width,height);
@@ -170,6 +170,19 @@ async function stop(child, cleanup = false) {
    await closeWindows(); preserved();
   }
   await page.setViewportSize({width:390,height:844});
+  assert.match(await page.locator('#status-input').textContent(), /Not reported/);
+  assert.match(await page.locator('#status-sharing').textContent(), /Not reported/);
+  const statusLayout = await page.locator('#workspace-status').evaluate(bar => {
+   const bounds=bar.getBoundingClientRect();
+   return { height:bounds.height, scrollWidth:bar.scrollWidth, clientWidth:bar.clientWidth, items:[...bar.children].map(el=>{const r=el.getBoundingClientRect(); return {id:el.id,left:r.left,right:r.right,top:r.top,bottom:r.bottom,scrollHeight:el.scrollHeight,clientHeight:el.clientHeight,fontSize:parseFloat(getComputedStyle(el).fontSize)};}) };
+  });
+  assert.ok(statusLayout.height<=64 && statusLayout.height>30, 'mobile status uses two compact rows');
+  assert.ok(statusLayout.scrollWidth<=statusLayout.clientWidth, 'mobile status does not scroll horizontally');
+  for (const item of statusLayout.items) {
+   assert.ok(item.left>=0 && item.right<=390 && item.fontSize>=12 && item.scrollHeight<=item.clientHeight, `${item.id} is visible without clipping`);
+  }
+  assert.equal(statusLayout.items.length,4);
+  await assertTerminalFit();
   await page.locator('#workspace-tools > summary').click();
   const tools=page.locator('#workspace-tools');
   for (const name of ['Keys','Return to live','Previous','Next','Upload image']) assert.ok(await tools.getByRole('button',{name,exact:true}).isVisible(),`${name} remains available in Workspace tools`);
@@ -203,7 +216,10 @@ async function stop(child, cleanup = false) {
   // Compare order after accessible reordering and drag/drop, then reload it.
   const tabOrder=()=>page.locator('#window-tab-list .window-tab').evaluateAll(items=>items.map(e=>e.dataset.window));
   await openWindows(); await search('Fixture 05'); await rowAction(windows[5],'move-left'); await closeWindows(); const moved=await tabOrder(); assert.ok(moved.indexOf(windows[5])<moved.indexOf(windows[4]),'menu move-left changes order');
+  // The larger accessible controls widen tabs; keep both drag endpoints visible.
+  await page.setViewportSize({width:1920,height:800}); await page.locator('#window-tab-list').evaluate(el=>{el.scrollLeft=0;});
   await tab(windows[7]).dragTo(tab(windows[3])); const dragged=await tabOrder(); assert.notDeepEqual(dragged,moved,'actual drag/drop changes order');
+  await page.setViewportSize({width:1280,height:800});
   await page.reload(); await page.waitForSelector('#window-tabs:not([hidden])'); assert.deepEqual(await tabOrder(),dragged,'order survives reload'); preserved();
 
   // Shortcut bytes must not enter the existing unsubmitted fixture draft.
@@ -241,13 +257,16 @@ async function stop(child, cleanup = false) {
   await page.evaluate(()=>{const key='web-terminal-tabs-v1',data=JSON.parse(localStorage.getItem(key)),server=window.webTerminalTarget.serverPid;data.servers[server]['@999999']={name:'STALE FAKE',hidden:false,pinned:true,order:0};data.servers[server].invalid={name:'INVALID FAKE'};localStorage.setItem(key,JSON.stringify(data));});
   await page.reload(); await page.waitForSelector('#window-tabs:not([hidden])'); assert.equal(await page.getByText('STALE FAKE',{exact:true}).count(),0); assert.equal(await page.getByText('INVALID FAKE',{exact:true}).count(),0); preserved();
   const deniedStoragePage=await context.newPage(); await deniedStoragePage.addInitScript(()=>{const original=Storage.prototype.getItem;Storage.prototype.getItem=function(key){if(key==='web-terminal-tabs-v1')throw Error('fixture denied storage');return original.call(this,key);};});
-  await deniedStoragePage.goto(origin); await deniedStoragePage.waitForSelector('#window-tabs:not([hidden])'); await deniedStoragePage.getByText('Browser storage unavailable; preferences last for this page.',{exact:true}).first().waitFor(); await deniedStoragePage.close(); preserved();
+  await deniedStoragePage.goto(origin); await deniedStoragePage.waitForSelector('#window-tabs:not([hidden])'); await deniedStoragePage.getByText('Browser storage unavailable; preferences last for this page.',{exact:true}).first().waitFor(); await deniedStoragePage.close();
+  // A second mobile-width client can trigger an asynchronous shell redraw.
+  for (let i=0; i<100 && !tmux('capture-pane','-p','-J','-t',firstPane).includes('DO_NOT_EXECUTE'); i++) await sleep(20);
+  preserved();
 
   await stop(ttyd); await page.waitForFunction(()=>window.webTerminalConnectionState!=='connected'); preserved(); await page.waitForFunction(()=>document.querySelector('#window-tabs').dataset.connection==='disconnected'); assert.ok(await page.locator('#window-tabs').isVisible()); assert.ok(await page.locator('#window-tab-list [data-action=select]').first().isDisabled());
   await capture('disconnected.png');
   startTtyd(); await waitTtyd(); await page.waitForFunction(()=>window.webTerminalConnectionState==='connected'); await page.waitForSelector('#window-tabs:not([hidden])'); preserved();
   assert.equal(tmux('show-options','-Av','-t','=workspace:','status'),'on'); assert.deepEqual(errors,[]);
-  passed=true; console.log(JSON.stringify({result:'passed',screenshots:dir,windows:30,checked:['38px single strip','1440/1280/768/390,640x400 equivalent200%,390x450 viewport geometry','overflow/search','hide/restore and unsent draft/PID','rename/pin/menu reorder/drag persist','CtrlAlt and tab keyboard focus','End stable identity and last-window guard','actual disconnect/reconnect','native fallback and mouse menu regression','no page errors']})); await context.close();
+  passed=true; console.log(JSON.stringify({result:'passed',screenshots:dir,windows:30,checked:['40–44px single strip','1440/1280/768/390,640x400 equivalent200%,390x450 viewport geometry','overflow/search','hide/restore and unsent draft/PID','rename/pin/menu reorder/drag persist','CtrlAlt and tab keyboard focus','End stable identity and last-window guard','actual disconnect/reconnect','native fallback and mouse menu regression','no page errors']})); await context.close();
  } finally {
   if (!passed && activePage && !activePage.isClosed()) { await activePage.screenshot({path:path.join(dir,'failure.png')}).catch(()=>{}); console.error('Failure artifacts: '+dir); }
   await browser?.close(); for (const child of [ttyd,control]) await stop(child,true);

@@ -150,6 +150,28 @@ const frames = new Map();
 const connections = new Map();
 let sessionDetails = {};
 let metadataStale = false, tabViewKey = null;
+let reportedSharing = null, reportedSharingSession = null, authentication = null;
+function renderIndicators() {
+  if (!window.TerminalStatus) return;
+  const bar = document.querySelector('.status-bar');
+  if (bar) bar.hidden = false;
+  const connection = active ? connections.get(active)?.toLowerCase().replace('connection error', 'disconnected') : (loading ? 'connecting' : null);
+  const session = active && !metadataStale && sessions.includes(active) && !missingPolls.has(active)
+    ? { name: label(active), process: sessionDetails[active]?.command } : null;
+  const indicators = window.TerminalStatus.deriveStatus({
+    connection, session, auth: authentication,
+    input: reportedSharingSession === active ? reportedSharing?.input : null,
+    sharing: reportedSharingSession === active ? reportedSharing : null,
+  });
+  for (const [name, item] of Object.entries(indicators)) {
+    const node = document.getElementById(`status-${name}`);
+    if (!node) continue;
+    node.dataset.level = item.level;
+    node.textContent = `${item.icon} ${name[0].toUpperCase() + name.slice(1)}: ${item.label}`;
+    node.title = item.detail;
+    node.setAttribute('aria-label', `${name}: ${item.label}. ${item.detail}`);
+  }
+}
 const missingPolls = new Map();
 function foregroundStatus(name) {
   return metadataStale ? { state: 'Status unavailable', command: '' }
@@ -185,7 +207,10 @@ const displayControls = window.createTerminalDisplayControls({
   },
 });
 document.querySelector('#view-actions').append(displayControls.element);
-const collaborationControls = window.createCollaborationControls?.({ getSession: () => active, getToken: () => token });
+const collaborationControls = window.createCollaborationControls?.({
+  getSession: () => active, getToken: () => token,
+  onState: (state, session) => { reportedSharing = state; reportedSharingSession = session; renderIndicators(); },
+});
 if (collaborationControls) {
   document.querySelector('#view-actions').append(collaborationControls.element);
   // The toolbar controls move into a closed menu on mobile. Keep failures
@@ -216,13 +241,16 @@ function updateControls() {
   currentName.textContent = active ? label(active) : 'No session';
   const foreground = foregroundStatus(active);
   currentSecondary.textContent = foregroundText(foreground);
+  renderIndicators();
 }
 function showStatus(message, retryAction = null, link = message) {
   status.textContent = message;
+  status.classList.toggle('sr-only', ['Connected', 'Connecting', 'Reconnecting', 'Disconnected — retry or sign in', 'Sign-in may be required'].includes(message));
   detailLink.textContent = link;
   status.title = 'Connection status only; background job status is unknown.';
   status.setAttribute('aria-label', `${message}. Background job status is unknown.`);
   retryMode = retryAction;
+  renderIndicators();
   retry.hidden = retryMode === null;
 }
 function showConnection(name) {
@@ -241,11 +269,13 @@ function activate(name, focusTab = false) {
   if (renameTarget && renameTarget !== name) { renameForm.hidden = true; renameTarget = null; renameError.textContent = ''; }
   if (name !== active) { copyGestureAt = 0; pendingCopy = null; copySelection.hidden = true; }
   active = name;
+  reportedSharing = null; reportedSharingSession = null;
+  collaborationControls?.refresh();
   mobileKeys.resetIfTargetChanged();
   const visible = sessions.filter(session => !hidden.has(session));
   detailView.textContent = `${visible.indexOf(name) + 1} of ${visible.length}`;
   if (!frames.has(name)) {
-    connections.set(name, 'Connecting');
+    if (!connections.has(name)) connections.set(name, 'Connecting');
     scrollModes.delete(name);
     const iframe = document.createElement('iframe');
     iframe.src = `/terminal/${name}`; iframe.title = label(name);
@@ -447,8 +477,8 @@ function renderTabs(focusName = null) {
   let focusTarget = null;
   // Polls must not replace the keyboard user's focused sidebar control.
   const focused = document.activeElement;
-  const focusSession = focused?.dataset?.session;
-  const focusAction = focused?.dataset?.action;
+  const focusSession = tabs.contains(focused) ? focused?.dataset?.session : null;
+  const focusAction = tabs.contains(focused) ? focused?.dataset?.action : null;
   const focusRow = target => {
     if (!target) return;
     if (sidebar.isNarrow() && !sidebar.isDrawerOpen()) status.focus();
@@ -457,8 +487,9 @@ function renderTabs(focusName = null) {
   const pins = sidebar.prefs.pins;
   const query = document.querySelector('#session-search').value || '';
   const visible = window.TerminalSidebar.orderSessions(sessions.filter(n => !hidden.has(n)), pins, label, query);
-  const view = visible.map(name => [name, label(name), foregroundText(foregroundStatus(name)), pins.includes(name)]);
-  const key = JSON.stringify([view, active, sidebar.prefs.collapsed, query]);
+  const view = visible.map(name => [name, label(name), foregroundText(foregroundStatus(name)), pins.includes(name), connections.get(name)]);
+  const mobileVisible = window.TerminalSidebar.orderSessions(sessions.filter(n => !hidden.has(n)), pins, label);
+  const key = JSON.stringify([view, mobileVisible.map(name => [name, label(name), connections.get(name)]), active, sidebar.prefs.collapsed, query]);
   restore.hidden = !sessions.some(n => hidden.has(n));
   updateControls();
   if (key === tabViewKey) {
@@ -466,6 +497,35 @@ function renderTabs(focusName = null) {
     return;
   }
   tabViewKey = key;
+  const mobileTabs = document.getElementById('mobile-session-tabs');
+  if (mobileTabs) {
+    const mobileFocus = mobileTabs.contains(focused) ? focused?.dataset?.session : null;
+    mobileTabs.replaceChildren();
+    for (const name of mobileVisible) {
+      const button = document.createElement('button');
+      button.type = 'button'; button.dataset.session = name;
+      button.setAttribute('aria-pressed', String(name === active));
+      const state = window.TerminalStatus?.deriveStatus({ connection: connections.get(name)?.toLowerCase().replace('connection error', 'disconnected') }).connection;
+      const dot = document.createElement('span'); dot.className = 'session-dot'; dot.dataset.level = state?.level || 'unknown';
+      dot.textContent = state?.icon || '?'; dot.setAttribute('aria-hidden', 'true');
+      button.append(dot, document.createTextNode(label(name)));
+      button.setAttribute('aria-label', `${label(name)}: ${state?.label || 'Not reported'}`);
+      button.addEventListener('click', () => activate(name));
+      button.addEventListener('keydown', event => {
+        const index = mobileVisible.indexOf(name);
+        const next = event.key === 'ArrowRight' ? mobileVisible[(index + 1) % mobileVisible.length]
+          : event.key === 'ArrowLeft' ? mobileVisible[(index - 1 + mobileVisible.length) % mobileVisible.length]
+            : event.key === 'Home' ? mobileVisible[0] : event.key === 'End' ? mobileVisible[mobileVisible.length - 1] : null;
+        if (next) {
+          event.preventDefault(); activate(next);
+          mobileTabs.querySelector(`[data-session="${next}"]`)?.focus();
+        }
+      });
+      mobileTabs.append(button);
+      if (name === mobileFocus) button.focus();
+      if (name === active) button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  }
   tabs.replaceChildren();
   const resultCount = `${visible.length} ${visible.length === 1 ? 'session' : 'sessions'} found`;
   if (searchResults.textContent !== resultCount) searchResults.textContent = resultCount;
@@ -573,12 +633,12 @@ async function load() {
     authRequired = response.status === 401 || response.status === 403 || response.type === 'opaqueredirect' || response.redirected;
     if (authRequired) throw Error('Authentication may be required');
     if (!response.ok) throw Error('Unable to load terminals');
-    const data = await response.json(); sessions = data.sessions; sessionDetails = data.details || {}; token = data.token; sessionReady = true;
+    const data = await response.json(); sessions = data.sessions; sessionDetails = data.details || {}; token = data.token; sessionReady = true; authentication = null;
     metadataStale = false; missingPolls.clear();
     const first = sessions.includes(active) && !hidden.has(active) ? active : sessions.find(n => !hidden.has(n));
     if (first) activate(first); else renderTabs();
     if (!first) { detailView.textContent = 'Unknown'; showStatus('No visible terminals', null, 'Unknown'); updateControls(); }
-  } catch { showStatus(authRequired ? 'Sign-in may be required' : 'Connection unavailable — retry or sign in', 'load'); }
+  } catch { authentication = authRequired ? 'auth-required' : null; showStatus(authRequired ? 'Sign-in may be required' : 'Connection unavailable — retry or sign in', 'load'); }
   finally { loading = false; updateControls(); }
 }
 // Poll metadata without reconnecting, moving terminal focus or changing copy mode.
@@ -641,7 +701,7 @@ retry.addEventListener('click', () => {
   frames.get(name).remove();
   frames.delete(name);
   copyGestureAt = 0; pendingCopy = null; copySelection.hidden = true;
-  connections.set(name, 'Connecting');
+  connections.set(name, 'Reconnecting');
   activate(name);
 });
 newTab.addEventListener('click', async () => {
@@ -718,7 +778,8 @@ window.addEventListener('message', event => {
     if (event.source === iframe.contentWindow) {
       if (event.data?.type === 'terminal-connection' && ['Connecting', 'Connected', 'Disconnected', 'Connection error'].includes(event.data.state)) {
         terminalViewport.install(iframe);
-        connections.set(name, event.data.state);
+        const state = event.data.state === 'Connecting' && connections.get(name) === 'Reconnecting' ? 'Reconnecting' : event.data.state;
+        connections.set(name, state);
         if (event.data.state !== 'Connected') scrollModes.delete(name);
         if (event.data.state === 'Connected') iframe.contentWindow?.term?.textarea?.setAttribute('aria-label', 'Terminal input. Press Control Alt Shift T to focus toolbar.');
         sidebar.applyTheme();
