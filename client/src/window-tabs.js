@@ -5,7 +5,7 @@
     let windows = [], scope = '', preferences = {}, available = false, busy = false, polling = false;
     let endSnapshot = null, renameId = null, draggedId = null, storageWarning = '', actionError = '', lastSignature = '', switcherGeneration = 0;
     let targetGeneration = 0, lastTarget = targetKey(window.webTerminalTarget), lastActiveSignature, pendingTabFocus = null;
-    let firstListProbe = true, controlsNotProvided = false;
+    let firstListProbe = true, controlsNotProvided = false, creating = null;
     function targetKey(target) {
         return target && [target.session, target.sessionId, target.serverPid, target.windowIndex, target.pane].join('|');
     }
@@ -38,9 +38,21 @@
     newButton.textContent = 'New window'; newButton.setAttribute('aria-label', 'New window'); newButton.title = 'New terminal window';
     const tabs = el('nav', {id:'window-tabs', 'aria-label':'Terminal window tabs'});
     const list = el('div', {id:'window-tab-list', role:'tablist', 'aria-label':'Visible terminal windows'});
+    const create = el('button', {id:'new-window', type:'button', 'aria-label':'New window', title:'New window'}, '+');
     const all = button('All windows', 'all'); all.id = 'all-windows'; all.setAttribute('aria-keyshortcuts', 'Control+Alt+P');
     const status = el('span', {id:'window-tabs-status', role:'status', 'aria-live':'polite'});
-    tabs.append(list, all); bar.after(tabs); bar.insertBefore(status, tools); tabs.hidden = true;
+    tabs.append(list, create, all); bar.after(tabs); bar.insertBefore(status, tools); tabs.hidden = true;
+    create.addEventListener('click', () => newButton.click());
+    newButton.addEventListener('click', event => {
+        if (busy || !available || !ready()) { event.stopImmediatePropagation(); return; }
+        creating = {ids:new Set(windows.map(item => item.id)), timer:null};
+        creating.timer = setTimeout(() => {
+            creating = null; busy = false;
+            actionError = 'New window was not confirmed. Check All windows before trying again.';
+            state();
+        }, 10000);
+        actionError = ''; busy = true; state();
+    });
     const empty = el('section', {id:'window-empty-state', hidden:''});
     empty.append(el('h2', {}, 'All tabs hidden'), el('p', {}, 'Your windows and tasks are still attached. Restore a tab to view it.'), button('All windows', 'all'));
     tabs.after(empty);
@@ -123,7 +135,10 @@
         tabs.dataset.connection = available && ready() ? 'connected' : 'disconnected';
         controlsDetail.hidden = !controlsNotProvided;
         newButton.hidden = controlsNotProvided;
-        status.textContent = actionError || storageWarning || (busy ? 'Switching window…' : '') || (available && ready() || controlsNotProvided ? '' : 'Windows unavailable');
+        const newDisabled = busy || !available || !ready();
+        const newTitle = busy ? 'New window unavailable while an action is in progress' : newDisabled ? 'New window unavailable until window controls are connected' : 'New window';
+        for (const node of [newButton, create]) { node.disabled = newDisabled; node.title = newTitle; }
+        status.textContent = actionError || storageWarning || (busy ? (creating ? 'Creating window…' : 'Switching window…') : '') || (available && ready() || controlsNotProvided ? '' : 'Windows unavailable');
         const statusDetail = status.textContent === 'Windows unavailable' ? 'Windows unavailable — tasks may still be running.' : status.textContent;
         status.title = statusDetail;
         status.setAttribute('aria-label', statusDetail);
@@ -255,7 +270,7 @@
         if (busy || !endSnapshot) return;
         const snapshot = endSnapshot, generation = targetGeneration, confirm = endDialog.querySelector('[data-confirm]'), cancel = endDialog.querySelector('[data-cancel]'); confirm.disabled = true;
         if (!available || !ready() || identity(snapshot.target) !== identity(window.webTerminalTarget)) { endDialog.querySelector('[data-error]').textContent = 'Connection changed. Cancel and confirm again.'; return; }
-        busy = true; cancel.disabled = true;
+        busy = true; cancel.disabled = true; state();
         try {
             const response = await request('close-window',snapshot.target,snapshot.item.id);
             if (generation === targetGeneration) windows = response;
@@ -285,7 +300,14 @@
         firstListProbe = false;
         try {
             const response = await request('windows',target,undefined,firstProbe);
-            if (generation === targetGeneration && ready() && targetKey(target) === targetKey(window.webTerminalTarget)) { if (scope !== target.serverPid) load(target.serverPid); windows = response; available = true; tabs.hidden = false; actionError = ''; render(); }
+            if (generation === targetGeneration && ready() && targetKey(target) === targetKey(window.webTerminalTarget)) {
+                if (scope !== target.serverPid) load(target.serverPid);
+                windows = response; available = true; tabs.hidden = false; actionError = '';
+                if (creating && response.some(item => item.active && item.index === target.windowIndex && !creating.ids.has(item.id))) {
+                    clearTimeout(creating.timer); creating = null; busy = false;
+                }
+                render();
+            }
         } catch (error) {
             if (generation === targetGeneration) {
                 await request('native-tabs',target).catch(() => {});
@@ -303,6 +325,7 @@
     });
     window.addEventListener('web-terminal-connection',event => {
         if (event.detail !== 'connected' || !ready()) {
+            if (creating) { clearTimeout(creating.timer); creating = null; busy = false; }
             targetGeneration++; available = false; tabs.hidden = windows.length === 0; layout(); closeMenu(); state();
             if (endDialog.open) { endDialog.querySelector('[data-confirm]').disabled = true; endDialog.querySelector('[data-error]').textContent = 'Connection changed. Cancel and confirm again.'; }
         } else refresh();

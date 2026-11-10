@@ -22,7 +22,7 @@
 #terminal-container.terminal-tabs-hidden { visibility:hidden; pointer-events:none; }
 #window-tabs { height:42px; display:flex; align-items:stretch; box-sizing:border-box; background:var(--panel); border-bottom:1px solid var(--border); color:var(--text); min-width:0; max-width:100%; position:relative; font:12px system-ui; }
 #window-tabs[hidden] { display:none; }
-#window-tab-list { display:flex; flex:1; min-width:0; overflow-x:auto; overflow-y:hidden; scrollbar-width:thin; scrollbar-color:var(--border) transparent; overscroll-behavior-x:contain; }
+#window-tab-list { display:flex; flex:0 1 auto; min-width:0; overflow-x:auto; overflow-y:hidden; scrollbar-width:thin; scrollbar-color:var(--border) transparent; overscroll-behavior-x:contain; }
 .window-tab { display:flex; align-items:center; flex:0 0 auto; min-width:100px; max-width:230px; height:100%; border-right:1px solid var(--border); border-top:2px solid transparent; box-sizing:border-box; }
 .window-tab:hover { background:var(--hover); color:var(--text); }
 .window-tab[data-active=true] { background:var(--active); border-top-color:var(--focus); color:var(--text); }
@@ -37,7 +37,10 @@
 .window-tab button[data-action=hide]:hover, .window-tab button[data-action=menu]:hover { background:var(--hover); }
 #window-tabs button:focus-visible { outline:2px solid var(--focus); outline-offset:-3px; }
 #window-tabs button:disabled { cursor:default; }
-#all-windows { flex:none; padding:0 12px; border-left:1px solid var(--border) !important; font-size:12px !important; }
+#new-window { flex:none; width:44px; padding:0; font-size:22px !important; }
+#new-window:hover:not(:disabled) { background:var(--hover); }
+#new-window:disabled { color:var(--muted); }
+#all-windows { flex:none; margin-left:auto; padding:0 12px; border-left:1px solid var(--border) !important; font-size:12px !important; }
 #all-windows:hover { background:var(--hover); }
 #window-tabs-status { flex:0 1 200px; min-width:0; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text); font:12px system-ui,sans-serif; }
 #window-tabs-status:empty { display:none; }

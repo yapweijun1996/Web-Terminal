@@ -206,6 +206,48 @@ async function stop(child, cleanup = false) {
     await target.screenshot({path:path.join(output,`${label}-${width}x${height}-${theme}.png`)});
    }
   }
+  async function checkNewWindowMatrix(count) {
+   const output='/private/tmp/omp-shots/final5';
+   fs.mkdirSync(output,{recursive:true});
+   const sizes=[[320,600],[390,844],[480,800],[768,900],[900,720],[1039,768],[1280,720],[1440,900],[1919,883]];
+   for(const theme of ['light','dark']) for(const [width,height] of sizes) {
+    await page.emulateMedia({colorScheme:theme}); await page.setViewportSize({width,height});
+    for(const end of [false,true]) {
+     await page.locator('#window-tab-list').evaluate((list,end)=>{list.scrollLeft=end?list.scrollWidth:0;},end);
+     const problems=await page.evaluate(()=>{
+      const button=document.querySelector('#new-window'), all=document.querySelector('#all-windows'), list=document.querySelector('#window-tab-list');
+      const rect=node=>node.getBoundingClientRect(), b=rect(button), a=rect(all), l=rect(list), problems=[];
+      const intersects=(x,y)=>Math.min(x.right,y.right)-Math.max(x.left,y.left)>0.5 && Math.min(x.bottom,y.bottom)-Math.max(x.top,y.top)>0.5;
+      if(b.left<0 || b.top<0 || b.right>innerWidth || b.bottom>innerHeight) problems.push('button outside viewport');
+      if(b.width<40 || b.height<40 || b.height>44) problems.push(`button size ${b.width}x${b.height}`);
+      if(intersects(b,a) || intersects(b,l)) problems.push('button intersects list or All windows');
+      const last=list.querySelector('.window-tab:last-child');
+      if(list.scrollWidth<=list.clientWidth && last && Math.abs(rect(last).right-b.left)>1) problems.push('button not adjacent to last tab');
+      if(list.scrollWidth>list.clientWidth && Math.abs(b.right-a.left)>1) problems.push('overflow button not adjacent to All windows');
+      for(const tab of list.querySelectorAll('.window-tab')) { const t=rect(tab),visible={left:Math.max(t.left,l.left),right:Math.min(t.right,l.right),top:Math.max(t.top,l.top),bottom:Math.min(t.bottom,l.bottom)}; if(intersects(b,visible)) problems.push('button intersects a visible tab'); }
+      for(let parent=button.parentElement;parent;parent=parent.parentElement) {
+       const style=getComputedStyle(parent),p=rect(parent);
+       if(/(hidden|clip|scroll|auto)/.test(style.overflowX) && (b.left<p.left-0.5 || b.right>p.right+0.5)) problems.push('button clipped horizontally');
+       if(/(hidden|clip|scroll|auto)/.test(style.overflowY) && (b.top<p.top-0.5 || b.bottom>p.bottom+0.5)) problems.push('button clipped vertically');
+      }
+      if(document.elementFromPoint((b.left+b.right)/2,(b.top+b.bottom)/2)!==button) problems.push('button fails center hit test');
+      const rgb=value=>value.match(/\d+/g).slice(0,3).map(Number).map(v=>{v/=255;return v<=0.04045?v/12.92:((v+0.055)/1.055)**2.4;});
+      const lum=value=>{const c=rgb(value);return c[0]*0.2126+c[1]*0.7152+c[2]*0.0722;};
+      const colors=[lum(getComputedStyle(button).color),lum(getComputedStyle(document.querySelector('#window-tabs')).backgroundColor)].sort((x,y)=>y-x);
+      if((colors[0]+0.05)/(colors[1]+0.05)<4.5) problems.push('button contrast below 4.5:1');
+      return problems;
+     });
+     assert.deepEqual(problems,[],`${count} tabs ${theme} ${width} scrollEnd=${end}: ${problems.join('; ')}`);
+    }
+    assert.equal(await page.locator('#new-window').getAttribute('aria-label'),'New window');
+    assert.equal(await page.locator('#new-window').getAttribute('title'),'New window');
+    if([1,30].includes(count) && [1919,1039,390].includes(width)) {
+     await sleep(500);
+     await page.waitForFunction(()=>![...document.querySelectorAll('.xterm > div')].some(node=>/^\d+x\d+$/.test(node.textContent.trim())));
+     await page.screenshot({path:path.join(output,`${count}-tabs-${width}x${height}-${theme}.png`)});
+    }
+   }
+  }
   async function assertSwitcherRace() {
   let releaseSelection,selectionIntercepted; const selectionGate=new Promise(resolve=>{releaseSelection=resolve;}),selectionStarted=new Promise(resolve=>{selectionIntercepted=resolve;});
   await page.route('**/__terminal_upload',async route=>{if(route.request().headers()['x-terminal-action']==='select-window'){selectionIntercepted();await selectionGate;}await route.continue();});
@@ -257,12 +299,16 @@ async function stop(child, cleanup = false) {
   assert.equal(tmux('show-options', '-Av', '-t', `=${await view()}:`, 'status'), 'off');
   await checkChromeAndCapture(page,'present');
   await checkHeaderMatrix(page,'present');
+  await checkNewWindowMatrix(1);
+  await page.locator('#new-window').focus();
+  assert.ok(await page.locator('#new-window').evaluate(node=>node.matches(':focus-visible') && parseFloat(getComputedStyle(node).outlineWidth)>=2),'New window has visible keyboard focus');
   const absent = await context.newPage();
   await absent.route('**/__terminal_upload', route => route.fulfill({status:404, contentType:'text/plain', body:'Not Found'}));
   await absent.goto(origin);
   await absent.waitForFunction(()=>window.webTerminalConnectionState==='connected' && window.webTerminalTarget);
   await absent.waitForFunction(()=>[...document.querySelectorAll('#terminal-diagnostics p')].some(p=>p.textContent==='Window controls: not provided on this host' && !p.hidden));
   assert.ok(await absent.locator('#window-tabs').isHidden(), 'no browser tabs without a control service');
+  assert.ok(await absent.locator('#new-window').isHidden(),'strip New window is hidden without controls');
   assert.doesNotMatch(await absent.locator('#window-tabs-status').textContent(), /Windows unavailable/, 'no unavailable warning without a control service');
   await absent.locator('#workspace-tools > summary').click(); await absent.locator('#terminal-diagnostics > summary').click();
   assert.ok(await absent.getByText('Window controls: not provided on this host',{exact:true}).isVisible(),'absence explained in Details');
@@ -284,11 +330,11 @@ async function stop(child, cleanup = false) {
   const touchContext=await browser.newContext({viewport:{width:390,height:844},hasTouch:true,isMobile:true});
   const touch=await touchContext.newPage(); await touch.goto(origin); await touch.waitForSelector('#window-tabs:not([hidden])');
   assert.equal(await touch.evaluate(()=>matchMedia('(pointer: coarse)').matches),true,'touch fixture uses a coarse pointer');
-  for(const selector of ['#workspace-tools > summary','#all-windows','.window-tab [data-action=select]','.window-tab [data-action=hide]','.window-tab [data-action=menu]']) {
+  for(const selector of ['#workspace-tools > summary','#new-window','#all-windows','.window-tab [data-action=select]','.window-tab [data-action=hide]','.window-tab [data-action=menu]']) {
    const box=await touch.locator(selector).first().boundingBox(); assert.ok(box && box.width>=44 && box.height>=44,`${selector} has a 44px touch target`);
   }
   await touch.locator('#workspace-tools > summary').click();
-  const newWindowBox=await touch.getByRole('button',{name:'New window'}).boundingBox();
+  const newWindowBox=await touch.locator('#workspace-tools [data-key="c"]').boundingBox();
   assert.ok(newWindowBox && newWindowBox.width>=44 && newWindowBox.height>=44,'New window retains a 44px target in Workspace tools');
   await touchContext.close();
 
@@ -317,9 +363,32 @@ async function stop(child, cleanup = false) {
   await page.locator('#close-window-dialog [data-cancel]').click(); await closeWindows();
 
   const windows = [first];
-  for (let i=1; i<30; i++) windows.push(tmux('new-window', '-d', '-P', '-F', '#{window_id}', '-t', '=workspace:', '-n', `Fixture ${String(i).padStart(2,'0')}`, i===27?'/bin/sleep 900':'/bin/sh'));
+  const windowIds=()=>tmux('list-windows','-t','=workspace:','-F','#{window_id}').split('\n');
+  let releaseList, listStarted;
+  const listGate=new Promise(resolve=>{releaseList=resolve;}), listIntercepted=new Promise(resolve=>{listStarted=resolve;});
+  await page.route('**/__terminal_upload',async route=>{if(route.request().headers()['x-terminal-action']==='windows'){listStarted();await listGate;}await route.continue();});
+  await page.locator('#new-window').dblclick();
+  await listIntercepted;
+  assert.ok(await page.locator('#new-window').isDisabled(),'double-click leaves creation busy until confirmed');
+  assert.ok(await page.locator('#workspace-tools [data-key="c"]').isDisabled(),'both entry points share busy state');
+  assert.match(await page.locator('#new-window').getAttribute('title'),/action is in progress/i);
+  assert.match(await page.locator('#workspace-tools [data-key="c"]').getAttribute('title'),/action is in progress/i);
+  for(let i=0;i<100 && windowIds().length<2;i++) await sleep(30);
+  assert.equal(windowIds().length,2,'double-click creates exactly one window while busy');
+  windows.push(windowIds().find(id=>id!==first));
+  releaseList(); await waitSelected(windows[1]); await page.unroute('**/__terminal_upload');
+  assert.equal(windowIds().length,2);
+  await page.locator('#new-window').click();
+  for(let i=0;i<100 && windowIds().length<3;i++) await sleep(30);
+  assert.equal(windowIds().length,3,'one subsequent click creates exactly one window');
+  windows.push(windowIds().find(id=>!windows.includes(id)));
+  await waitSelected(windows[2]);
+  tmux('rename-window','-t',windows[1],'Fixture 01'); tmux('rename-window','-t',windows[2],'Fixture 02');
+  await checkNewWindowMatrix(3);
+  for (let i=3; i<30; i++) windows.push(tmux('new-window', '-d', '-P', '-F', '#{window_id}', '-t', '=workspace:', '-n', `Fixture ${String(i).padStart(2,'0')}`, i===27?'/bin/sleep 900':'/bin/sh'));
   await page.waitForFunction(() => document.querySelectorAll('#window-tab-list .window-tab').length === 30);
-  assert.equal(tmux('list-windows', '-t', '=workspace:', '-F', '#{window_id}').split('\n').length, 30);
+  assert.equal(windowIds().length, 30);
+  await checkNewWindowMatrix(30);
   const runningJobPid=tmux('display-message','-p','-t',windows[27],'#{pane_pid}');
   const draft = 'echo DO_NOT_EXECUTE > p';
   tmux('send-keys', '-t', firstPane, '-l', draft);
@@ -438,6 +507,8 @@ async function stop(child, cleanup = false) {
   preserved();
 
   await stop(ttyd); await page.waitForFunction(()=>window.webTerminalConnectionState!=='connected'); preserved(); await page.waitForFunction(()=>document.querySelector('#window-tabs').dataset.connection==='disconnected'); assert.ok(await page.locator('#window-tabs').isVisible()); assert.ok(await page.locator('#window-tab-list [data-action=select]').first().isDisabled());
+  assert.ok(await page.locator('#new-window').isDisabled(),'New window is disabled when disconnected');
+  assert.match(await page.locator('#new-window').getAttribute('title'),/unavailable/i);
   await capture('disconnected.png');
   startTtyd(); await waitTtyd(); await page.waitForFunction(()=>window.webTerminalConnectionState==='connected'); await page.waitForSelector('#window-tabs:not([hidden])'); preserved();
   assert.equal(tmux('show-options','-Av','-t','=workspace:','status'),'on'); assert.deepEqual(errors,[]);
