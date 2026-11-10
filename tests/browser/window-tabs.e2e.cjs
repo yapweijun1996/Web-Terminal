@@ -68,6 +68,144 @@ async function stop(child, cleanup = false) {
   async function assertBox(selector, width, height) { const box = await page.locator(selector).boundingBox(); assert.ok(box && box.x >= -1 && box.y >= -1 && box.x + box.width <= width+1 && box.y + box.height <= height+1, `${selector} stays inside ${width}x${height}`); }
   async function capture(filename,clip) { await page.waitForFunction(()=>![...document.querySelectorAll('.xterm > div')].some(node=>/^\d+x\d+$/.test(node.textContent.trim()))); await page.screenshot({path:path.join(dir,filename),...(clip?{clip}:{})}); }
   async function assertTerminalFit() { await page.waitForFunction(()=>{const box=document.querySelector('#terminal-container').getBoundingClientRect(),screen=document.querySelector('.xterm-screen').getBoundingClientRect();return screen.bottom<=box.bottom+1&&screen.right<=box.right+1&&screen.top>=box.top-1;}); const grid=await page.evaluate(()=>`${window.term.cols}|${window.term.rows}`);assert.equal(tmux('list-clients','-t',`=${await view()}:`,'-F','#{client_width}|#{client_height}'),grid,'xterm and attached tmux grid agree'); }
+  const shots = '/private/tmp/omp-shots/final3';
+  async function checkChromeAndCapture(target, label) {
+   fs.mkdirSync(shots, {recursive:true});
+   for (const theme of ['light','dark']) for (const [width,height] of [[1919,883],[1280,720],[768,1024],[390,844]]) {
+    await target.emulateMedia({colorScheme:theme}); await target.setViewportSize({width,height});
+    await target.waitForFunction(() => {
+     const box=document.querySelector('#terminal-container').getBoundingClientRect(), screen=document.querySelector('.xterm-screen').getBoundingClientRect();
+     const cell=window.term?._core?._renderService?.dimensions?.css?.cell?.height;
+     return cell>0 && screen.top+window.term.rows*cell<=Math.min(box.bottom,innerHeight)+1 && screen.right<=box.right+1 && document.documentElement.scrollHeight<=innerHeight && document.documentElement.scrollWidth<=innerWidth;
+    });
+    const metrics=await target.evaluate(() => {
+     const rect=selector=>{const r=document.querySelector(selector).getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,height:r.height};};
+     const box=rect('#terminal-container'),screen=rect('.xterm-screen'),items=[...document.querySelectorAll('.workspace-status-item')].map(e=>({text:e.textContent,font:parseFloat(getComputedStyle(e).fontSize),rect:(()=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom};})()}));
+     const tokens=getComputedStyle(document.documentElement), lum=value=>{const hex=value.trim().slice(1);const channels=[0,2,4].map(i=>parseInt(hex.slice(i,i+2),16)/255).map(v=>v<=0.04045?v/12.92:((v+0.055)/1.055)**2.4);return channels[0]*0.2126+channels[1]*0.7152+channels[2]*0.0722;};
+     const contrast=(a,b)=>{const values=[lum(tokens.getPropertyValue(a)),lum(tokens.getPropertyValue(b))].sort((x,y)=>y-x);return (values[0]+0.05)/(values[1]+0.05);};
+     const contrastRatios=['--text','--muted','--status-ok','--status-warn','--status-error','--status-unknown','--status-busy'].map(color=>contrast(color,'--panel')).concat(contrast('--text','--control'));
+     return {box,screen,items,contrastRatios,header:rect('#remote-toolbar'),title:rect('#remote-toolbar > span:first-child'),status:rect('#workspace-status'),tools:rect('#workspace-tools > summary'),rows:window.term.rows,cell:window.term._core._renderService.dimensions.css.cell.height,scrollHeight:document.documentElement.scrollHeight,scrollWidth:document.documentElement.scrollWidth};
+    });
+    assert.ok(metrics.scrollHeight<=height && metrics.scrollWidth<=width, `${label} ${theme} ${width} viewport does not overflow`);
+    assert.ok(metrics.rows*metrics.cell<=metrics.box.height && metrics.screen.top+metrics.rows*metrics.cell<=Math.min(metrics.box.bottom,height)+1, `${label} ${theme} ${width} terminal rows fit`);
+    assert.ok(metrics.contrastRatios.every(value=>value>=4.5), `${theme} chrome text tokens meet 4.5:1: ${metrics.contrastRatios}`);
+    assert.equal(metrics.items.length,4); for(const item of metrics.items) assert.ok(item.text && item.font>=12 && item.rect.left>=0 && item.rect.right<=width, `${label} ${theme} ${width} status visible`);
+    assert.equal(metrics.title.left,16,`${label} ${theme} ${width} title padding`);
+    if(width>=900) {
+     assert.equal(metrics.header.height,48, 'desktop header is 48px');
+     assert.ok(metrics.status.top>=metrics.header.top && metrics.status.bottom<=metrics.header.bottom, 'desktop status is in header');
+     assert.equal(metrics.tools.right,width-16, 'desktop tools right padding');
+    } else {
+     assert.ok(metrics.status.top>=metrics.header.top+48 && metrics.status.bottom<=metrics.header.bottom && metrics.status.height>30, 'narrow status uses a separate two-row grid');
+     assert.ok(metrics.items[0].rect.top===metrics.items[1].rect.top && metrics.items[2].rect.top===metrics.items[3].rect.top && metrics.items[2].rect.top>metrics.items[0].rect.top, 'narrow indicators form two rows');
+    }
+    await target.waitForFunction(()=>![...document.querySelectorAll('.xterm > div')].some(node=>/^\d+x\d+$/.test(node.textContent.trim())));
+    await target.screenshot({path:path.join(shots,`${label}-${width}x${height}-${theme}.png`)});
+   }
+  }
+  // Measure the actual rendered header rather than inferring separation from its
+  // parent boxes: an out-of-flow overlay can otherwise pass the layout checks.
+  async function headerGeometry(target, plusOnly=false) {
+   return target.evaluate(plusOnly => {
+    const selectors=plusOnly ? ['#remote-toolbar [data-key="c"]'] :
+     ['#remote-toolbar > span:first-child','#workspace-status',
+      '.workspace-status-item','#window-tabs-status','#workspace-tools > summary',
+      '#remote-toolbar [data-key="c"]','#window-tabs','#all-windows'];
+    const nodes=[...new Set(selectors.flatMap(selector=>[...document.querySelectorAll(selector)]))];
+    const visible=node=>{const style=getComputedStyle(node),r=node.getBoundingClientRect();return style.display!=='none' && style.visibility==='visible' && r.width>0 && r.height>0 && node.getClientRects().length>0;};
+    const shown=nodes.filter(visible), problems=[];
+    const name=node=>node.id || node.getAttribute('data-key') || node.className || node.tagName;
+    const intersects=(a,b)=>Math.min(a.right,b.right)-Math.max(a.left,b.left)>0.5 && Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)>0.5;
+    for (const [i,node] of shown.entries()) {
+     const r=node.getBoundingClientRect(), label=name(node);
+     if(r.left < -0.5 || r.top < -0.5 || r.right > innerWidth+0.5 || r.bottom > innerHeight+0.5) problems.push(`${label} outside viewport`);
+     for(let parent=node.parentElement;parent;parent=parent.parentElement) {
+      const style=getComputedStyle(parent),p=parent.getBoundingClientRect();
+      if (/(hidden|clip|scroll|auto)/.test(style.overflowX) && (r.left<p.left-0.5 || r.right>p.right+0.5)) problems.push(`${label} clipped horizontally by ${name(parent)}`);
+      if (/(hidden|clip|scroll|auto)/.test(style.overflowY) && (r.top<p.top-0.5 || r.bottom>p.bottom+0.5)) problems.push(`${label} clipped vertically by ${name(parent)}`);
+     }
+     for(const textNode of [node,...node.querySelectorAll('*')]) {
+      if(visible(textNode) && [...textNode.childNodes].some(child=>child.nodeType===Node.TEXT_NODE && child.textContent.trim()) && parseFloat(getComputedStyle(textNode).fontSize)<12) problems.push(`${label} text below 12px`);
+     }
+     const hit=document.elementFromPoint((r.left+r.right)/2,(r.top+r.bottom)/2);
+     if(!hit || !(node===hit || node.contains(hit))) problems.push(`${label} center hit ${hit ? name(hit) : 'nothing'}`);
+     for(const other of shown.slice(i+1)) if(!node.contains(other) && !other.contains(node) && intersects(r,other.getBoundingClientRect())) problems.push(`${label} intersects ${name(other)}`);
+    }
+    if(!plusOnly) {
+     const status=document.querySelector('#window-tabs-status'),style=getComputedStyle(status);
+     if(status.getAttribute('role')!=='status' || !status.getAttribute('aria-live') || status.getAttribute('aria-live')==='off') problems.push('window status is not live');
+     if(!visible(status)) problems.push('injected window status is not visible');
+     if(style.position==='fixed' || style.position==='absolute') problems.push('window status is not in flow');
+     if(style.textOverflow!=='ellipsis' || style.overflowX!=='hidden' || style.whiteSpace!=='nowrap') problems.push('window status does not ellipsize');
+     if(status.scrollWidth<=status.clientWidth) problems.push('injected status did not overflow');
+    } else if(shown.length!==1) problems.push('New window is not visible');
+    return problems;
+   },plusOnly);
+  }
+  async function checkHeaderMatrix(target, label) {
+   const output='/private/tmp/omp-shots/final4';
+   fs.mkdirSync(output,{recursive:true});
+   const sizes=[[320,600],[390,844],[480,800],[768,900],[900,720],[1039,768],[1280,720],[1440,900],[1919,883]];
+   await target.locator('.xterm-helper-textarea').focus();
+   await target.keyboard.press('Control+Alt+Shift+T');
+   assert.ok(await target.locator('#workspace-tools > summary').evaluate(node=>node===document.activeElement),`${label} toolbar shortcut focuses the visible disclosure`);
+   const longStatus='A deliberately long window status message to test clipping and layout '.repeat(8);
+   // Recreate the old fixed overlay only in this page, then prove the same
+   // geometry detector catches it. No source or built CSS is changed.
+   await target.setViewportSize({width:1280,height:720});
+   await target.locator('#window-tabs-status').evaluate((node,text)=>{
+    window.__headerOriginalStatus=node.textContent; node.textContent=text;
+    window.__headerStatusObserver=new MutationObserver(()=>{if(node.textContent!==text) node.textContent=text;});
+    window.__headerStatusObserver.observe(node,{childList:true,characterData:true,subtree:true});
+    node.style.cssText='pointer-events:none;position:fixed;top:0;left:84px;right:200px;height:var(--workspace-toolbar-height);box-sizing:border-box;z-index:10;padding:0 8px;background:var(--panel);color:var(--text);font:12px/var(--workspace-toolbar-height) system-ui;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+   },longStatus);
+   const regression=await headerGeometry(target);
+   assert.ok(regression.some(problem=>problem.includes('intersects')),`old fixed overlay must cause a detected intersection: ${regression.join('; ')}`);
+   assert.throws(()=>assert.deepEqual(regression,[]),{name:'AssertionError'},'the normal geometry assertion fails with the old fixed CSS');
+   console.log(`Old fixed overlay regression (${label}): ${regression.join('; ')}`);
+   await target.locator('#window-tabs-status').evaluate(node=>{window.__headerStatusObserver.disconnect();node.removeAttribute('style');node.textContent=window.__headerOriginalStatus;delete window.__headerStatusObserver;delete window.__headerOriginalStatus;});
+   for(const theme of ['light','dark']) for(const [width,height] of sizes) {
+    await target.emulateMedia({colorScheme:theme}); await target.setViewportSize({width,height});
+    await target.waitForFunction(()=>window.term?._core?._renderService?.dimensions?.css?.cell?.height>0);
+    const tools=target.locator('#workspace-tools'), plus=target.locator('#remote-toolbar [data-key="c"]');
+    if(await tools.evaluate(node=>node.open)) await tools.locator(':scope > summary').click();
+    await tools.locator(':scope > summary').click();
+    if(label==='absent') {
+     assert.ok(await plus.isHidden() || await plus.isDisabled(),'New window is hidden or disabled when controls are absent');
+     if(await plus.isVisible()) assert.ok(await plus.getAttribute('title'),'disabled New window explains why');
+    } else {
+     assert.ok(await plus.isVisible() && !await plus.isDisabled(),'New window is reachable and enabled through Workspace tools');
+     for(const disabled of [false,true]) {
+      await plus.evaluate((node,value)=>{node.disabled=value;},disabled);
+      const problems=await headerGeometry(target,true);
+      assert.deepEqual(problems,[],`${label} ${theme} ${width} New window disabled=${disabled}: ${problems.join('; ')}`);
+      await target.waitForFunction(()=>![...document.querySelectorAll('.xterm > div')].some(node=>/^\d+x\d+$/.test(node.textContent.trim())));
+      await target.screenshot({path:path.join(output,`${label}-plus-${disabled?'disabled':'enabled'}-${width}x${height}-${theme}.png`)});
+     }
+     await plus.evaluate(node=>{node.disabled=false;});
+    }
+    await tools.locator(':scope > summary').click();
+    await target.locator('#window-tabs-status').evaluate((node,text)=>{
+     window.__headerOriginalStatus=node.textContent;
+     node.textContent=text;
+     window.__headerStatusObserver=new MutationObserver(()=>{if(node.textContent!==text) node.textContent=text;});
+     window.__headerStatusObserver.observe(node,{childList:true,characterData:true,subtree:true});
+    },longStatus);
+    const problems=await headerGeometry(target);
+    assert.deepEqual(problems,[],`${label} ${theme} ${width}: ${problems.join('; ')}`);
+    await tools.locator(':scope > summary').click();
+    for(const disabled of label==='present' ? [false,true] : [false]) {
+     if(label==='present') await plus.evaluate((node,value)=>{node.disabled=value;},disabled);
+     const openProblems=await headerGeometry(target);
+     assert.deepEqual(openProblems,[],`${label} ${theme} ${width} tools open disabled=${disabled}: ${openProblems.join('; ')}`);
+    }
+    if(label==='present') await plus.evaluate(node=>{node.disabled=false;});
+    await tools.locator(':scope > summary').click();
+    await target.locator('#window-tabs-status').evaluate(node=>{window.__headerStatusObserver.disconnect();node.textContent=window.__headerOriginalStatus;delete window.__headerStatusObserver;delete window.__headerOriginalStatus;});
+    await target.waitForFunction(()=>![...document.querySelectorAll('.xterm > div')].some(node=>/^\d+x\d+$/.test(node.textContent.trim())));
+    await target.screenshot({path:path.join(output,`${label}-${width}x${height}-${theme}.png`)});
+   }
+  }
   async function assertSwitcherRace() {
   let releaseSelection,selectionIntercepted; const selectionGate=new Promise(resolve=>{releaseSelection=resolve;}),selectionStarted=new Promise(resolve=>{selectionIntercepted=resolve;});
   await page.route('**/__terminal_upload',async route=>{if(route.request().headers()['x-terminal-action']==='select-window'){selectionIntercepted();await selectionGate;}await route.continue();});
@@ -113,9 +251,46 @@ async function stop(child, cleanup = false) {
   assert.equal(tmux('show-options', '-Av', '-t', '=workspace:', 'status'), 'on');
   await page.route('**/__terminal_upload', route => route.request().headers()['x-terminal-action'] === 'windows' ? route.fulfill({status:503, body:'{}'}) : route.continue());
   await page.waitForFunction(() => document.querySelector('#window-tabs').hidden);
+  assert.match(await page.locator('#window-tabs-status').textContent(), /Windows unavailable/, 'a previously reachable control service failure warns');
   assert.equal(tmux('show-options', '-Av', '-t', `=${await view()}:`, 'status'), 'on');
   await page.unroute('**/__terminal_upload'); await page.waitForSelector('#window-tabs:not([hidden])');
   assert.equal(tmux('show-options', '-Av', '-t', `=${await view()}:`, 'status'), 'off');
+  await checkChromeAndCapture(page,'present');
+  await checkHeaderMatrix(page,'present');
+  const absent = await context.newPage();
+  await absent.route('**/__terminal_upload', route => route.fulfill({status:404, contentType:'text/plain', body:'Not Found'}));
+  await absent.goto(origin);
+  await absent.waitForFunction(()=>window.webTerminalConnectionState==='connected' && window.webTerminalTarget);
+  await absent.waitForFunction(()=>[...document.querySelectorAll('#terminal-diagnostics p')].some(p=>p.textContent==='Window controls: not provided on this host' && !p.hidden));
+  assert.ok(await absent.locator('#window-tabs').isHidden(), 'no browser tabs without a control service');
+  assert.doesNotMatch(await absent.locator('#window-tabs-status').textContent(), /Windows unavailable/, 'no unavailable warning without a control service');
+  await absent.locator('#workspace-tools > summary').click(); await absent.locator('#terminal-diagnostics > summary').click();
+  assert.ok(await absent.getByText('Window controls: not provided on this host',{exact:true}).isVisible(),'absence explained in Details');
+  await absent.locator('#workspace-tools > summary').click();
+  const absentView=await absent.evaluate(()=>window.webTerminalTarget.session);
+  const absentPane=await absent.evaluate(()=>window.webTerminalTarget.pane);
+  assert.equal(tmux('show-options','-Av','-t',`=${absentView}:`,'status'),'on','native tmux status stays visible');
+  await absent.locator('.xterm-helper-textarea').focus();
+  await absent.keyboard.type('echo HEADER_FIXTURE_INPUT_OK'); await absent.keyboard.press('Enter');
+  const outputReceived=()=>/^HEADER_FIXTURE_INPUT_OK\s*$/m.test(tmux('capture-pane','-p','-J','-t',absentPane));
+  for(let i=0;i<100 && !outputReceived();i++) await sleep(30);
+  assert.ok(outputReceived(),'terminal input executes in tmux without window controls');
+  await checkChromeAndCapture(absent,'absent'); await checkHeaderMatrix(absent,'absent'); await absent.close();
+  for (const reply of [{status:405,contentType:'text/plain',body:'Method Not Allowed'},{status:200,contentType:'application/json',body:'<html>not a control service</html>'}]) {
+   const probe=await context.newPage(); await probe.route('**/__terminal_upload', route=>route.fulfill(reply)); await probe.goto(origin);
+   await probe.waitForFunction(()=>[...document.querySelectorAll('#terminal-diagnostics p')].some(p=>p.textContent==='Window controls: not provided on this host' && !p.hidden));
+   assert.ok(await probe.locator('#window-tabs').isHidden()); assert.doesNotMatch(await probe.locator('#window-tabs-status').textContent(),/Windows unavailable/); await probe.close();
+  }
+  const touchContext=await browser.newContext({viewport:{width:390,height:844},hasTouch:true,isMobile:true});
+  const touch=await touchContext.newPage(); await touch.goto(origin); await touch.waitForSelector('#window-tabs:not([hidden])');
+  assert.equal(await touch.evaluate(()=>matchMedia('(pointer: coarse)').matches),true,'touch fixture uses a coarse pointer');
+  for(const selector of ['#workspace-tools > summary','#all-windows','.window-tab [data-action=select]','.window-tab [data-action=hide]','.window-tab [data-action=menu]']) {
+   const box=await touch.locator(selector).first().boundingBox(); assert.ok(box && box.width>=44 && box.height>=44,`${selector} has a 44px touch target`);
+  }
+  await touch.locator('#workspace-tools > summary').click();
+  const newWindowBox=await touch.getByRole('button',{name:'New window'}).boundingBox();
+  assert.ok(newWindowBox && newWindowBox.width>=44 && newWindowBox.height>=44,'New window retains a 44px target in Workspace tools');
+  await touchContext.close();
 
   await page.waitForFunction(() => window.term.modes.mouseTrackingMode !== 'none');
   const contextMenu = (target, options = {}) => page.evaluate(({target, options}) => {
@@ -146,9 +321,9 @@ async function stop(child, cleanup = false) {
   await page.waitForFunction(() => document.querySelectorAll('#window-tab-list .window-tab').length === 30);
   assert.equal(tmux('list-windows', '-t', '=workspace:', '-F', '#{window_id}').split('\n').length, 30);
   const runningJobPid=tmux('display-message','-p','-t',windows[27],'#{pane_pid}');
-  const draft = `printf DO_NOT_EXECUTE > ${path.join(dir,'draft-was-submitted')}`;
+  const draft = 'echo DO_NOT_EXECUTE > p';
   tmux('send-keys', '-t', firstPane, '-l', draft);
-  const preserved = () => { assert.equal(tmux('display-message', '-p', '-t', firstPane, '#{pane_pid}'), firstPid); assert.ok(tmux('capture-pane', '-p', '-J', '-t', firstPane).includes('DO_NOT_EXECUTE')); assert.ok(!fs.existsSync(path.join(dir,'draft-was-submitted'))); assert.equal(tmux('display-message','-p','-t',windows[27],'#{pane_pid}'),runningJobPid,'active sleep job survives hide/restore/reconnect'); };
+  const preserved = () => { assert.equal(tmux('display-message', '-p', '-t', firstPane, '#{pane_pid}'), firstPid); assert.ok(tmux('capture-pane', '-p', '-J', '-t', firstPane).includes('DO_NOT_EXECUTE')); assert.ok(!fs.existsSync(path.join(dir,'p'))); assert.equal(tmux('display-message','-p','-t',windows[27],'#{pane_pid}'),runningJobPid,'active sleep job survives hide/restore/reconnect'); };
 
   for (const [width,height,name] of [[1440,900,'desktop1440'],[1280,800,'desktop1280'],[768,1024,'tablet768'],[390,844,'mobile390'],[640,400,'zoom200-equivalent'],[390,450,'mobile-compact-height']]) {
    await page.setViewportSize({width,height}); await choose(windows[29]);

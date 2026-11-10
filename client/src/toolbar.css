@@ -1,17 +1,17 @@
-:root { --workspace-toolbar-height:50px; --workspace-status-height:30px; }
-#remote-toolbar { height:var(--workspace-toolbar-height); box-sizing:border-box; display:flex; align-items:center; gap:10px; padding:0 12px; background:var(--panel); color:var(--text); font:12px system-ui,sans-serif; white-space:nowrap; min-width:0; }
+:root { --workspace-toolbar-height:48px; --workspace-status-height:0px; }
+#remote-toolbar { position:relative; height:calc(var(--workspace-toolbar-height) + var(--workspace-status-height)); box-sizing:border-box; display:flex; align-items:center; gap:12px; padding:0 16px var(--workspace-status-height); background:var(--panel); color:var(--text); border-bottom:1px solid var(--border); font:12px system-ui,sans-serif; white-space:nowrap; min-width:0; }
 #remote-toolbar > span:first-child { color:var(--text); font-weight:600; }
 #remote-toolbar button, #workspace-tools summary { min-height:32px; box-sizing:border-box; padding:0 10px; border:1px solid var(--border); border-radius:5px; background:var(--control); color:var(--text); font:inherit; cursor:pointer; }
 #remote-toolbar button:focus-visible, #workspace-tools summary:focus-visible { outline:2px solid var(--focus); outline-offset:-2px; }
 #remote-toolbar > [data-key=c] { width:32px; padding:0; font-size:22px; }
-#remote-toolbar > #connection-status { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; color:var(--muted); font-size:12px; }
+#remote-toolbar > #connection-status { min-width:0; flex:0 1 auto; max-width:120px; overflow:hidden; text-overflow:ellipsis; color:var(--muted); font-size:12px; }
 #connection-retry[hidden] { display:none; }
 #workspace-tools { margin-left:auto; flex:none; }
 #workspace-tools > summary { display:flex; align-items:center; list-style:none; }
 #workspace-tools > summary::-webkit-details-marker { display:none; }
 #workspace-tools > summary::after { content:'⌄'; margin-left:7px; }
 #workspace-tools[open] > summary { background:var(--active); }
-#workspace-tools .workspace-tools-panel { position:fixed; z-index:40; right:8px; top:var(--workspace-toolbar-height); width:min(360px,calc(100vw - 16px)); max-height:calc(100dvh - var(--workspace-toolbar-height) - 12px); overflow:auto; display:flex; flex-wrap:wrap; align-items:center; gap:8px; box-sizing:border-box; padding:14px; border:1px solid var(--border); border-radius:8px; background:var(--panel); box-shadow:0 12px 36px rgb(0 0 0 / 50%); white-space:normal; }
+#workspace-tools .workspace-tools-panel { position:fixed; z-index:40; right:8px; top:calc(var(--workspace-toolbar-height) + var(--workspace-status-height) + var(--window-tabs-height,0px)); width:min(360px,calc(100vw - 16px)); max-height:calc(100dvh - var(--workspace-toolbar-height) - var(--workspace-status-height) - var(--window-tabs-height,0px) - 12px); overflow:auto; display:flex; flex-wrap:wrap; align-items:center; gap:8px; box-sizing:border-box; padding:14px; border:1px solid var(--border); border-radius:8px; background:var(--panel); box-shadow:0 12px 36px rgb(0 0 0 / 50%); white-space:normal; }
 #workspace-tools:not([open]) .workspace-tools-panel { display:none; }
 #active-target, #scroll-status, #scroll-notice { color:var(--muted); font-size:12px; }
 #terminal-diagnostics { width:100%; }
@@ -39,17 +39,18 @@
 #window-tabs button:disabled { cursor:default; }
 #all-windows { flex:none; padding:0 12px; border-left:1px solid var(--border) !important; font-size:12px !important; }
 #all-windows:hover { background:var(--hover); }
-#window-tabs-status { pointer-events:none; position:fixed; top:0; left:70px; right:200px; height:var(--workspace-toolbar-height); box-sizing:border-box; z-index:10; padding:0 8px; background:var(--panel); color:var(--text); font:12px/var(--workspace-toolbar-height) system-ui; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#window-tabs-status { flex:0 1 200px; min-width:0; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text); font:12px system-ui,sans-serif; }
 #window-tabs-status:empty { display:none; }
-#workspace-status { height:30px; box-sizing:border-box; display:flex; align-items:center; gap:16px; min-width:0; overflow-x:auto; overflow-y:hidden; padding:0 12px; background:var(--panel); color:var(--text); border-bottom:1px solid var(--border); font:12px system-ui,sans-serif; white-space:nowrap; }
+#workspace-status { box-sizing:border-box; display:flex; flex:1 1 auto; align-items:center; gap:16px; min-width:0; overflow:hidden; color:var(--text); font:12px system-ui,sans-serif; white-space:nowrap; }
 #workspace-status[hidden] { display:none; }
 #workspace-status:focus-visible { outline:2px solid var(--focus); outline-offset:-2px; }
-.workspace-status-item { flex:none; display:inline-flex; align-items:center; }
-@media (max-width:520px) {
-  #workspace-status { height:62px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); grid-template-rows:repeat(2,minmax(0,1fr)); gap:0 8px; overflow:hidden; white-space:normal; line-height:15px; }
-  .workspace-status-item { min-width:0; display:block; }
-  #status-session { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.workspace-status-item { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+@media (max-width:899px) {
+  :root { --workspace-status-height:62px; }
+  #workspace-status { position:absolute; top:var(--workspace-toolbar-height); left:0; right:0; height:var(--workspace-status-height); display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); grid-template-rows:repeat(2,minmax(0,1fr)); gap:0 12px; padding:0 16px; line-height:15px; }
+  .workspace-status-item { white-space:normal; }
   #status-session .workspace-status-process { display:none; }
+  #status-session { white-space:nowrap; }
 }
 #window-empty-state { position:fixed; z-index:2; inset:calc(var(--workspace-toolbar-height) + var(--window-tabs-height,0px) + var(--workspace-status-height)) 0 0; display:grid; align-content:center; justify-items:center; box-sizing:border-box; padding:24px; text-align:center; background:var(--bg); color:var(--text); font:14px system-ui; }
 #window-empty-state[hidden] { display:none; }
@@ -92,13 +93,12 @@
   #all-windows { min-width:72px; }
   #workspace-tools .workspace-tools-panel button, #workspace-tools .workspace-tools-panel summary, #window-tab-menu button, #window-switcher button, #close-window-dialog button, #rename-window-dialog button, #window-empty-state button { min-height:44px; }
 }
-@media (max-width:480px) { #remote-toolbar { gap:6px; padding-inline:8px; } #workspace-tools > summary { padding-inline:7px; } #all-windows { padding-inline:8px; } .window-tab { max-width:180px; } #window-switcher, #close-window-dialog, #rename-window-dialog { padding:14px; } }
+@media (max-width:480px) { #remote-toolbar { gap:6px; } #workspace-tools > summary { padding-inline:7px; } #all-windows { padding-inline:8px; } .window-tab { max-width:180px; } #window-switcher, #close-window-dialog, #rename-window-dialog { padding:14px; } }
 /* Settings now live inside the tools disclosure rather than over its trigger. */
 #workspace-tools .display-controls { width:100%; }
 #workspace-tools .display-controls summary { min-height:32px; padding:7px 9px; }
 #workspace-tools .display-controls section { position:static; width:100%; max-width:100%; margin-top:6px; padding:10px; z-index:auto; }
 
-@media (max-width:480px) { #window-tabs-status { left:58px; right:168px; } }
 @media (pointer:coarse) {
   #workspace-tools .display-controls summary, #window-switcher .window-result-actions button { min-height:44px; }
 }

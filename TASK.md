@@ -1,5 +1,13 @@
 # Web Terminal Tasks
 
+**Mac header overlap follow-up (2026-11-10):** Window status now occupies a shrinkable, ellipsized live region in the toolbar instead of a fixed overlay. Workspace tools opens below the header and tab strip; New window is hidden when the control endpoint is absent and remains available in Workspace tools when present. The toolbar keyboard shortcut focuses the disclosure when appropriate. This candidate is not deployed.
+
+The root Node suite passed 54 tests and the inline build passed with existing Browserslist and Node deprecation warnings. The built-page Chromium/ttyd/tmux fixture passed the nine-width, light/dark geometry matrix with control present and absent, long status, and enabled/disabled New window, including the open tools panel. Injecting the old fixed CSS produced the expected intersection and hit-test failures. The 72 built-page captures, including enabled/disabled disclosure states, were visually reviewed under `/private/tmp/omp-shots/final4/`. Physical touch, Safari/VoiceOver, live deployment and owner acceptance remain unverified.
+
+**Mac header polish candidate (2026-11-10):** The desktop chrome combines the title and four status indicators in one 48px row; below 900px the indicators use a two-row grid. New window remains in Workspace tools. An initial 404, 405 or successful non-JSON window-list response is treated as an absent control service, with native tmux status retained and an explanation in Details. A failure after a reachable list still warns and requests native-status restoration. This candidate is not deployed.
+
+The root Node suite passed 54 tests and the inline build passed with existing Browserslist and Node deprecation warnings. The built-client Chromium/ttyd/tmux fixture passed with 30 windows, including absent-control terminal input, later control failure, tab lifecycle, disconnect/reconnect, coarse-pointer target sizes, and light/dark viewport and terminal-row fit checks. It verified text-token contrast of at least 4.5:1 against the relevant panel/control colors. Sixteen built-page captures at 1919×883, 1280×720, 768×1024 and 390×844, with controls present and absent in both themes, were inspected under `/private/tmp/omp-shots/final3/`. Physical touch, Safari/VoiceOver, live deployment and owner acceptance remain unverified.
+
 **Linux and Mac UI redesign candidate (2026-11-10):** The Linux UI serves the
 shared status assets through explicit routes and reports connection, session,
 input and sharing separately. Its compact session strip preserves the sidebar

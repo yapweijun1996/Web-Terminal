@@ -81,13 +81,6 @@
             node.setAttribute('aria-label', `${label}: ${item.label}. ${item.detail}`);
         }
     }
-    function layoutWorkspaceStatus() {
-        const height = `${workspaceStatus.getBoundingClientRect().height}px`;
-        if (document.documentElement.style.getPropertyValue('--workspace-status-height') !== height) {
-            document.documentElement.style.setProperty('--workspace-status-height', height);
-            window.term?.fit();
-        }
-    }
     window.addEventListener('web-terminal-active-window', e => {
         activeWindow = e.detail;
         renderWorkspaceStatus();
@@ -169,10 +162,7 @@
     showConnection(window.webTerminalConnectionState || 'connecting');
     showTarget(window.webTerminalTarget);
     document.body.prepend(bar);
-    bar.after(workspaceStatus);
-    if (typeof ResizeObserver === 'function') new ResizeObserver(layoutWorkspaceStatus).observe(workspaceStatus);
-    addEventListener('resize', layoutWorkspaceStatus);
-    layoutWorkspaceStatus();
+    bar.append(workspaceStatus);
     const mobileKeys = window.createMobileKeys({
         getTerminal: () => window.mbaTerminalReady?.() && window.webTerminalTarget ? window.term : null,
         getTargetKey: () => {
@@ -220,7 +210,9 @@
         if (e.code !== 'KeyT' || !e.altKey || !e.shiftKey || !e.ctrlKey || e.metaKey || document.activeElement !== window.term?.textarea) return;
         e.preventDefault();
         e.stopImmediatePropagation();
-        keyboardReturn.focus();
+        const tools = document.getElementById('workspace-tools');
+        if (tools && (!tools.open || keyboardReturn.hidden)) tools.querySelector('summary').focus();
+        else keyboardReturn.focus();
     }, true);
     bar.addEventListener('click', e => {
         const btn = e.target.closest('button[data-key]');

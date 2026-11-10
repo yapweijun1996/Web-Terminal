@@ -5,6 +5,7 @@
     let windows = [], scope = '', preferences = {}, available = false, busy = false, polling = false;
     let endSnapshot = null, renameId = null, draggedId = null, storageWarning = '', actionError = '', lastSignature = '', switcherGeneration = 0;
     let targetGeneration = 0, lastTarget = targetKey(window.webTerminalTarget), lastActiveSignature, pendingTabFocus = null;
+    let firstListProbe = true, controlsNotProvided = false;
     function targetKey(target) {
         return target && [target.session, target.sessionId, target.serverPid, target.windowIndex, target.pane].join('|');
     }
@@ -30,21 +31,21 @@
     // Move existing controls intact so their handlers and upload integration stay owned there.
     const tools = el('details', {id:'workspace-tools'}), panel = el('section', {class:'workspace-tools-panel', 'aria-label':'Workspace tools'});
     tools.append(el('summary', {}, 'Workspace tools'), panel);
-    const keep = node => node === tools || node.id === 'connection-status' || node.matches('button[data-key="c"]') || node === bar.firstElementChild;
+    const keep = node => node === tools || node.id === 'workspace-status' || node.id === 'window-tabs-status' || node === bar.firstElementChild;
     const compact = () => { for (const node of [...bar.children]) if (!keep(node)) panel.append(node); };
     bar.append(tools); compact(); new MutationObserver(compact).observe(bar, {childList:true});
     const newButton = bar.querySelector('[data-key="c"]');
-    newButton.textContent = '+'; newButton.setAttribute('aria-label', 'New window'); newButton.title = 'New terminal window';
+    newButton.textContent = 'New window'; newButton.setAttribute('aria-label', 'New window'); newButton.title = 'New terminal window';
     const tabs = el('nav', {id:'window-tabs', 'aria-label':'Terminal window tabs'});
     const list = el('div', {id:'window-tab-list', role:'tablist', 'aria-label':'Visible terminal windows'});
     const all = button('All windows', 'all'); all.id = 'all-windows'; all.setAttribute('aria-keyshortcuts', 'Control+Alt+P');
     const status = el('span', {id:'window-tabs-status', role:'status', 'aria-live':'polite'});
-    tabs.append(list, all); bar.after(tabs); document.body.append(status); tabs.hidden = true;
+    tabs.append(list, all); bar.after(tabs); bar.insertBefore(status, tools); tabs.hidden = true;
     const empty = el('section', {id:'window-empty-state', hidden:''});
     empty.append(el('h2', {}, 'All tabs hidden'), el('p', {}, 'Your windows and tasks are still attached. Restore a tab to view it.'), button('All windows', 'all'));
-    const workspaceStatus = document.getElementById('workspace-status');
-    tabs.after(workspaceStatus);
-    workspaceStatus.after(empty);
+    tabs.after(empty);
+    const controlsDetail = el('p', {hidden:''}, 'Window controls: not provided on this host');
+    document.querySelector('#terminal-diagnostics section').append(controlsDetail);
     const switcher = el('dialog', {id:'window-switcher', 'aria-labelledby':'window-switcher-title'});
     switcher.innerHTML = '<header><h2 id="window-switcher-title">All windows</h2><button type="button" data-dismiss aria-label="Close window switcher">×</button></header><p class="window-help">Switch or restore a hidden tab. Hiding keeps its tasks running.</p><input id="window-search" type="search" aria-label="Search windows" placeholder="Search name, process or number"><div id="window-results"></div><p data-switcher-status role="status"></p>';
     const search = switcher.querySelector('#window-search'), results = switcher.querySelector('#window-results');
@@ -77,14 +78,23 @@
     const ordered = () => [...windows].sort((a,b) => Number(pref(b.id).pinned)-Number(pref(a.id).pinned) || pref(a.id).order-pref(b.id).order || Number(a.index)-Number(b.index));
     const name = item => pref(item.id).name || item.name;
     const processName = item => item.process || 'process unknown';
-    async function request(action, target, id) {
+    async function request(action, target, id, firstProbe = false) {
         const controller = new AbortController(), timeout = setTimeout(() => controller.abort(),5000);
         try {
             const response = await fetch('/__terminal_upload', {method:'POST', cache:'no-store', redirect:'manual', signal:controller.signal,
                 headers:{'X-Terminal-Action':action, 'X-Terminal-View':window.webTerminalViewId, 'X-Terminal-Session':target.session, 'X-Terminal-Session-Id':target.sessionId, 'X-Terminal-Pane':target.pane, 'X-Terminal-Server-Pid':target.serverPid,
                     ...(action === 'windows' ? {'X-Terminal-Tabs':'browser'} : {}), ...(id ? {'X-Terminal-Window':id} : {})}});
+            if (firstProbe && (response.status === 404 || response.status === 405)) {
+                const error = Error('Window controls not provided'); error.controlsNotProvided = true; throw error;
+            }
             if (!response.ok) throw Error('Window unavailable. Refresh and confirm again. Keep at least one window open.');
-            const result = await response.json(); if (action === 'native-tabs') return result;
+            let result;
+            if (firstProbe) {
+                const text = await response.text();
+                try { result = JSON.parse(text); }
+                catch { const error = Error('Window controls not provided'); error.controlsNotProvided = true; throw error; }
+            } else result = await response.json();
+            if (action === 'native-tabs') return result;
             if (!Array.isArray(result.windows) || !result.windows.length || result.windows.some(item => !/^@\d+$/.test(item.id) || !/^\d+$/.test(item.index) || typeof item.name !== 'string' || typeof item.active !== 'boolean')) throw Error('Window list unavailable');
             return result.windows;
         } finally { clearTimeout(timeout); }
@@ -111,7 +121,9 @@
     function state() {
         emitActiveWindow();
         tabs.dataset.connection = available && ready() ? 'connected' : 'disconnected';
-        status.textContent = actionError || storageWarning || (busy ? 'Switching window…' : '') || (available && ready() ? '' : 'Windows unavailable');
+        controlsDetail.hidden = !controlsNotProvided;
+        newButton.hidden = controlsNotProvided;
+        status.textContent = actionError || storageWarning || (busy ? 'Switching window…' : '') || (available && ready() || controlsNotProvided ? '' : 'Windows unavailable');
         const statusDetail = status.textContent === 'Windows unavailable' ? 'Windows unavailable — tasks may still be running.' : status.textContent;
         status.title = statusDetail;
         status.setAttribute('aria-label', statusDetail);
@@ -253,7 +265,7 @@
         finally { busy = false; cancel.disabled = false; state(); }
     });
     window.addEventListener('keydown',event => {
-        if (event.metaKey || !event.ctrlKey || !event.altKey || event.shiftKey || !['ArrowLeft','ArrowRight','KeyW','KeyP'].includes(event.code) || document.querySelector('dialog[open]')) return;
+        if (controlsNotProvided || event.metaKey || !event.ctrlKey || !event.altKey || event.shiftKey || !['ArrowLeft','ArrowRight','KeyW','KeyP'].includes(event.code) || document.querySelector('dialog[open]')) return;
         event.preventDefault(); event.stopImmediatePropagation();
         if (event.code === 'KeyP') return openSwitcher();
         if (event.code === 'KeyW') { if (currentId()) hideWindow(currentId()); return; }
@@ -268,15 +280,16 @@
         if (visible[index]) selectWindow(visible[index].id,true);
     });
     async function refresh() {
-        if (polling || !ready()) return;
-        polling = true; const target = {...window.webTerminalTarget}, generation = targetGeneration;
+        if (polling || controlsNotProvided || !ready()) return;
+        polling = true; const target = {...window.webTerminalTarget}, generation = targetGeneration, firstProbe = firstListProbe;
+        firstListProbe = false;
         try {
-            const response = await request('windows',target);
+            const response = await request('windows',target,undefined,firstProbe);
             if (generation === targetGeneration && ready() && targetKey(target) === targetKey(window.webTerminalTarget)) { if (scope !== target.serverPid) load(target.serverPid); windows = response; available = true; tabs.hidden = false; actionError = ''; render(); }
-        } catch {
+        } catch (error) {
             if (generation === targetGeneration) {
                 await request('native-tabs',target).catch(() => {});
-                if (generation === targetGeneration) { available = false; tabs.hidden = true; layout(); state(); }
+                if (generation === targetGeneration) { controlsNotProvided = error.controlsNotProvided === true; available = false; tabs.hidden = true; layout(); state(); }
             }
         } finally {
             polling = false;
