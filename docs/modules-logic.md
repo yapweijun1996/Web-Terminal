@@ -102,6 +102,6 @@ Three servers on private owner-only sockets: public, approval and grant-verifier
 - `/oauth/token` returns `invalid_request` for every failure, where standard OAuth would use `invalid_grant` for bad codes.
 - `terminal_job_start`'s `storage_class` is accepted and ignored.
 - `runtime/tmux.conf` appears to apply only to the Mac path; `linux/ui/attach-tab.sh` does not load it.
-- The scans did not locate where `window.webTerminalViewId` is set on the Mac client.
+- Resolved: `window.webTerminalViewId` is set in `client/src/components/app.tsx` to a fresh `crypto.randomUUID()` per page load (empty string if unavailable, in which case uploads are saved but not auto-inserted).
 - Windows CSRF token is process-wide; identity is enforced by the Access JWT.
-- `consent-ui.mjs`'s `styleCspHeaders` export is not used by `server.mjs`, which has its own CSP (not confirmed elsewhere).
+- `consent-ui.mjs`'s `styleCspHeaders` export is used only by `consent-ui.test.mjs` and `consent-fixture.mjs`; `server.mjs` builds its own CSP, so tests and the live gateway do not share one header definition.
