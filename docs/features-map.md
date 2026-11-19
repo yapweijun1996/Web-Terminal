@@ -1,6 +1,6 @@
 # Features map
 
-Map of what the repository source implements, by component. It was derived from a source scan on 2026-11-19 (entry points, routes, tool registrations, tests). It describes source, not deployment: the Linux and Mac services are deployed separately and may differ from this tree. See [architecture](architecture.md) and the [MCP connection runbook](mcp-connection-runbook.md) for deployment and trust boundaries.
+Map of what the repository source implements, by component. It was derived from a source scan on 2026-11-19 (entry points, routes, tool registrations, tests). It describes source, not deployment: the Linux and Mac services are deployed separately and may differ from this tree. See [architecture](architecture.md) and the [MCP connection runbook](mcp-connection-runbook.md) for deployment and trust boundaries. Detailed per-module logic, limits and open points are in [modules-logic.md](modules-logic.md).
 
 ## Components at a glance
 
