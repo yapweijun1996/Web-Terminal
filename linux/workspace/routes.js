@@ -25,7 +25,9 @@ const RESPONSE_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
 };
 const ERROR_STATUS = new Map([
+  ['authority_unavailable', 401],
   ['forbidden', 403],
+  ['terminal_limit', 409],
   ['body_too_large', 413],
   ['invalid_json', 400],
   ['invalid_body', 400],
@@ -86,7 +88,7 @@ async function readBody(req, limit, allowEmpty) {
   return body;
 }
 
-function createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRequest, maxBodyBytes = 16384 }) {
+function createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRequest, terminal, maxBodyBytes = 16384 }) {
   const histories = new Map();
 
   function listSessions() {
@@ -163,7 +165,7 @@ function createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRe
     stream.send();
   }
 
-  async function startSession({ rootId, relPath, agent, resumeSessionId, github }) {
+  async function startSession({ rootId, relPath, agent, resumeSessionId, github }, ownerId) {
     if (agent !== 'claude' && agent !== 'codex') throw routeError('invalid_agent');
     listSessions();
 
@@ -187,7 +189,7 @@ function createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRe
 
     let sessionId;
     try {
-      ({ sessionId } = sessionManager.start({ rootId, relPath, agent, resumeSessionId }));
+      ({ sessionId } = sessionManager.start({ rootId, relPath, agent, resumeSessionId, ...(ownerId === undefined ? {} : { ownerId }) }));
     } catch (error) {
       if (managed && githubWorkspace.cleanupWorkspace) {
         try {
@@ -210,14 +212,30 @@ function createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRe
     const history = req.method === 'GET' && pathname === `${PREFIX}/history`;
     const list = req.method === 'GET' && pathname === `${PREFIX}/sessions`;
     const create = req.method === 'POST' && pathname === `${PREFIX}/sessions`;
+    const terminalCreate = req.method === 'POST' && pathname === `${PREFIX}/terminal`;
+    const terminalDelete = req.method === 'DELETE' && /^\/api\/workspace\/terminal\/(web-[a-f0-9]{12})$/.exec(pathname);
     const sessionRoute = /^\/api\/workspace\/sessions\/([A-Za-z0-9_-]+)\/(messages|stop|events|approvals\/([A-Za-z0-9_-]+))$/.exec(pathname);
     const [, sessionId, action, approvalId] = sessionRoute ?? [];
     const sessionMethod = action === 'events' ? 'GET' : 'POST';
-    if (!projects && !history && !list && !create && (!sessionRoute || req.method !== sessionMethod)) return false;
+    if (terminalCreate || terminalDelete) {
+      if (!terminal) return false;
+    } else if (!projects && !history && !list && !create && (!sessionRoute || req.method !== sessionMethod)) return false;
 
     try {
       if (req.method !== 'GET' && !await checkRequest(req)) throw routeError('forbidden');
-      if (projects) {
+      if (terminalCreate) {
+        const ownerId = await terminal.owner(req);
+        const body = await readBody(req, Math.min(maxBodyBytes, 4096), false);
+        const terminalId = terminal.open(ownerId, req.headers['x-workspace-session'], body);
+        sendJson(res, 201, { terminalId });
+      } else if (terminalDelete) {
+        const ownerId = await terminal.owner(req);
+        if (req.headers['transfer-encoding'] !== undefined || Number(req.headers['content-length'] ?? 0) !== 0) {
+          throw routeError('invalid_body');
+        }
+        terminal.remove(ownerId, terminalDelete[1]);
+        sendJson(res, 200, { ok: true });
+      } else if (projects) {
         sendJson(res, 200, {
           projects: roots.map(({ id, label }) => ({ id, label, folders: listProjects(roots, id) })),
         });
@@ -240,7 +258,8 @@ function createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRe
         const routeCap = create ? 4096 : action === 'messages' ? 65536 : 1024;
         const body = await readBody(req, Math.min(maxBodyBytes, routeCap), action === 'stop');
         if (create) {
-          sendJson(res, 201, await startSession(body));
+          const ownerId = await terminal?.owner(req).catch(() => undefined);
+          sendJson(res, 201, await startSession(body, ownerId));
         } else {
           requireSession(sessionId);
           trackEvents(sessionId);
@@ -250,6 +269,7 @@ function createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRe
             }
             sessionManager.send(sessionId, body.text);
           } else if (action === 'stop') {
+            await terminal?.authorizeStop(req, sessionId);
             sessionManager.stop(sessionId);
           } else {
             if (body.decision !== 'allow' && body.decision !== 'deny') throw routeError('invalid_decision');

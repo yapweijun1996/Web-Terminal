@@ -1,13 +1,14 @@
 'use strict';
 
 const { execFile, spawn } = require('node:child_process');
+const { createHash, randomBytes } = require('node:crypto');
 const fs = require('node:fs');
 const { homedir } = require('node:os');
 const path = require('node:path');
 const { promisify } = require('node:util');
 const { buildClaudeArgs } = require('./claude-adapter');
 const github = require('./github-workspace');
-const { loadProjectRoots } = require('./project-roots');
+const { loadProjectRoots, resolveProjectPath, assertStillInsideRoot } = require('./project-roots');
 const { createSessionManager } = require('./session-manager');
 const { createWorkspaceRoutes } = require('./routes');
 
@@ -54,7 +55,139 @@ function checkCodexHome(directory) {
   }
 }
 
-function createWorkspace({ configPath, checkRequest, spawnFn = spawn, gitRunner = runGit }) {
+function terminalError(code) {
+  return Object.assign(new Error(code), { code });
+}
+
+function createWorkspaceTerminals({ service, roots, getProject }) {
+  const runtimeMarker = createHash('sha256').update(service.runtime).digest('hex').slice(0, 16);
+  const byChat = new Map();
+  const byName = new Map();
+
+  async function owner(req) {
+    try {
+      const identity = await service.verifyOwner(req);
+      if (identity?.authorized === true && typeof identity.ownerId === 'string' && identity.ownerId &&
+          Number.isSafeInteger(identity.expires) && identity.expires > Date.now()) return identity.ownerId;
+    } catch {
+      // The verifier can fail independently of the terminal server.
+    }
+    throw terminalError('authority_unavailable');
+  }
+
+  function isLive(record) {
+    return service.marker(record.name) === record.marker;
+  }
+
+  function close(record) {
+    record.active = false;
+    if (record.closed) return;
+    try {
+      service.close(record.name, record);
+    } catch (error) {
+      if (isLive(record)) throw error;
+    }
+    // Keep the owner binding so a repeated DELETE cannot target a replacement.
+    record.closed = true;
+    if (byChat.get(record.chatId) === record) byChat.delete(record.chatId);
+  }
+
+  function closeChat(chatId) {
+    const record = byChat.get(chatId);
+    if (!record) return;
+    try { close(record); } catch { /* A failed close remains blocked and can be retried. */ }
+  }
+
+  function reclaimOrphans() {
+    let snapshot;
+    try {
+      snapshot = service.tmux(['list-sessions', '-F', '#{session_name}|#{session_id}|#{pid}|#{@web-workspace-terminal}']);
+    } catch {
+      return;
+    }
+    for (const line of snapshot.trim().split('\n')) {
+      const [name, sessionId, serverPid, marker] = line.split('|');
+      if (!/^web-[a-f0-9]{12}$/.test(name) || !/^\$\d+$/.test(sessionId) || !/^\d+$/.test(serverPid) ||
+          !/^[a-f0-9]{48}$/.test(marker) || !marker.startsWith(runtimeMarker)) continue;
+      try { service.close(name, { sessionId, serverPid, marker }); } catch { /* The marker keeps orphans inaccessible. */ }
+    }
+  }
+
+  reclaimOrphans();
+  return {
+    owner,
+    open(ownerId, chatId, body) {
+      if (typeof chatId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(chatId)) throw terminalError('unknown_session');
+      const project = getProject(chatId);
+      if (project.ownerId !== ownerId) throw terminalError('forbidden');
+
+      const { rootId, relPath } = body;
+      if (Object.keys(body).length !== 2 || typeof rootId !== 'string' || typeof relPath !== 'string') {
+        throw terminalError('invalid_body');
+      }
+      const managed = project.rootId === githubRootId;
+      if (rootId === githubRootId && !managed) throw terminalError('unknown_root');
+      if (managed && (rootId !== githubRootId || (relPath !== '.' && relPath !== project.relPath))) {
+        throw terminalError('forbidden');
+      }
+      const requested = managed ? project.relPath : relPath;
+      const resolved = resolveProjectPath(roots, rootId, requested);
+      if (!resolved.ok) throw terminalError(resolved.code);
+      if (rootId !== project.rootId || requested !== project.relPath) throw terminalError('forbidden');
+      if (resolved.absolutePath !== project.absolutePath) throw terminalError('project_path_changed');
+
+      const existing = byChat.get(chatId);
+      if (existing?.active && isLive(existing)) return existing.name;
+      if (existing) close(existing);
+      if (!service.hasCapacity()) throw terminalError('terminal_limit');
+
+      let name;
+      do { name = `web-${randomBytes(6).toString('hex')}`; } while (byName.has(name));
+      const marker = runtimeMarker + randomBytes(16).toString('hex');
+      const checked = assertStillInsideRoot(roots, resolved);
+      if (!checked.ok) throw terminalError(checked.code);
+      if (checked.absolutePath !== resolved.absolutePath) {
+        throw terminalError('project_path_changed');
+      }
+      const result = service.tmux([
+        ...service.startArgs(checked.absolutePath, name),
+        '-P', '-F', '#{session_id}|#{pid}', ';', 'set-option', '-t', name, '@web-workspace-terminal', marker,
+      ]);
+      service.invalidateMetadata();
+      const [sessionId, serverPid] = result.trim().split('|');
+      const record = { name, sessionId, serverPid, marker, chatId, ownerId, active: true };
+      byChat.set(chatId, record);
+      byName.set(record.name, record);
+      return record.name;
+    },
+    remove(ownerId, name) {
+      const record = byName.get(name);
+      if (!record) throw terminalError('not_found');
+      if (record.ownerId !== ownerId) throw terminalError('forbidden');
+      close(record);
+    },
+    async authorizeStop(req, chatId) {
+      const record = byChat.get(chatId);
+      if (record && record.ownerId !== await owner(req)) throw terminalError('forbidden');
+    },
+    async binding(req, name, marker) {
+      const ownerId = await owner(req).catch(() => undefined);
+      const record = byName.get(name);
+      if (!record?.active || record.marker !== marker || record.ownerId !== ownerId) {
+        throw terminalError('AUTHORITY_UNAVAILABLE');
+      }
+      return [record.sessionId, record.serverPid, marker];
+    },
+    closeChat,
+    close() {
+      for (const record of byName.values()) {
+        try { close(record); } catch { /* Marked sessions stay inaccessible after shutdown. */ }
+      }
+    },
+  };
+}
+
+function createWorkspace({ configPath, checkRequest, terminal: terminalService, spawnFn = spawn, gitRunner = runGit }) {
   let roots, managerRoots, workspacesRoot, codexHome, claudeModelArgs, allowedRepositories, historyFile;
   try {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -88,9 +221,13 @@ function createWorkspace({ configPath, checkRequest, spawnFn = spawn, gitRunner 
   }
 
   let closing = false;
+  const terminal = terminalService ? createWorkspaceTerminals({
+    service: terminalService, roots: managerRoots, getProject: id => sessionManager.terminalProject(id),
+  }) : undefined;
   const sessionManager = createSessionManager({
     roots: managerRoots,
     historyFile,
+    onDiscard: terminal?.closeChat,
     env: { CODEX_HOME: codexHome },
     spawnFn(agent, args, options) {
       if (closing) throw new Error('Workspace is shutting down');
@@ -116,7 +253,7 @@ function createWorkspace({ configPath, checkRequest, spawnFn = spawn, gitRunner 
     },
     cleanupWorkspace: github.cleanupWorkspace,
   };
-  const handleRoutes = createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRequest });
+  const handleRoutes = createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRequest, terminal });
   const eventStreams = new Set();
   return {
     async handle(req, res) {
@@ -127,10 +264,12 @@ function createWorkspace({ configPath, checkRequest, spawnFn = spawn, gitRunner 
       }
       return handleRoutes(req, res);
     },
+    terminalBinding: terminal?.binding,
     close() {
       closing = true;
       for (const res of eventStreams) res.destroy();
       for (const { sessionId } of sessionManager.list()) sessionManager.stop(sessionId);
+      terminal?.close();
     },
   };
 }

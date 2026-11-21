@@ -1,3 +1,5 @@
+import { isTerminalId } from '../state/terminal.js';
+
 const base = '/api/workspace';
 
 const messages = new Map(Object.entries({
@@ -9,6 +11,7 @@ const messages = new Map(Object.entries({
   body_too_large: 'The request is too large. Try a shorter message.',
   invalid_agent: 'Choose a supported coding agent.',
   invalid_session: 'The session reference is invalid.',
+  invalid_terminal: 'The terminal reference is invalid.',
   invalid_text: 'Enter a message between 1 and 20,000 characters.',
   invalid_decision: 'Choose Allow or Deny.',
   invalid_path: 'The project location is invalid.',
@@ -74,13 +77,17 @@ export function createWorkspaceClient(fetchImpl = globalThis.fetch.bind(globalTh
     return response.json().catch(() => { throw workspaceError('invalid_response'); });
   }
 
-  async function post(url, body) {
+  async function mutationHeaders() {
     const data = await request('/api/sessions');
     if (typeof data?.token !== 'string' || !data.token) throw workspaceError('invalid_response');
     requestToken = data.token;
+    return { 'Content-Type': 'application/json', 'X-Terminal-Request': requestToken };
+  }
+
+  async function post(url, body, headers = {}) {
     return request(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Terminal-Request': data.token },
+      headers: { ...await mutationHeaders(), ...headers },
       body: JSON.stringify(body),
     });
   }
@@ -91,6 +98,22 @@ export function createWorkspaceClient(fetchImpl = globalThis.fetch.bind(globalTh
     async startSession({ rootId, relPath = '.', agent, resumeSessionId }) {
       const data = await post(`${base}/sessions`, { rootId, relPath, agent, resumeSessionId });
       return identifier(data?.sessionId, 'invalid_response');
+    },
+    async createTerminal(sessionId, { rootId, relPath = '.' }) {
+      const data = await post(`${base}/terminal`, { rootId, relPath }, {
+        'X-Workspace-Session': identifier(sessionId),
+      });
+      if (!isTerminalId(data?.terminalId)) throw workspaceError('invalid_response');
+      return data.terminalId;
+    },
+    async closeTerminal(terminalId) {
+      if (!isTerminalId(terminalId)) throw workspaceError('invalid_terminal');
+      const data = await request(`${base}/terminal/${terminalId}`, {
+        method: 'DELETE',
+        headers: await mutationHeaders(),
+      });
+      if (data?.ok !== true) throw workspaceError('invalid_response');
+      return data;
     },
     sendMessage: (sessionId, text) => post(`${sessionUrl(sessionId)}/messages`, { text }),
     stop: (sessionId) => post(`${sessionUrl(sessionId)}/stop`, {}),

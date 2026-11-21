@@ -18,6 +18,7 @@ const maxUploadBytes = 10 * 1024 * 1024;
 let activeUploads = 0;
 const socket = path.join(runtime, 'ui.sock');
 const maxSessions = 20;
+const workspaceTerminalEnabled = process.env.WEB_TERMINAL_WORKSPACE_TERMINAL === '1';
 const scheme = process.env.TERMINAL_TEST_HTTP === '1' ? 'http' : 'https';
 const children = new Map();
 const sessionPattern = /^(shared|web-[a-f0-9]{12})$/;
@@ -62,6 +63,7 @@ const collaborationReady = collaborationSocket ? (async () => {
 })() : Promise.resolve();
 let cachedSessionMetadata = null;
 let sessionMetadataExpires = 0;
+const noTmuxServer = error => /^(?:no server running(?: on [^\r\n]+)?|no sessions|error connecting to [^\r\n]+ \(No such file or directory\))$/.test(String(error.stderr || '').trim());
 function sessionMetadata() {
   const now = Date.now();
   if (cachedSessionMetadata && now < sessionMetadataExpires) return cachedSessionMetadata;
@@ -70,7 +72,7 @@ function sessionMetadata() {
     // The active pane's executable only: never arguments, titles, or pane contents.
     output = tmux(['list-sessions', '-F', '#{session_name}|#{pane_current_command}']);
   } catch (error) {
-    if (!/^(?:no server running(?: on [^\r\n]+)?|no sessions|error connecting to [^\r\n]+ \(No such file or directory\))$/.test(String(error.stderr || '').trim())) throw error;
+    if (!noTmuxServer(error)) throw error;
     output = '';
   }
   const commands = {};
@@ -89,7 +91,8 @@ function sessionMetadata() {
   sessionMetadataExpires = now + 1000;
   return cachedSessionMetadata;
 }
-function sessions() {
+function sessions(fresh = false) {
+  if (fresh) cachedSessionMetadata = null;
   return sessionMetadata().sessions;
 }
 function send(res, status, body, contentType = 'application/json; charset=utf-8') {
@@ -139,8 +142,11 @@ async function upload(req, res) {
     return send(res, 201, JSON.stringify({ path: filename }));
   } finally { clearTimeout(timeout); activeUploads--; imageReceipts.finish(ticket, savedPath); }
 }
-function ensureTtyd(name) {
+async function ensureTtyd(req, name) {
   if (!sessionPattern.test(name) || !sessions().includes(name)) throw new Error('Unknown session');
+  const marker = workspaceTerminalEnabled && name !== 'shared' ? terminalMarker(name) : '';
+  const binding = marker && await workspace?.terminalBinding?.(req, name, marker);
+  if (marker && !binding) throw Object.assign(new Error(), { code: 'AUTHORITY_UNAVAILABLE' });
   // A session can be recreated under the same name while ttyd stays alive.
   // Reapply per-session settings before reusing the existing ttyd process.
   tmux(['set-option', '-t', name, 'mouse', 'on']);
@@ -153,7 +159,7 @@ function ensureTtyd(name) {
   // This is a tmux server option and therefore applies to every session on this socket.
   // Application OSC 52 writes must reach ttyd for the browser clipboard bridge.
   tmux(['set-option', '-s', 'set-clipboard', 'on']);
-  const child = spawn('/usr/bin/ttyd', ['-i', socketPath, '-W', '-O', '/bin/sh', path.join(__dirname, 'attach-tab.sh'), tmuxSocket, name], { stdio: 'ignore' });
+  const child = spawn('/usr/bin/ttyd', ['-i', socketPath, '-W', '-O', '/bin/sh', path.join(__dirname, 'attach-tab.sh'), tmuxSocket, name, ...(binding || [])], { stdio: 'ignore' });
   child.socketPath = socketPath;
   children.set(name, child);
   child.once('exit', () => { if (children.get(name) === child) children.delete(name); });
@@ -247,11 +253,27 @@ function proxy(req, res, target, endpoint) {
   upstream.on('error', () => { if (!res.headersSent) send(res, 502, 'Terminal unavailable', 'text/plain'); else res.destroy(); });
   req.pipe(upstream);
 }
+function terminalMarker(name) {
+  try { return tmux(['display-message', '-p', '-t', `=${name}:`, '#{@web-workspace-terminal}']).trim(); } catch (error) { if (noTmuxServer(error)) return ''; throw error; }
+}
+const terminalStartArgs = (directory, name) =>
+  ['new-session', '-d', '-e', 'PI_CLIPBOARD_OSC52=1', '-s', name, '-c', directory.replace(/#/g, '#{a:35}')];
+function terminalGuard(name, serverPid, marker = '') {
+  const identity = `#{&&:#{==:#{session_name},${name}},#{==:#{pid},${serverPid}}}`;
+  return workspaceTerminalEnabled ? `#{&&:${identity},#{==:#{@web-workspace-terminal},${marker}}}` : identity;
+}
+function closeTerminal(name, { sessionId, serverPid, marker }) {
+  if (tmux(['if-shell', '-F', '-t', sessionId, terminalGuard(name, serverPid, marker), `kill-session -t '${sessionId}'`, 'display-message -p STALE']).trim() === 'STALE') throw new Error('Session changed');
+  cachedSessionMetadata = null;
+  const child = children.get(name);
+  if (child) { children.delete(name); child.kill('SIGTERM'); }
+}
 let workspace;
 if (process.env.WEB_TERMINAL_WORKSPACE_CONFIG) {
   try {
     const { createWorkspace } = require('../workspace');
-    workspace = createWorkspace({ configPath: process.env.WEB_TERMINAL_WORKSPACE_CONFIG, checkRequest: allowedMutation });
+    workspace = createWorkspace({ configPath: process.env.WEB_TERMINAL_WORKSPACE_CONFIG, checkRequest: allowedMutation,
+      terminal: workspaceTerminalEnabled && { runtime, tmux, startArgs: terminalStartArgs, close: closeTerminal, marker: terminalMarker, hasCapacity: () => sessions(true).length < maxSessions, invalidateMetadata: () => { cachedSessionMetadata = null; }, verifyOwner: req => verifyCollaborationOwner?.(req) } });
   } catch {
     console.error('Workspace configuration unavailable');
   }
@@ -367,15 +389,8 @@ const server = http.createServer(async (req, res) => {
       const sessionId = req.headers['x-terminal-session-id'], serverPid = req.headers['x-terminal-server-pid'];
       if (!/^\$\d+$/.test(sessionId || '') || !/^\d+$/.test(serverPid || '')) return send(res, 409, '{"error":"Session changed"}');
       try {
-        // Check and kill in one tmux command queue, bound to the original session ID and server.
-        const result = tmux(['if-shell', '-F', '-t', sessionId,
-          `#{&&:#{==:#{session_name},${close[1]}},#{==:#{pid},${serverPid}}}`,
-          `kill-session -t '${sessionId}'`, 'display-message -p STALE']).trim();
-        if (result === 'STALE') throw new Error('Session changed');
+        closeTerminal(close[1], { sessionId, serverPid });
       } catch { return send(res, 409, '{"error":"Session changed or unavailable"}'); }
-      cachedSessionMetadata = null;
-      const child = children.get(close[1]);
-      if (child) { children.delete(close[1]); child.kill('SIGTERM'); }
       return send(res, 200, '{"ok":true}');
     }
     const split = /^\/api\/sessions\/(shared|web-[a-f0-9]{12})\/split\/(horizontal|vertical)$/.exec(req.url);
@@ -389,7 +404,7 @@ const server = http.createServer(async (req, res) => {
         // A session target with ':' selects its current window and active pane;
         // -c expands in that pane's context, and omitting -d activates the new pane.
         const result = tmux(['if-shell', '-F', '-t', sessionId,
-          `#{&&:#{==:#{session_name},${split[1]}},#{==:#{pid},${serverPid}}}`,
+          terminalGuard(split[1], serverPid),
           `if-shell -F -t '${sessionId}' '#{<:#{window_panes},4}' { split-window ${split[2] === 'horizontal' ? '-h' : '-v'} -t '${sessionId}:' -c '#{pane_current_path}' } { display-message -p LIMIT }`,
           'display-message -p STALE']).trim();
         if (result === 'LIMIT') return send(res, 409, '{"error":"Pane limit reached"}');
@@ -429,7 +444,7 @@ const server = http.createServer(async (req, res) => {
       // tmux expands -c as a format even with execFileSync's literal arguments.
       // Emit literal hashes using its ASCII modifier: doubling alone preserves
       // special ##[ style sequences and would change valid directory names.
-      tmux(['new-session', '-d', '-e', 'PI_CLIPBOARD_OSC52=1', '-s', name, '-c', directory.replace(/#/g, '#{a:35}')]);
+      tmux(terminalStartArgs(directory, name));
       cachedSessionMetadata = null;
       return send(res, 201, JSON.stringify({ name }));
     }
@@ -445,7 +460,7 @@ const server = http.createServer(async (req, res) => {
     }
     const route = parseTerminal(req.url);
     if (route && req.method === 'GET' && route.endpoint !== '/ws') {
-      const target = ensureTtyd(route.name); await waitForSocket(target);
+      const target = await ensureTtyd(req, route.name); await waitForSocket(target);
       return proxy(req, res, target, route.endpoint);
     }
     return send(res, 404, '{"error":"Not found"}');
@@ -463,7 +478,7 @@ server.on('upgrade', async (req, client, head) => {
   if (!route || route.endpoint !== '/ws' || req.headers.origin !== `${scheme}://${req.headers.host}`) return client.destroy();
   try {
     await collaborationReady;
-    const target = ensureTtyd(route.name); await waitForSocket(target);
+    const target = await ensureTtyd(req, route.name); await waitForSocket(target);
     if (collaborationSocket) return await managedWebSockets.upgrade(req, client, head, { session: route.name, upstreamSocket: target });
     const upstream = net.createConnection(target);
     upstream.on('connect', () => {

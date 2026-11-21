@@ -100,7 +100,7 @@ function saveHistory(file, entries) {
 
 function createSessionManager({
   roots, spawnFn = spawn, now = Date.now, maxSessions = 8,
-  idleMs = 60 * 60_000, killGraceMs = 5_000, env, historyFile,
+  idleMs = 60 * 60_000, killGraceMs = 5_000, env, historyFile, onDiscard = () => {},
 }) {
   const sessions = new Map();
   const useProcessGroup = process.platform !== 'win32';
@@ -158,7 +158,7 @@ function createSessionManager({
 
   function forget(session) {
     clearTimeout(session.idleTimer);
-    sessions.delete(session.id);
+    if (sessions.delete(session.id) && !session.discard) onDiscard(session.id);
     session.subscribers.clear();
     session.history.length = 0;
   }
@@ -173,6 +173,7 @@ function createSessionManager({
       session.idleTimer.unref();
     } else if (run) {
       session.discard = true;
+      onDiscard(session.id);
       finish(session, run, { status: 'cancelled' });
     } else {
       forget(session);
@@ -406,7 +407,7 @@ function createSessionManager({
     return resolved;
   }
 
-  function start({ rootId, relPath, agent, resumeSessionId }) {
+  function start({ rootId, relPath, agent, resumeSessionId, ownerId }) {
     if (agent !== 'claude' && agent !== 'codex') throw managerError('invalid_agent');
     const resolved = resolve(rootId, relPath);
     for (const session of sessions.values()) checkIdle(session);
@@ -420,7 +421,7 @@ function createSessionManager({
       const sameProject = entry => entry.agent === agent && entry.rootId === rootId && entry.relPath === relPath;
       const session = [...sessions.values()].find(entry =>
         sameProject(entry) &&
-        !entry.discard && entry.cliSessionId &&
+        !entry.discard && entry.ownerId === ownerId && entry.cliSessionId &&
         (entry.cliSessionId === resumeSessionId || (agent === 'claude' && entry.id === resumeSessionId)));
       if (session) {
         if (session.run) throw managerError('turn_active', 'An agent process is already active', 409);
@@ -437,7 +438,7 @@ function createSessionManager({
     }
 
     const session = {
-      id: randomUUID(), rootId, relPath, agent, cliSessionId, absolutePath: resolved.absolutePath,
+      id: randomUUID(), rootId, relPath, agent, cliSessionId, ownerId, absolutePath: resolved.absolutePath,
       seq: 0, history: [], replayBytes: 0, subscribers: new Set(),
     };
     sessions.set(session.id, session);
@@ -489,10 +490,19 @@ function createSessionManager({
     decide(session, session.run, approvalId, decision);
   }
 
+  function terminalProject(sessionId) {
+    const session = getSession(sessionId);
+    checkIdle(session);
+    if (session.discard || !sessions.has(sessionId)) throw managerError('unknown_session');
+    const { rootId, relPath, absolutePath, ownerId } = session;
+    return { rootId, relPath, absolutePath, ownerId };
+  }
+
   function stop(sessionId) {
     const session = sessions.get(sessionId);
     if (!session || session.discard) return;
     session.discard = true;
+    onDiscard(sessionId);
     clearTimeout(session.idleTimer);
     if (session.run) finish(session, session.run, { status: 'cancelled' });
     else forget(session);
@@ -506,7 +516,7 @@ function createSessionManager({
     }));
   }
 
-  return { start, send, onEvent, respond, stop, list, listHistory };
+  return { start, send, onEvent, respond, stop, list, listHistory, terminalProject };
 }
 
 module.exports = { createSessionManager };

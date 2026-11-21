@@ -27,7 +27,7 @@ export function App() {
   const [history, setHistory] = useState([]);
   const [historyHidden, setHistoryHidden] = useState(false);
   const [historyError, setHistoryError] = useState(null);
-  const [sessionId, setSessionId] = useState(null);
+  const [session, setSession] = useState(null);
   const [conversations, setConversations] = useState(() => new Map());
   const [showWelcome, setShowWelcome] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -47,6 +47,7 @@ export function App() {
   const followChat = useRef(true);
 
   const mock = mode === 'mock';
+  const sessionId = session?.id ?? null;
   const conversation = conversations.get(sessionId) ?? emptyConversation;
   const running = hasRunningTurn(conversation, mock ? sampleEvents[0].turnId : undefined);
   const activeStream = streamStatuses.get(sessionId);
@@ -72,7 +73,7 @@ export function App() {
       setProjects(mockProjects);
       setProjectId(mockProjects[0].id);
       setMockSessions(recentSessions);
-      setSessionId(sampleSession.id);
+      setSession(sampleSession);
       setConversations(new Map([[sampleSession.id, preview]]));
       setMode('mock');
     }
@@ -235,7 +236,7 @@ export function App() {
 
   function resetSession() {
     setActionError(null);
-    setSessionId(null);
+    setSession(null);
     setShowWelcome(true);
   }
 
@@ -245,7 +246,7 @@ export function App() {
     const project = projects.find((item) => item.id === session.projectId);
     setRelPath(project?.folders?.includes(session.relPath) ? session.relPath : '.');
     setAgentId(session.agentId);
-    setSessionId(session.id);
+    setSession(session);
     setShowWelcome(false);
   }
 
@@ -397,7 +398,8 @@ export function App() {
             running={running} disabled={disabled || !projectId || running || (!mock && connection !== 'connected')} />
         </div>
       </main>
-      <Terminal open={terminalOpen} onToggle={toggleTerminal} mock={mock} />
+      <Terminal open={terminalOpen} onToggle={toggleTerminal} mock={mock}
+        session={mode === 'live' ? session : null} client={api} />
     </div>
   );
 }

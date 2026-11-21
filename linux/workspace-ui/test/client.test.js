@@ -82,3 +82,65 @@ test('a missing token prevents the mutation', async () => {
   await assert.rejects(client.stop('session'), { code: 'invalid_response' });
   assert.deepEqual(urls, ['/api/sessions']);
 });
+
+test('terminal creation sends the chat reference and project, and deletion refreshes the token', async () => {
+  const calls = [];
+  let tokenCount = 0;
+  const terminalId = 'web-012345abcdef';
+  const client = createWorkspaceClient(async (url, options) => {
+    calls.push([url, options]);
+    if (url === '/api/sessions') return Response.json({ token: `fixture-token-${++tokenCount}` });
+    if (options.method === 'POST') return Response.json({ terminalId }, { status: 201 });
+    return Response.json({ ok: true });
+  });
+
+  assert.equal(await client.createTerminal('chat-1', { rootId: 'root', relPath: 'packages/web' }), terminalId);
+  assert.deepEqual(await client.closeTerminal(terminalId), { ok: true });
+  assert.deepEqual(calls.map(([url]) => url), [
+    '/api/sessions', '/api/workspace/terminal', '/api/sessions', `/api/workspace/terminal/${terminalId}`,
+  ]);
+  const post = calls[1][1];
+  assert.equal(post.method, 'POST');
+  assert.deepEqual(post.headers, {
+    'Content-Type': 'application/json',
+    'X-Terminal-Request': 'fixture-token-1',
+    'X-Workspace-Session': 'chat-1',
+  });
+  assert.deepEqual(JSON.parse(post.body), { rootId: 'root', relPath: 'packages/web' });
+  const deletion = calls[3][1];
+  assert.equal(deletion.method, 'DELETE');
+  assert.deepEqual(deletion.headers, {
+    'Content-Type': 'application/json', 'X-Terminal-Request': 'fixture-token-2',
+  });
+  assert.equal(deletion.body, undefined);
+});
+
+test('terminal calls reject unsafe identifiers before using them in headers or URLs', async () => {
+  const calls = [];
+  const client = createWorkspaceClient(async (url) => {
+    calls.push(url);
+    if (url === '/api/sessions') return Response.json({ token: 'fixture-token' });
+    return Response.json({ terminalId: 'web-012345abcdef/../other' }, { status: 201 });
+  });
+
+  await assert.rejects(client.createTerminal('chat\n1', { rootId: 'root' }), { code: 'invalid_session' });
+  await assert.rejects(client.closeTerminal('web-012345abcdef/../other'), { code: 'invalid_terminal' });
+  assert.deepEqual(calls, []);
+  await assert.rejects(client.createTerminal('chat-1', { rootId: 'root' }), { code: 'invalid_response' });
+  assert.deepEqual(calls, ['/api/sessions', '/api/workspace/terminal']);
+});
+
+test('terminal creation preserves server status and maps errors using the workspace client', async () => {
+  let status = 404;
+  const client = createWorkspaceClient(async (url) => {
+    if (url === '/api/sessions') return Response.json({ token: 'fixture-token' });
+    return status === 404 ? new Response('Not found', { status })
+      : Response.json({ error: 'project_path_changed' }, { status });
+  });
+
+  await assert.rejects(client.createTerminal('chat-1', { rootId: 'root' }), { code: 'not_found', status: 404 });
+  status = 409;
+  await assert.rejects(client.createTerminal('chat-1', { rootId: 'root' }), {
+    code: 'project_path_changed', status: 409, message: 'The project location changed. Start a new session.',
+  });
+});

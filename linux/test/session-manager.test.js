@@ -242,13 +242,15 @@ test('reports spawn failure without exposing the executable path and releases ca
 
 test('automatically reaps idle processes using the injected clock', { timeout: 5_000 }, async t => {
   let clock = 10;
-  const f = fixture(t, { now: () => clock, idleMs: 30 });
+  const discarded = [];
+  const f = fixture(t, { now: () => clock, idleMs: 30, onDiscard: id => discarded.push(id) });
   const { sessionId } = f.start();
   const output = eventsFor(f.manager, sessionId);
   clock += 30;
   assert.equal((await output.wait('turn_finished')).status, 'cancelled');
   await f.launches[0].closed;
   assert.deepEqual(f.manager.list(), []);
+  assert.deepEqual(discarded, [sessionId]);
 });
 
 test('Codex rejects approvals, closes stdin after the prompt, and keeps the workspace session ID', { timeout: 5_000 }, async t => {
