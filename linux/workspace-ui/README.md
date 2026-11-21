@@ -9,7 +9,7 @@ node --test test/*.test.js
 
 Serve the generated files on the same origin as the Linux workspace API. Choose a configured project and one of its server-listed folders. Project root uses the relative directory `.`. Claude Code and Codex CLI are the agent IDs accepted by the session route.
 
-Recent Sessions loads server history on startup and after each finished turn. Click a Claude Code entry to resume it, or use the Resume session checkbox to pick the latest Claude Code entry for the selected project and folder. Codex CLI history entries are disabled for resume. Clear hides the current list until the next refresh.
+Recent Sessions loads server history on startup and after each finished turn. Click a Claude Code or Codex CLI entry to resume it. The Resume session checkbox picks the latest entry for the selected project, folder, and agent. Clear hides the current list until the next refresh.
 
 Use `?mock=1` for the offline preview, including when opening `dist/index.html` directly. The app also uses the preview when the projects route returns HTTP 404. The preview includes sample tool steps, a mock approval and fixed terminal output.
 

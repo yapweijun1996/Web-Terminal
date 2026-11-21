@@ -295,10 +295,10 @@ export function App() {
   function openRecentSession(session) {
     if (mock) {
       openSession(session);
-    } else if (session.entry.agent === 'claude') {
-      const { rootId, relPath: folder, agent, cliSessionId } = session.entry;
-      return mutate(() => createSession({ rootId, folder, agent, resumeSessionId: cliSessionId }));
+      return;
     }
+    const { rootId, relPath: folder, agent, cliSessionId } = session.entry;
+    return mutate(() => createSession({ rootId, folder, agent, resumeSessionId: cliSessionId }));
   }
 
   function sendMessage(prompt, attachments, onAccepted) {

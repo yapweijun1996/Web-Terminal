@@ -13,10 +13,11 @@ const { createWorkspaceRoutes } = require('../workspace/routes');
 const API = '/api/workspace';
 const SESSION_INPUT = { rootId: 'work', relPath: 'project', agent: 'claude' };
 const CLI_SESSION_ID = 'c6cecb23-d965-4b2a-a68c-f975304021a2';
+const CODEX_THREAD_ID = '2ef9cb3e-e900-4acb-aef2-9d1c945935ad';
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 const historyEntries = [
   { ...SESSION_INPUT, cliSessionId: CLI_SESSION_ID, lastUsedAt: 20 },
-  { ...SESSION_INPUT, agent: 'codex', cliSessionId: 'codex-thread', lastUsedAt: 10 },
+  { ...SESSION_INPUT, agent: 'codex', cliSessionId: CODEX_THREAD_ID, lastUsedAt: 10 },
 ];
 
 function fakeManager() {
@@ -27,9 +28,9 @@ function fakeManager() {
     start(input) {
       calls.push(['start', input]);
       if (input.resumeSessionId) {
-        const match = this.list().find(session => session.cliSessionId === input.resumeSessionId);
-        const code = input.agent === 'codex' ? 'resume_not_verified' : 'resume_unavailable';
-        if (input.agent === 'codex' || !match) throw Object.assign(new Error(code), { code });
+        const match = this.list().find(session => session.cliSessionId === input.resumeSessionId &&
+          session.agent === input.agent && session.rootId === input.rootId && session.relPath === input.relPath);
+        if (!match) throw Object.assign(new Error('resume_unavailable'), { code: 'resume_unavailable' });
         return { sessionId: match.sessionId };
       }
       const sessionId = `session-${sessions.size + 1}`;
@@ -40,7 +41,8 @@ function fakeManager() {
     },
     list() {
       return [...sessions].map(([sessionId, { agent, rootId, relPath }]) => ({
-        sessionId, agent, rootId, relPath, cliSessionId: CLI_SESSION_ID, status: 'idle', absolutePath: '/internal/path',
+        sessionId, agent, rootId, relPath, status: 'idle', absolutePath: '/internal/path',
+        cliSessionId: agent === 'codex' ? CODEX_THREAD_ID : CLI_SESSION_ID,
       }));
     },
     listHistory(agent) {
@@ -227,7 +229,13 @@ test('lists only public session metadata and resumes by CLI UUID', async t => {
   assertError(await post(`${API}/sessions`, { ...SESSION_INPUT, resumeSessionId: 'missing' }), 409, 'resume_unavailable');
   assertError(await post(`${API}/sessions`, {
     ...SESSION_INPUT, agent: 'codex', resumeSessionId: CLI_SESSION_ID,
-  }), 409, 'resume_not_verified');
+  }), 409, 'resume_unavailable');
+  const codex = { ...SESSION_INPUT, agent: 'codex' };
+  const createdCodex = await post(`${API}/sessions`, codex);
+  assert.equal(createdCodex.status, 201);
+  const resumedCodex = await post(`${API}/sessions`, { ...codex, resumeSessionId: CODEX_THREAD_ID });
+  assert.equal(resumedCodex.status, 201);
+  assert.deepEqual(resumedCodex.body, createdCodex.body);
 });
 
 test('lists only public history metadata and supports an agent filter', async t => {

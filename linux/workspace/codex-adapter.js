@@ -5,37 +5,40 @@
 
 const { randomUUID } = require('node:crypto');
 
-function buildResumeArgs(sessionId, args, allowUnverifiedResume) {
-  if (allowUnverifiedResume !== true) throw new Error('resume_not_verified');
-  if (typeof sessionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(sessionId)) {
-    throw new Error('invalid_resume_session_id');
-  }
-
-  // ASSUMPTION: exec resume accepts the session ID before the flags.
-  return ['exec', 'resume', sessionId, ...args];
+function isCliSessionId(value) {
+  return typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
 }
 
-function buildCodexArgs({ model, sandbox, resumeSessionId, effort, allowUnverifiedResume } = {}) {
+function buildCodexArgs({ model, sandbox, resumeSessionId, effort } = {}) {
   if (sandbox !== 'read-only' && sandbox !== 'workspace-write') {
     throw new Error('invalid_sandbox');
   }
 
-  const args = ['--json', '--skip-git-repo-check', '--sandbox', sandbox];
+  const resume = resumeSessionId !== undefined;
+  if (resume && !isCliSessionId(resumeSessionId)) {
+    throw new Error('invalid_resume_session_id');
+  }
+
+  const args = resume ? ['exec', 'resume'] : ['exec'];
+  args.push('--json', '--skip-git-repo-check');
+  // The resume subcommand takes sandbox mode as a config override.
+  if (resume) args.push('-c', `sandbox_mode="${sandbox}"`);
+  else args.push('--sandbox', sandbox);
+
   if (model !== undefined) {
-    if (typeof model !== 'string' || !/^[A-Za-z0-9._-]+$/.test(model)) {
+    if (typeof model !== 'string' || !/^[A-Za-z0-9._-]+$/.test(model) || (resume && model.startsWith('-'))) {
       throw new Error('invalid_model');
     }
-    args.push(`--model=${model}`);
+    if (resume) args.push('-m', model);
+    else args.push(`--model=${model}`);
   }
   if (effort !== undefined) {
     if (!['low', 'medium', 'high'].includes(effort)) throw new Error('invalid_effort');
     args.push('-c', `model_reasoning_effort="${effort}"`);
   }
 
-  if (resumeSessionId !== undefined) {
-    return buildResumeArgs(resumeSessionId, args, allowUnverifiedResume);
-  }
-  return ['exec', ...args];
+  if (resume) args.push(resumeSessionId, '-');
+  return args;
 }
 
 function createCodexParser({ sessionId }) {
@@ -110,4 +113,4 @@ function createCodexParser({ sessionId }) {
   return { push };
 }
 
-module.exports = { buildCodexArgs, createCodexParser };
+module.exports = { buildCodexArgs, createCodexParser, isCliSessionId };

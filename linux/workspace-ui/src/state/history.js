@@ -1,5 +1,3 @@
-export const codexResumeTitle = 'Resume is not verified for Codex yet';
-
 export function relativeTime(lastUsedAt, now = Date.now()) {
   const minutes = Math.floor((now - lastUsedAt) / 60_000);
   if (minutes < 1) return 'Just now';
@@ -15,13 +13,10 @@ export function formatHistoryEntry(entry, now) {
     id: entry.cliSessionId,
     label: codex ? 'Codex CLI' : 'Claude Code',
     detail: `${folder} · ${relativeTime(entry.lastUsedAt, now)}`,
-    disabled: codex,
-    title: codex ? codexResumeTitle : undefined,
   };
 }
 
 export function newestResumableEntry(entries, { rootId, relPath, agent }) {
-  if (agent !== 'claude') return undefined;
   let newest;
   for (const entry of entries) {
     if (entry.rootId === rootId && entry.relPath === relPath && entry.agent === agent &&

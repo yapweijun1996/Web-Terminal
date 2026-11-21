@@ -15,6 +15,21 @@ const serverPath = path.join(__dirname, '../ui/server.js');
 const source = fs.readFileSync(serverPath, 'utf8');
 const dist = path.join(__dirname, '../workspace-ui/dist');
 const fakeCli = path.join(__dirname, 'fixtures/fake-cli.js');
+const codexThreadId = '2ef9cb3e-e900-4acb-aef2-9d1c945935ad';
+const fakeCodex = `
+  const [threadId, ...args] = process.argv.slice(1);
+  if (args[1] === 'resume' && (args.at(-2) !== threadId || args.at(-1) !== '-')) process.exit(1);
+  let prompt = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', chunk => { prompt += chunk; });
+  process.stdin.on('end', () => {
+    for (const record of [
+      { type: 'thread.started', thread_id: threadId },
+      { type: 'item.completed', item: { type: 'agent_message', id: 'message-1', text: prompt } },
+      { type: 'turn.completed', usage: { input_tokens: 3 } },
+    ]) console.log(JSON.stringify(record));
+  });
+`;
 
 async function fixture(t, enabled, { gitRunner, invalidConfig = false, customHistory = false } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-workspace-'));
@@ -60,7 +75,9 @@ async function fixture(t, enabled, { gitRunner, invalidConfig = false, customHis
           createWorkspace: options => createWorkspace({
             ...options, gitRunner,
             spawnFn(agent, args, options) {
-              const child = spawn(process.execPath, [fakeCli, agent], options);
+              const cliArgs = agent === 'codex'
+                ? ['-e', fakeCodex, '--', codexThreadId, ...args] : [fakeCli, agent];
+              const child = spawn(process.execPath, cliArgs, options);
               launches.push({ agent, args, options, closed: new Promise(resolve => child.once('close', resolve)) });
               return child;
             },
@@ -227,16 +244,33 @@ for (const agent of ['claude', 'codex']) {
       assert.equal(event.turnId, events[0].turnId);
       assert.ok(event.turnId);
     }
+    await launches[0].closed;
+    assert.equal((await request('POST', `${url}/stop`, headers)).status, 200);
+    const resumeInput = { rootId: 'development', relPath: 'repo', agent, resumeSessionId: entries[0].cliSessionId };
+    const rejected = await request('POST', '/api/workspace/sessions', headers, { ...resumeInput, relPath: '.' });
+    assert.equal(rejected.status, 409);
+    assert.deepEqual(JSON.parse(rejected.body), { error: 'resume_unavailable' });
+    assert.equal(launches.length, 1);
+    const resumed = await request('POST', '/api/workspace/sessions', headers, resumeInput);
+    assert.equal(resumed.status, 201);
+    const resumedId = JSON.parse(resumed.body).sessionId;
+    assert.notEqual(resumedId, sessionId);
+    const { args: resumeArgs, options: resumeOptions } = launches[1];
+    assert.equal(resumeOptions.cwd, cwd);
     if (agent === 'claude') {
-      await launches[0].closed;
-      assert.equal((await request('POST', `${url}/stop`, headers)).status, 200);
-      const resumed = await request('POST', '/api/workspace/sessions', headers, {
-        rootId: 'development', relPath: 'repo', agent, resumeSessionId: entries[0].cliSessionId,
-      });
-      assert.equal(resumed.status, 201);
-      assert.notEqual(JSON.parse(resumed.body).sessionId, sessionId);
-      const { args: resumeArgs } = launches[1];
       assert.equal(resumeArgs[resumeArgs.indexOf('--resume') + 1], entries[0].cliSessionId);
+    } else {
+      assert.equal(resumeOptions.env.CODEX_HOME, codexHome);
+      assert.deepEqual(resumeArgs, ['exec', 'resume', '--json', '--skip-git-repo-check',
+        '-c', 'sandbox_mode="read-only"', codexThreadId, '-']);
+      const resumedUrl = `/api/workspace/sessions/${resumedId}`;
+      const prompt = 'Resume workspace\nwith stdin';
+      assert.equal((await request('POST', `${resumedUrl}/messages`, headers, { text: prompt })).status, 200);
+      const resumedStream = await request('GET', `${resumedUrl}/events`);
+      assert.equal(resumedStream.status, 200);
+      assert.equal(resumedStream.events[0].cliSessionId, codexThreadId);
+      assert.equal(resumedStream.events.find(event => event.type === 'message_done').text, prompt);
+      assert.equal(resumedStream.events.at(-1).status, 'success');
     }
   });
 }

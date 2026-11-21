@@ -4,6 +4,7 @@ import { formatHistoryEntry, newestResumableEntry, relativeTime } from '../src/s
 
 const now = 100_000_000;
 const claude = { agent: 'claude', rootId: 'root', relPath: '.', cliSessionId: 'claude-id', lastUsedAt: now - 7_200_000 };
+const codex = { ...claude, agent: 'codex', cliSessionId: 'codex-id' };
 
 test('relative time uses compact units and handles clock skew', () => {
   assert.equal(relativeTime(now + 5_000, now), 'Just now');
@@ -16,13 +17,13 @@ test('relative time uses compact units and handles clock skew', () => {
 
 test('Claude history shows the agent, project root and relative age', () => {
   assert.deepEqual(formatHistoryEntry(claude, now), {
-    id: 'claude-id', label: 'Claude Code', detail: 'Project root · 2h ago', disabled: false, title: undefined,
+    id: 'claude-id', label: 'Claude Code', detail: 'Project root · 2h ago',
   });
 });
 
-test('Codex history shows the folder with a disabled resume explanation', () => {
-  assert.deepEqual(formatHistoryEntry({ ...claude, agent: 'codex', relPath: 'web/ui', cliSessionId: 'codex-id' }, now), {
-    id: 'codex-id', label: 'Codex CLI', detail: 'web/ui · 2h ago', disabled: true, title: 'Resume is not verified for Codex yet',
+test('Codex history shows the agent, folder and relative age', () => {
+  assert.deepEqual(formatHistoryEntry({ ...codex, relPath: 'web/ui' }, now), {
+    id: 'codex-id', label: 'Codex CLI', detail: 'web/ui · 2h ago',
   });
 });
 
@@ -30,10 +31,20 @@ test('resume finds the newest matching Claude CLI ID regardless of history order
   const newest = { ...claude, cliSessionId: 'latest-id', lastUsedAt: now - 10_000 };
   const otherRoot = { ...claude, rootId: 'other', lastUsedAt: now };
   const otherFolder = { ...claude, relPath: 'web', lastUsedAt: now };
-  const codex = { ...claude, agent: 'codex', lastUsedAt: now };
-  const entries = [claude, otherRoot, otherFolder, codex, newest];
+  const newerCodex = { ...codex, lastUsedAt: now };
+  const entries = [claude, otherRoot, otherFolder, newerCodex, newest];
   assert.equal(newestResumableEntry(entries, claude), newest);
   assert.equal(newestResumableEntry(entries, otherFolder), otherFolder);
   assert.equal(newestResumableEntry(entries, { ...claude, relPath: 'missing' }), undefined);
-  assert.equal(newestResumableEntry(entries, codex), undefined);
+});
+
+test('resume finds the newest Codex CLI ID for the selected project and folder', () => {
+  const newest = { ...codex, cliSessionId: 'latest-codex-id', lastUsedAt: now - 10_000 };
+  const otherRoot = { ...codex, rootId: 'other', lastUsedAt: now };
+  const otherFolder = { ...codex, relPath: 'web', lastUsedAt: now };
+  const newerClaude = { ...claude, lastUsedAt: now };
+  const entries = [newest, otherRoot, otherFolder, newerClaude, codex];
+  assert.equal(newestResumableEntry(entries, codex), newest);
+  assert.equal(newestResumableEntry(entries, otherFolder), otherFolder);
+  assert.equal(newestResumableEntry(entries, { ...codex, relPath: 'missing' }), undefined);
 });

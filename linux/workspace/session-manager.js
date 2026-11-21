@@ -8,12 +8,11 @@ const { resolveProjectPath, assertStillInsideRoot } = require('./project-roots')
 const {
   buildClaudeArgs, createClaudeParser, buildApprovalResponse, buildUserMessage,
 } = require('./claude-adapter');
-const { buildCodexArgs, createCodexParser } = require('./codex-adapter');
+const { buildCodexArgs, createCodexParser, isCliSessionId } = require('./codex-adapter');
 
 // This flag set is marked verified for Claude only. Linux runtime acceptance is separate.
 const CLAUDE_ISOLATION_ARGS = ['--setting-sources', 'project', '--disable-slash-commands', '--strict-mcp-config'];
 const BLOCKED_ENV = /^(?:GH_TOKEN$|GITHUB_TOKEN$|SSH_AUTH_SOCK$|AWS_|ANTHROPIC_API_KEY$)/i;
-const CLI_SESSION_ID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const STARTUP_MS = 30_000;
 const TURN_MS = 15 * 60_000;
 const APPROVAL_MS = 60_000;
@@ -37,9 +36,7 @@ function sanitizedEnv(overrides) {
 function validHistoryEntry(entry) {
   if (!entry || typeof entry !== 'object' || Object.keys(entry).length !== 5) return false;
   const { agent, rootId, relPath, cliSessionId, lastUsedAt } = entry;
-  return typeof cliSessionId === 'string' &&
-    (agent === 'claude' ? CLI_SESSION_ID.test(cliSessionId)
-      : agent === 'codex' && /^[a-z0-9_-]{1,128}$/i.test(cliSessionId)) &&
+  return (agent === 'claude' || agent === 'codex') && isCliSessionId(cliSessionId) &&
     typeof rootId === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(rootId) &&
     typeof relPath === 'string' && Buffer.byteLength(relPath) <= 4096 && !path.win32.isAbsolute(relPath) &&
     !/[\\\0]/.test(relPath) && relPath.split('/').every(segment => segment && segment !== '..') &&
@@ -49,9 +46,10 @@ function validHistoryEntry(entry) {
 function newestHistory(entries) {
   const seen = new Set();
   return entries.filter(validHistoryEntry).sort((a, b) => b.lastUsedAt - a.lastUsedAt)
-    .filter(({ cliSessionId }) => {
-      if (seen.has(cliSessionId)) return false;
-      seen.add(cliSessionId);
+    .filter(({ agent, cliSessionId }) => {
+      const key = `${agent}:${cliSessionId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
       return true;
     }).slice(0, MAX_HISTORY_ENTRIES);
 }
@@ -112,7 +110,8 @@ function createSessionManager({
   function remember({ agent, rootId, relPath, cliSessionId }) {
     const entry = { agent, rootId, relPath, cliSessionId, lastUsedAt: now() };
     if (!validHistoryEntry(entry)) return;
-    sessionHistory = newestHistory([entry, ...sessionHistory.filter(previous => previous.cliSessionId !== cliSessionId)]);
+    sessionHistory = newestHistory([entry, ...sessionHistory.filter(previous =>
+      previous.agent !== agent || previous.cliSessionId !== cliSessionId)]);
     saveHistory(file, sessionHistory);
   }
 
@@ -239,13 +238,11 @@ function createSessionManager({
       switch (event.type) {
         case 'session_started': {
           const { cliSessionId } = event;
-          const claude = session.agent === 'claude';
-          if (claude && session.cliSessionId && cliSessionId !== session.cliSessionId) {
+          if (session.cliSessionId && cliSessionId !== session.cliSessionId) {
             fail(session, run, 'resume_mismatch', 'Agent returned an unexpected resume identifier');
             break;
           }
-          if (typeof cliSessionId === 'string' && cliSessionId.trim() &&
-              (!claude || CLI_SESSION_ID.test(cliSessionId))) {
+          if (isCliSessionId(cliSessionId)) {
             session.cliSessionId = cliSessionId;
             remember(session);
           }
@@ -369,7 +366,7 @@ function createSessionManager({
     const claude = session.agent === 'claude';
     const args = claude
       ? [...buildClaudeArgs({ approvalMode: 'prompt', resumeSessionId: session.cliSessionId }), ...CLAUDE_ISOLATION_ARGS]
-      : buildCodexArgs({ sandbox: 'read-only' });
+      : buildCodexArgs({ sandbox: 'read-only', resumeSessionId: session.cliSessionId });
     const options = {
       shell: false, stdio: ['pipe', 'pipe', 'pipe'], detached: useProcessGroup, env: sanitizedEnv(env),
     };
@@ -416,16 +413,15 @@ function createSessionManager({
 
     let cliSessionId;
     if (resumeSessionId !== undefined) {
-      if (agent === 'codex') throw managerError('resume_not_verified');
-      if (typeof resumeSessionId !== 'string' || !CLI_SESSION_ID.test(resumeSessionId)) {
+      if (!isCliSessionId(resumeSessionId)) {
         throw managerError('resume_unavailable');
       }
-      // Accept the workspace ID used by older clients as well as the CLI UUID.
+      // Older Claude clients can also supply the live workspace session ID.
       const sameProject = entry => entry.agent === agent && entry.rootId === rootId && entry.relPath === relPath;
       const session = [...sessions.values()].find(entry =>
         sameProject(entry) &&
         !entry.discard && entry.cliSessionId &&
-        (entry.cliSessionId === resumeSessionId || entry.id === resumeSessionId));
+        (entry.cliSessionId === resumeSessionId || (agent === 'claude' && entry.id === resumeSessionId)));
       if (session) {
         if (session.run) throw managerError('turn_active', 'An agent process is already active', 409);
         launch(session, resolved);
@@ -434,7 +430,7 @@ function createSessionManager({
       if (!sessionHistory.some(entry => entry.cliSessionId === resumeSessionId && sameProject(entry))) {
         throw managerError('resume_unavailable');
       }
-      if ([...sessions.values()].some(entry => entry.cliSessionId === resumeSessionId && entry.run)) {
+      if ([...sessions.values()].some(entry => entry.agent === agent && entry.cliSessionId === resumeSessionId && entry.run)) {
         throw managerError('turn_active', 'An agent process is already active', 409);
       }
       cliSessionId = resumeSessionId;
@@ -462,7 +458,7 @@ function createSessionManager({
     if (session.discard || session.run?.sent || session.run?.ending) {
       throw managerError('turn_active', 'An agent process is already active', 409);
     }
-    if (!session.run && session.agent === 'claude' && session.started && !session.cliSessionId) {
+    if (!session.run && session.started && !session.cliSessionId) {
       throw managerError('resume_unavailable');
     }
     const run = session.run ?? launch(session, resolve(session.rootId, session.relPath));

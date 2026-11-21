@@ -46,7 +46,6 @@ const ERROR_STATUS = new Map([
   ['clone_failed', 502],
   ['spawn_failed', 500],
   ['resume_unavailable', 409],
-  ['resume_not_verified', 409],
   ['github_resume_unsupported', 409],
   ['turn_active', 409],
   ['max_sessions', 409],

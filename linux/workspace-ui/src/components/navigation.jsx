@@ -55,7 +55,7 @@ export function Sidebar({
             <button class="quiet-button" onClick={onClear} disabled={!sessions.length}>Clear</button>
           </div>
           {sessions.map((session) => (
-            <button class="nav-item" key={session.id} disabled={disabled || session.disabled} title={session.title}
+            <button class="nav-item" key={session.id} disabled={disabled}
               aria-pressed={mock ? session.id === sessionId : undefined} onClick={() => onSession(session)}>
               <Icon name="history" size={16} />
               <span>{session.label}{session.detail && <small>{session.detail}</small>}</span>

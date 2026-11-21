@@ -12,23 +12,42 @@ const { createSessionManager } = require('../workspace/session-manager');
 
 const cliPath = path.join(__dirname, 'fixtures', 'fake-cli.js');
 const cliSessionId = 'c6cecb23-d965-4b2a-a68c-f975304021a2';
+const codexThreadId = '2ef9cb3e-e900-4acb-aef2-9d1c945935ad';
 const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const historyEntry = { agent: 'claude', rootId: 'projects', relPath: 'project', cliSessionId };
+const fakeCodex = `
+  const [threadId] = process.argv.slice(1);
+  const write = record => console.log(JSON.stringify(record));
+  let prompt = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', chunk => { prompt += chunk; });
+  process.stdin.on('end', () => {
+    write({ type: 'thread.started', thread_id: threadId });
+    write({ type: 'item.completed', item: { type: 'agent_message', id: 'message-1', text: prompt } });
+    write({ type: 'turn.completed', usage: { input_tokens: 3 } });
+  });
+`;
 
 function fixture(t, { persistHistory, ...options } = {}, mode = 'echo') {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace-manager-'));
   const root = path.join(base, 'root');
+  const otherRoot = path.join(base, 'other-root');
   const project = path.join(root, 'project');
   const outside = path.join(base, 'outside');
   fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(path.join(otherRoot, 'project'), { recursive: true });
   fs.mkdirSync(outside);
   const launches = [];
   const managerOptions = {
-    roots: loadProjectRoots({ roots: [{ id: 'projects', label: 'Projects', path: root }] }),
+    roots: loadProjectRoots({ roots: [
+      { id: 'projects', label: 'Projects', path: root },
+      { id: 'other', label: 'Other', path: otherRoot },
+    ] }),
     killGraceMs: 100,
     spawnFn(command, args, spawnOptions) {
       const executable = mode === 'spawn-failure' ? path.join(base, 'missing-agent') : process.execPath;
-      const child = spawn(executable, [cliPath, command, mode], spawnOptions);
+      const cliArgs = command === 'codex' ? ['-e', fakeCodex, codexThreadId] : [cliPath, command, mode];
+      const child = spawn(executable, cliArgs, spawnOptions);
       const closed = new Promise(resolve => child.once('close', (...args) => resolve(args)));
       launches.push({ command, args, options: spawnOptions, child, closed });
       return child;
@@ -237,15 +256,64 @@ test('Codex rejects approvals, closes stdin after the prompt, and keeps the work
   const { sessionId } = f.start({ agent: 'codex' });
   const output = eventsFor(f.manager, sessionId);
   assert.throws(() => f.manager.respond(sessionId, 'unused', 'deny'), { code: 'approvals_unsupported' });
-  assert.throws(() => f.start({ agent: 'codex', resumeSessionId: sessionId }), { code: 'resume_not_verified' });
+  assert.throws(() => f.start({ agent: 'codex', resumeSessionId: sessionId }), { code: 'resume_unavailable' });
   assert.deepEqual(f.launches[0].args, ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'read-only']);
   f.manager.send(sessionId, 'exact\nprompt');
   const finished = await output.wait('turn_finished');
   assert.deepEqual(finished.usage, { input_tokens: 3 });
   assert.equal(output.events.find(event => event.type === 'message_done').text, 'exact\nprompt');
   assert.ok(output.events.every(event => event.sessionId === sessionId));
-  assert.equal(output.events[0].cliSessionId, 'private-codex-thread');
-  assert.equal(f.manager.list()[0].cliSessionId, 'private-codex-thread');
+  assert.equal(output.events[0].cliSessionId, codexThreadId);
+  assert.equal(f.manager.list()[0].cliSessionId, codexThreadId);
+});
+
+test('resumes Codex turns in the same project and restores the thread from history', { timeout: 5_000 }, async t => {
+  const f = fixture(t, { persistHistory: true, now: () => 100 });
+  const project = { agent: 'codex', rootId: 'projects', relPath: 'project' };
+  const resume = { ...project, resumeSessionId: codexThreadId };
+  const { sessionId } = f.start(project);
+  f.manager.send(sessionId, 'first prompt');
+  await f.launches[0].closed;
+  const entry = { ...project, cliSessionId: codexThreadId, lastUsedAt: 100 };
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.historyFile, 'utf8')), [entry]);
+
+  for (const overrides of [
+    { rootId: 'other' }, { relPath: '.' }, { agent: 'claude' },
+    { resumeSessionId: sessionId }, { resumeSessionId: 'not-a-uuid' }, { resumeSessionId: cliSessionId },
+  ]) {
+    assert.throws(() => f.start({ ...resume, ...overrides }), { code: 'resume_unavailable' });
+  }
+  assert.equal(f.launches.length, 1);
+  assert.deepEqual(f.start(resume), { sessionId });
+  assert.throws(() => f.start(resume), { code: 'turn_active' });
+  const resumeArgs = ['exec', 'resume', '--json', '--skip-git-repo-check',
+    '-c', 'sandbox_mode="read-only"', codexThreadId, '-'];
+  assert.deepEqual(f.launches[1].args, resumeArgs);
+  f.manager.send(sessionId, 'explicit resume');
+  await f.launches[1].closed;
+
+  const followUp = eventsFor(f.manager, sessionId);
+  f.manager.send(sessionId, 'automatic resume');
+  await f.launches[2].closed;
+  assert.deepEqual(f.launches[2].args, resumeArgs);
+  assert.deepEqual(followUp.events.filter(event => event.type === 'message_done').map(event => event.text), [
+    'first prompt', 'explicit resume', 'automatic resume',
+  ]);
+  assert.equal(followUp.events.filter(event => event.type === 'session_started').length, 1);
+  f.manager.stop(sessionId);
+
+  const restarted = f.openManager(f.historyFile);
+  assert.deepEqual(restarted.listHistory('codex'), [entry]);
+  assert.throws(() => restarted.start({ ...resume, rootId: 'other' }), { code: 'resume_unavailable' });
+  assert.throws(() => restarted.start({ ...resume, relPath: '.' }), { code: 'resume_unavailable' });
+  const resumed = restarted.start(resume);
+  assert.notEqual(resumed.sessionId, sessionId);
+  assert.deepEqual(f.launches[3].args, resumeArgs);
+  assert.equal(f.launches[3].options.cwd, fs.realpathSync(f.project));
+  restarted.send(resumed.sessionId, 'resumed after restart');
+  const output = eventsFor(restarted, resumed.sessionId);
+  assert.equal((await output.wait('session_started')).cliSessionId, codexThreadId);
+  assert.equal((await output.wait('turn_finished')).status, 'success');
 });
 
 test('resumes Claude by CLI UUID and replays only events after the supplied cursor', async t => {
@@ -307,7 +375,7 @@ test('persists only private session metadata and resumes Claude after Stop and m
     code: 'resume_unavailable',
   });
   assert.throws(() => restarted.start({ ...historyEntry, agent: 'codex', resumeSessionId: cliSessionId }), {
-    code: 'resume_not_verified',
+    code: 'resume_unavailable',
   });
   const afterRestart = restarted.start({ ...historyEntry, resumeSessionId: cliSessionId });
   assert.notEqual(afterRestart.sessionId, resumed.sessionId);
@@ -327,6 +395,7 @@ test('ignores invalid history files and malformed entries', t => {
     { ...valid, relPath: f.project },
     { ...valid, relPath: '../outside' },
     { ...valid, cliSessionId: '--help' },
+    { ...valid, agent: 'codex', cliSessionId: 'private-codex-thread' },
     { ...valid, rootId: '/private' },
     { ...valid, agent: 'unknown' },
     { ...valid, lastUsedAt: '20' },

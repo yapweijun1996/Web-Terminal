@@ -62,18 +62,31 @@ test('rejects sandbox bypasses and invalid model or effort values', () => {
   assert.throws(() => buildCodexArgs({ sandbox: 'read-only', effort: 'max' }), /invalid_effort/);
 });
 
-test('requires an explicit opt-in for the assumed resume argument order', () => {
-  const options = { sandbox: 'read-only', resumeSessionId: 'session-123' };
-  assert.throws(() => buildCodexArgs(options), /resume_not_verified/);
-  assert.throws(() => buildCodexArgs({
-    ...options, allowUnverifiedResume: 'true',
-  }), /resume_not_verified/);
-  assert.deepEqual(buildCodexArgs({ ...options, allowUnverifiedResume: true }), [
-    'exec', 'resume', 'session-123', '--json', '--skip-git-repo-check', '--sandbox', 'read-only',
+const resumeSessionId = 'c6cecb23-d965-4b2a-a68c-f975304021a2';
+
+test('builds resume arguments with a sandbox override and a stdin prompt', () => {
+  assert.deepEqual(buildCodexArgs({ sandbox: 'read-only', resumeSessionId }), [
+    'exec', 'resume', '--json', '--skip-git-repo-check', '-c', 'sandbox_mode="read-only"',
+    resumeSessionId, '-',
   ]);
+  assert.deepEqual(buildCodexArgs({
+    sandbox: 'workspace-write', model: 'gpt-6.2-sol', effort: 'low', resumeSessionId,
+  }), [
+    'exec', 'resume', '--json', '--skip-git-repo-check', '-c', 'sandbox_mode="workspace-write"',
+    '-m', 'gpt-6.2-sol', '-c', 'model_reasoning_effort="low"', resumeSessionId, '-',
+  ]);
+});
+
+test('rejects malformed resume IDs and sandbox bypasses in resume options', () => {
+  for (const id of [null, 123, '', 'session-123', `${resumeSessionId}\n`, '--last', '--danger-full-access']) {
+    assert.throws(() => buildCodexArgs({ sandbox: 'read-only', resumeSessionId: id }), /invalid_resume_session_id/);
+  }
+  for (const sandbox of ['danger-full-access', '--dangerously-bypass-approvals-and-sandbox']) {
+    assert.throws(() => buildCodexArgs({ sandbox, resumeSessionId }), /invalid_sandbox/);
+  }
   assert.throws(() => buildCodexArgs({
-    ...options, allowUnverifiedResume: true, resumeSessionId: '--danger-full-access',
-  }), /invalid_resume_session_id/);
+    sandbox: 'read-only', resumeSessionId, model: '--dangerously-bypass-approvals-and-sandbox',
+  }), /invalid_model/);
 });
 
 test('reports one error for malformed JSON and continues parsing', () => {
