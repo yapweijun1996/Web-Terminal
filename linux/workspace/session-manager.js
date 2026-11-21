@@ -1,0 +1,414 @@
+'use strict';
+
+const { spawn } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
+const { resolveProjectPath, assertStillInsideRoot } = require('./project-roots');
+const {
+  buildClaudeArgs, createClaudeParser, buildApprovalResponse, buildUserMessage,
+} = require('./claude-adapter');
+const { buildCodexArgs, createCodexParser } = require('./codex-adapter');
+
+// This flag set is marked verified for Claude only. Linux runtime acceptance is separate.
+const CLAUDE_ISOLATION_ARGS = ['--setting-sources', 'project', '--disable-slash-commands', '--strict-mcp-config'];
+const BLOCKED_ENV = /^(?:GH_TOKEN$|GITHUB_TOKEN$|SSH_AUTH_SOCK$|AWS_|ANTHROPIC_API_KEY$)/i;
+const CLI_SESSION_ID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+const STARTUP_MS = 30_000;
+const TURN_MS = 15 * 60_000;
+const APPROVAL_MS = 60_000;
+const MAX_FRAME_BYTES = 1024 * 1024;
+const MAX_STDOUT_BYTES = 4 * 1024 * 1024;
+const MAX_STDERR_BYTES = 8 * 1024;
+const MAX_REPLAY_EVENTS = 1_000;
+const MAX_RETAINED_SESSIONS = 20;
+
+function managerError(code, message = code, status) {
+  return Object.assign(new Error(message), { code, ...(status && { status }) });
+}
+
+function sanitizedEnv(overrides) {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !BLOCKED_ENV.test(key)));
+  return Object.assign(env, overrides);
+}
+
+function createSessionManager({
+  roots, spawnFn = spawn, now = Date.now, maxSessions = 8,
+  idleMs = 60 * 60_000, killGraceMs = 5_000, env,
+}) {
+  const sessions = new Map();
+  const useProcessGroup = process.platform !== 'win32';
+
+  function getSession(sessionId) {
+    const session = sessions.get(sessionId);
+    if (!session) throw managerError('unknown_session');
+    return session;
+  }
+
+  function drain(session, subscriber) {
+    if (subscriber.delivering) return;
+    subscriber.delivering = true;
+    try {
+      while (session.subscribers.has(subscriber) && subscriber.seq < session.seq) {
+        const firstSeq = session.history[0]?.event.seq ?? session.seq + 1;
+        const entry = session.history[subscriber.seq + 1 - firstSeq];
+        if (!entry) throw managerError('replay_incomplete');
+        subscriber.seq = entry.event.seq;
+        subscriber.fn(structuredClone(entry.event));
+      }
+    } catch {
+      session.subscribers.delete(subscriber);
+    } finally {
+      subscriber.delivering = false;
+    }
+  }
+
+  function emit(session, run, fields) {
+    const event = { ...fields, sessionId: session.id, turnId: run.turnId, seq: session.seq + 1 };
+    const bytes = Buffer.byteLength(JSON.stringify(event));
+    session.seq = event.seq;
+    session.history.push({ event, bytes });
+    session.replayBytes += bytes;
+    while (session.history.length > MAX_REPLAY_EVENTS || session.replayBytes > MAX_STDOUT_BYTES) {
+      session.replayBytes -= session.history.shift().bytes;
+    }
+    for (const subscriber of session.subscribers) drain(session, subscriber);
+  }
+
+  function forget(session) {
+    clearTimeout(session.idleTimer);
+    sessions.delete(session.id);
+    session.subscribers.clear();
+    session.history.length = 0;
+  }
+
+  function checkIdle(session) {
+    const run = session.run;
+    if (session.discard || run?.sent || run?.ending) return;
+    clearTimeout(session.idleTimer);
+    const remaining = idleMs - (now() - session.lastActivity);
+    if (remaining > 0) {
+      session.idleTimer = setTimeout(() => checkIdle(session), remaining);
+      session.idleTimer.unref();
+    } else if (run) {
+      session.discard = true;
+      finish(session, run, { status: 'cancelled' });
+    } else {
+      forget(session);
+    }
+  }
+
+  function signal(run, name) {
+    if (!run.child.pid) return;
+    try {
+      if (useProcessGroup) process.kill(-run.child.pid, name);
+      else run.child.kill(name);
+    } catch (error) {
+      if (error.code !== 'ESRCH') run.child.kill(name);
+    }
+  }
+
+  function finish(session, run, result, error) {
+    if (run.ending) return;
+    run.ending = true;
+    clearTimeout(run.startupTimer);
+    clearTimeout(run.turnTimer);
+    for (const approval of run.approvals.values()) clearTimeout(approval.timer);
+    run.approvals.clear();
+    if (!run.closed) {
+      signal(run, 'SIGTERM');
+      run.killTimer = setTimeout(() => signal(run, 'SIGKILL'), killGraceMs);
+      run.killTimer.unref();
+    }
+    if (error) emit(session, run, { type: 'error', ...error });
+    emit(session, run, { ...result, type: 'turn_finished' });
+  }
+
+  function fail(session, run, code, message) {
+    finish(session, run, { status: 'error' }, { code, message });
+  }
+
+  function write(session, run, payload, end, onWritten) {
+    const callback = error => {
+      if (error) fail(session, run, 'stdin_failed', 'Agent input could not be written');
+      else if (!run.ending) onWritten?.();
+    };
+    if (end) run.child.stdin.end(payload, callback);
+    else run.child.stdin.write(payload, callback);
+  }
+
+  function decide(session, run, approvalId, decision) {
+    const approval = run?.approvals.get(approvalId);
+    if (!approval || run.ending || approval.responding) throw managerError('unknown_approval');
+    const payload = buildApprovalResponse({ requestId: approval.requestId, decision });
+    clearTimeout(approval.timer);
+    approval.responding = true;
+    write(session, run, payload, false, () => {
+      run.approvals.delete(approvalId);
+      emit(session, run, { type: 'approval_decision', approvalId, decision });
+    });
+  }
+
+  function parseLine(session, run, line) {
+    if (!line.trim()) return;
+    for (const event of run.parser.push(line)) {
+      if (run.ending) return;
+      switch (event.type) {
+        case 'session_started':
+          if (session.agent === 'claude') {
+            const { session_id: cliSessionId } = JSON.parse(line);
+            if (session.cliSessionId && cliSessionId !== session.cliSessionId) {
+              fail(session, run, 'resume_mismatch', 'Agent returned an unexpected resume identifier');
+              break;
+            }
+            if (typeof cliSessionId === 'string' && CLI_SESSION_ID.test(cliSessionId)) {
+              session.cliSessionId = cliSessionId;
+            }
+          }
+          if (session.started) break;
+          session.started = true;
+          emit(session, run, event);
+          break;
+        case 'approval_request': {
+          if (typeof event.approvalId !== 'string' || !event.approvalId ||
+              !run.sent || run.requestIds.has(event.approvalId)) break;
+          const approvalId = randomUUID();
+          const timer = setTimeout(() => decide(session, run, approvalId, 'deny'), APPROVAL_MS);
+          timer.unref();
+          run.approvals.set(approvalId, { requestId: event.approvalId, timer });
+          run.requestIds.add(event.approvalId);
+          emit(session, run, { ...event, approvalId });
+          break;
+        }
+        case 'approval_decision':
+          // Decisions are acknowledged by the manager after writing to stdin.
+          break;
+        case 'error':
+          if (event.code === 'MALFORMED_JSON' || event.code === 'invalid_json') {
+            fail(session, run, 'invalid_agent_output', 'Agent emitted an invalid JSON record');
+            break;
+          }
+          emit(session, run, {
+            type: 'error', code: 'agent_error', message: 'Agent reported an error',
+          });
+          break;
+        case 'turn_finished':
+          // Validate the payload before marking the run finished. A deeply nested
+          // usage record may parse successfully but exceed serialization limits.
+          JSON.stringify(event);
+          finish(session, run, event);
+          break;
+        default:
+          emit(session, run, event);
+      }
+    }
+  }
+
+  function readStdout(session, run, chunk) {
+    if (run.ending) return;
+    run.stdoutBytes += chunk.length;
+    if (run.stdoutBytes > MAX_STDOUT_BYTES) {
+      fail(session, run, 'stdout_limit', 'Agent output exceeded the session limit');
+      return;
+    }
+    let start = 0;
+    while (start < chunk.length && !run.ending) {
+      const newline = chunk.indexOf(10, start);
+      const end = newline === -1 ? chunk.length : newline;
+      run.frameBytes += end - start;
+      if (run.frameBytes > MAX_FRAME_BYTES) {
+        fail(session, run, 'stdout_limit', 'Agent output exceeded the frame limit');
+        return;
+      }
+      if (end > start) run.frame.push(chunk.subarray(start, end));
+      if (newline === -1) return;
+      flushFrame(session, run);
+      start = end + 1;
+    }
+  }
+
+  function flushFrame(session, run) {
+    if (!run.frameBytes) return;
+    const line = Buffer.concat(run.frame, run.frameBytes).toString('utf8').replace(/\r$/, '');
+    run.frame = [];
+    run.frameBytes = 0;
+    try {
+      parseLine(session, run, line);
+    } catch {
+      fail(session, run, 'invalid_agent_output', 'Agent emitted an invalid event');
+    }
+  }
+
+  function attachChild(session, run) {
+    const { child } = run;
+    const streamFailure = () => fail(session, run, 'stream_failed', 'Agent communication failed');
+    const stderr = Buffer.alloc(MAX_STDERR_BYTES);
+    let stderrBytes = 0;
+    child.stdout.on('data', chunk => readStdout(session, run, chunk));
+    child.stderr.on('data', chunk => {
+      stderrBytes += chunk.copy(stderr, stderrBytes);
+    });
+    child.stdout.on('error', streamFailure);
+    child.stderr.on('error', streamFailure);
+    child.stdin.on('error', streamFailure);
+    child.once('spawn', () => clearTimeout(run.startupTimer));
+    child.once('error', () => fail(session, run, 'spawn_failed', 'Agent process could not be started'));
+    child.once('close', () => {
+      run.closed = true;
+      clearTimeout(run.killTimer);
+      if (!run.ending) flushFrame(session, run);
+      if (!run.ending) {
+        // A byte count provides a bounded diagnostic without exposing any stderr content.
+        const diagnostic = stderrBytes ? ' Agent diagnostics were withheld.' : '';
+        fail(session, run, 'unexpected_exit', 'Agent exited before completing the turn.' + diagnostic);
+      }
+      stderr.fill(0);
+      session.run = null;
+      if (session.discard) forget(session);
+      else {
+        session.lastActivity = now();
+        checkIdle(session);
+        const inactive = [...sessions.values()].filter(entry => !entry.run);
+        if (inactive.length > MAX_RETAINED_SESSIONS) {
+          inactive.sort((a, b) => a.lastActivity - b.lastActivity);
+          forget(inactive[0]);
+        }
+      }
+    });
+  }
+
+  function launch(session, resolved) {
+    if ([...sessions.values()].filter(entry => entry.run).length >= maxSessions) {
+      throw managerError('max_sessions', 'Maximum number of active sessions reached', 409);
+    }
+    const claude = session.agent === 'claude';
+    const args = claude
+      ? [...buildClaudeArgs({ approvalMode: 'prompt', resumeSessionId: session.cliSessionId }), ...CLAUDE_ISOLATION_ARGS]
+      : buildCodexArgs({ sandbox: 'read-only' });
+    const options = {
+      shell: false, stdio: ['pipe', 'pipe', 'pipe'], detached: useProcessGroup, env: sanitizedEnv(env),
+    };
+    const run = {
+      turnId: randomUUID(),
+      parser: (claude ? createClaudeParser : createCodexParser)({ sessionId: session.id }),
+      approvals: new Map(), requestIds: new Set(), frame: [], frameBytes: 0, stdoutBytes: 0,
+    };
+    session.run = run;
+    try {
+      const checked = assertStillInsideRoot(roots, resolved);
+      if (!checked.ok) throw managerError(checked.code);
+      if (checked.absolutePath !== resolved.absolutePath || checked.absolutePath !== session.absolutePath) {
+        throw managerError('project_path_changed');
+      }
+      options.cwd = checked.absolutePath;
+      try {
+        run.child = spawnFn(session.agent, args, options);
+      } catch {
+        throw managerError('spawn_failed', 'Agent process could not be started');
+      }
+    } catch (error) {
+      session.run = null;
+      throw error;
+    }
+    session.lastActivity = now();
+    run.startupTimer = setTimeout(() => fail(session, run, 'startup_timeout', 'Agent startup timed out'), STARTUP_MS);
+    run.startupTimer.unref();
+    attachChild(session, run);
+    checkIdle(session);
+    return run;
+  }
+
+  function resolve(rootId, relPath) {
+    const resolved = resolveProjectPath(roots, rootId, relPath);
+    if (!resolved.ok) throw managerError(resolved.code);
+    return resolved;
+  }
+
+  function start({ rootId, relPath, agent, resumeSessionId }) {
+    if (agent !== 'claude' && agent !== 'codex') throw managerError('invalid_agent');
+    const resolved = resolve(rootId, relPath);
+    for (const session of sessions.values()) checkIdle(session);
+
+    if (resumeSessionId !== undefined) {
+      if (agent === 'codex') throw managerError('resume_not_verified');
+      const session = sessions.get(resumeSessionId);
+      if (!session?.cliSessionId || session.agent !== agent ||
+          session.rootId !== rootId || session.relPath !== relPath || session.discard) {
+        throw managerError('resume_unavailable');
+      }
+      if (session.run) throw managerError('turn_active', 'An agent process is already active', 409);
+      launch(session, resolved);
+      return { sessionId: session.id };
+    }
+
+    const session = {
+      id: randomUUID(), rootId, relPath, agent, absolutePath: resolved.absolutePath,
+      seq: 0, history: [], replayBytes: 0, subscribers: new Set(),
+    };
+    sessions.set(session.id, session);
+    try {
+      launch(session, resolved);
+    } catch (error) {
+      forget(session);
+      throw error;
+    }
+    return { sessionId: session.id };
+  }
+
+  function send(sessionId, text) {
+    const session = getSession(sessionId);
+    if (typeof text !== 'string') throw new TypeError('text must be a string');
+    checkIdle(session);
+    if (!sessions.has(sessionId)) throw managerError('unknown_session');
+    if (session.discard || session.run?.sent || session.run?.ending) {
+      throw managerError('turn_active', 'An agent process is already active', 409);
+    }
+    if (!session.run && session.agent === 'claude' && session.started && !session.cliSessionId) {
+      throw managerError('resume_unavailable');
+    }
+    const run = session.run ?? launch(session, resolve(session.rootId, session.relPath));
+    run.sent = true;
+    clearTimeout(session.idleTimer);
+    run.turnTimer = setTimeout(() => fail(session, run, 'turn_timeout', 'Agent turn timed out'), TURN_MS);
+    run.turnTimer.unref();
+    const claude = session.agent === 'claude';
+    write(session, run, claude ? buildUserMessage(text) : text, !claude);
+  }
+
+  function onEvent(sessionId, fn, afterSeq) {
+    const session = getSession(sessionId);
+    if (typeof fn !== 'function') throw new TypeError('fn must be a function');
+    const earliest = session.history[0]?.event.seq ?? session.seq + 1;
+    const seq = afterSeq ?? earliest - 1;
+    if (!Number.isSafeInteger(seq) || seq < 0 || seq > session.seq) throw managerError('invalid_cursor');
+    if (seq < earliest - 1) throw managerError('replay_incomplete');
+    const subscriber = { fn, seq };
+    session.subscribers.add(subscriber);
+    drain(session, subscriber);
+    return () => session.subscribers.delete(subscriber);
+  }
+
+  function respond(sessionId, approvalId, decision) {
+    const session = getSession(sessionId);
+    if (session.agent === 'codex') throw managerError('approvals_unsupported');
+    decide(session, session.run, approvalId, decision);
+  }
+
+  function stop(sessionId) {
+    const session = sessions.get(sessionId);
+    if (!session || session.discard) return;
+    session.discard = true;
+    clearTimeout(session.idleTimer);
+    if (session.run) finish(session, session.run, { status: 'cancelled' });
+    else forget(session);
+  }
+
+  function list() {
+    for (const session of sessions.values()) checkIdle(session);
+    return [...sessions.values()].map(({ id, rootId, relPath, agent }) => ({
+      sessionId: id, rootId, relPath, agent,
+    }));
+  }
+
+  return { start, send, onEvent, respond, stop, list };
+}
+
+module.exports = { createSessionManager };

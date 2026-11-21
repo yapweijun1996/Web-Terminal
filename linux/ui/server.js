@@ -247,8 +247,27 @@ function proxy(req, res, target, endpoint) {
   upstream.on('error', () => { if (!res.headersSent) send(res, 502, 'Terminal unavailable', 'text/plain'); else res.destroy(); });
   req.pipe(upstream);
 }
+let workspace;
+if (process.env.WEB_TERMINAL_WORKSPACE_CONFIG) {
+  try {
+    const { createWorkspace } = require('../workspace');
+    workspace = createWorkspace({ configPath: process.env.WEB_TERMINAL_WORKSPACE_CONFIG, checkRequest: allowedMutation });
+  } catch {
+    console.error('Workspace configuration unavailable');
+  }
+}
+const workspaceAssets = workspace && new Map([
+  ['/workspace/', ['index.html', 'text/html; charset=utf-8']],
+  ['/workspace/app.js', ['app.js', 'text/javascript; charset=utf-8']],
+  ['/workspace/styles.css', ['styles.css', 'text/css; charset=utf-8']],
+]);
 const server = http.createServer(async (req, res) => {
   try {
+    if (workspace) {
+      if (await workspace.handle(req, res)) return;
+      const asset = req.method === 'GET' && workspaceAssets.get(req.url);
+      if (asset) return file(res, `../workspace-ui/dist/${asset[0]}`, asset[1]);
+    }
     if (collaborationSocket && req.method === 'POST' && ['/api/context/prepare', '/api/context/file', '/api/context/insert', '/api/context/delete'].includes(req.url)) {
       if (!allowedMutation(req)) return send(res, 403, '{"error":"Forbidden"}');
       await collaborationReady;
@@ -465,5 +484,5 @@ collaborationReady.then(() => server.listen(socket, () => fs.chmodSync(socket, 0
   if (collaboration) await collaboration.close();
   console.error('Collaboration configuration unavailable'); process.exitCode = 1;
 });
-function shutdown() { contextPaste?.close(); managedWebSockets?.close(); void collaboration?.close(); server.close(); for (const child of children.values()) child.kill('SIGTERM'); }
+function shutdown() { workspace?.close(); contextPaste?.close(); managedWebSockets?.close(); void collaboration?.close(); server.close(); for (const child of children.values()) child.kill('SIGTERM'); }
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);

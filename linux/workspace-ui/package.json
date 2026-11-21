@@ -1,0 +1,1 @@
+{"name":"workspace-ui","private":true,"type":"module","scripts":{"build":"node build.mjs"},"dependencies":{"esbuild":"^0.28.2","preact":"^10.29.8"}}
