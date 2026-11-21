@@ -16,7 +16,7 @@ export function WorkspaceSelect({ kind, value, onChange, label = kind, choices =
 }
 
 export function Sidebar({
-  projects, projectId, sessionId, sessions, open, disabled, closeButtonRef, onClose, onFocusLeave, onProject, onSession, onNew, onClear,
+  projects, projectId, sessionId, sessions, open, mock, disabled, closeButtonRef, onClose, onFocusLeave, onProject, onSession, onNew, onClear,
 }) {
   const [search, setSearch] = useState('');
   const visibleProjects = projects.filter((project) => project.name.toLowerCase().includes(search.trim().toLowerCase()));
@@ -55,8 +55,10 @@ export function Sidebar({
             <button class="quiet-button" onClick={onClear} disabled={!sessions.length}>Clear</button>
           </div>
           {sessions.map((session) => (
-            <button class="nav-item" key={session.id} disabled={disabled} aria-pressed={session.id === sessionId} onClick={() => onSession(session)}>
-              <Icon name="history" size={16} /> {session.label}
+            <button class="nav-item" key={session.id} disabled={disabled || session.disabled} title={session.title}
+              aria-pressed={mock ? session.id === sessionId : undefined} onClick={() => onSession(session)}>
+              <Icon name="history" size={16} />
+              <span>{session.label}{session.detail && <small>{session.detail}</small>}</span>
             </button>
           ))}
           {sessions.length === 0 && <p class="empty-list">No recent sessions.</p>}
@@ -71,7 +73,7 @@ export function Sidebar({
           <summary><Icon name="help" size={16} /> Help</summary>
           <p>Select a project and agent to start a coding session.</p>
         </details>
-        <div class="profile"><span class="avatar">{user.initials}</span>{user.name}</div>
+        <div class="profile"><span class="avatar" aria-hidden="true">{mock ? user.initials : 'Y'}</span>{mock ? user.name : 'You'}</div>
       </div>
     </aside>
   );

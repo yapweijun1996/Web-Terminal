@@ -129,6 +129,7 @@ summary::-webkit-details-marker { display: none; }
 .project-search:focus-within { outline: 2px solid var(--focus); }
 .project-search input { width: 100%; min-height: 34px; padding: 0; background: transparent; border: 0; outline: none; font-size: .83rem; }
 .nav-item { width: 100%; color: var(--muted); font-size: .86rem; }
+.nav-item > span { min-width: 0; overflow-wrap: anywhere; }
 .nav-item[aria-pressed="true"] { color: var(--text); background: var(--raised); }
 .nav-item small { display: block; color: var(--muted); font-size: .72rem; }
 .empty-list, .sidebar-detail p { padding: 6px 8px; color: var(--muted); font-size: .8rem; }
@@ -190,6 +191,7 @@ summary::-webkit-details-marker { display: none; }
   text-align: center;
   font-size: .77rem;
 }
+.prototype-banner .secondary { margin-inline-start: 8px; }
 .chat-body { grid-row: 3; overflow: auto; }
 .chat-content, .composer { width: min(100%, 740px); margin-inline: auto; }
 .chat-content { padding: 18px 18px 16px; }
@@ -203,6 +205,7 @@ summary::-webkit-details-marker { display: none; }
 .welcome h1 { font-size: clamp(1.37rem, 2.5vw, 1.8rem); line-height: 1.15; letter-spacing: -.025em; }
 .welcome p { margin-top: 4px; color: var(--muted); font-size: .87rem; }
 .welcome-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-block: 12px; }
+.welcome-location { display: grid; gap: 10px; }
 .welcome-fields div > span:first-child { display: block; margin-bottom: 3px; color: var(--muted); font-size: .77rem; font-weight: 650; }
 .welcome-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 .resume { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: .84rem; }

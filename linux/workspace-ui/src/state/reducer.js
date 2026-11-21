@@ -1,5 +1,9 @@
 export const emptyConversation = { lastSeq: 0, turns: [], pendingPrompt: null, error: null };
 
+export function hasRunningTurn({ pendingPrompt, turns }, previewTurnId) {
+  return Boolean(pendingPrompt) || turns.some((turn) => turn.status === 'running' && turn.id !== previewTurnId);
+}
+
 function newTurn(id, prompt = {}) {
   return { id, ...prompt, messages: [], tools: [], approvals: [], status: 'running', errors: [] };
 }

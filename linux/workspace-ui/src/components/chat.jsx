@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { workspaceError } from '../api/client.js';
+import { canSendMessage, isSubmitKey } from '../state/composer.js';
 import { Icon } from './icon.jsx';
 import { WorkspaceSelect } from './navigation.jsx';
 
-export function Welcome({ projects, projectId, agentId, onProject, onAgent, onStart, canResume, disabled }) {
+export function Welcome({
+  projects, projectId, folders, relPath, agentId, onProject, onFolder, onAgent, onStart, canResume, disabled,
+}) {
   const [resume, setResume] = useState(true);
 
   return (
@@ -15,7 +18,10 @@ export function Welcome({ projects, projectId, agentId, onProject, onAgent, onSt
       <h1>What are we building?</h1>
       <p>Choose a project and an agent to start coding.</p>
       <div class="welcome-fields">
-        <div><span>Project</span><WorkspaceSelect kind="Project" label="Welcome project" choices={projects} disabled={disabled} value={projectId} onChange={onProject} /></div>
+        <div class="welcome-location">
+          <div><span>Project</span><WorkspaceSelect kind="Project" label="Welcome project" choices={projects} disabled={disabled} value={projectId} onChange={onProject} /></div>
+          <div><span>Folder</span><WorkspaceSelect kind="Folder" choices={folders} disabled={disabled || !projectId} value={relPath} onChange={onFolder} /></div>
+        </div>
         <div><span>Agent</span><WorkspaceSelect kind="Agent" label="Welcome agent" disabled={disabled} value={agentId} onChange={onAgent} /></div>
       </div>
       <div class="welcome-actions">
@@ -160,6 +166,7 @@ export function Composer({
   const [attachments, setAttachments] = useState([]);
   const fileInput = useRef(null);
   const imageInput = useRef(null);
+  const canSend = canSendMessage(draft, disabled);
 
   function addFiles(event) {
     const input = event.currentTarget;
@@ -167,20 +174,24 @@ export function Composer({
     input.value = '';
   }
 
-  async function send(event) {
+  function send(event) {
     event.preventDefault();
-    const prompt = draft.trim();
-    if (disabled || (!prompt && !attachments.length)) return;
-    if (await onSend(prompt, attachments)) {
-      setDraft('');
-      setAttachments([]);
-    }
+    if (!canSend) return;
+    onSend(draft.trim(), attachments, () => {
+      setDraft((current) => current === draft ? '' : current);
+      setAttachments((current) => current === attachments ? [] : current);
+    });
   }
 
   return (
     <form class="composer" aria-label="Message composer" onSubmit={send}>
       <textarea aria-label="Message" rows="2" placeholder="Ask your agent to build something…" value={draft} disabled={working}
-        onInput={(event) => setDraft(event.currentTarget.value)} />
+        onInput={(event) => setDraft(event.currentTarget.value)}
+        onKeyDown={(event) => {
+          if (!isSubmitKey(event)) return;
+          event.preventDefault();
+          event.currentTarget.form.requestSubmit();
+        }} />
       {attachments.length > 0 && (
         <div class="attachments">
           <span>{attachments.join(', ')}</span>
@@ -197,7 +208,7 @@ export function Composer({
         <div class="composer-agent"><WorkspaceSelect kind="Agent" label="Composer agent" disabled={working} value={agentId} onChange={onAgent} /></div>
         {running && !mock && <button class="secondary" type="button" onClick={onStop} disabled={working}>Stop</button>}
         <button class="icon-button send" type="submit" aria-label="Send message" title="Send message"
-          disabled={disabled || (!draft.trim() && !attachments.length)}><Icon name="send" /></button>
+          disabled={!canSend}><Icon name="send" /></button>
       </div>
     </form>
   );

@@ -7,8 +7,12 @@ node build.mjs
 node --test test/*.test.js
 ```
 
-Serve the generated files on the same origin as the Linux workspace API. The project picker lists the configured project roots and uses the fixed relative directory `.` to start at the selected root. Claude Code and Codex CLI are the agent IDs accepted by the session route. Recent sessions are kept in memory for the current page. The Resume session checkbox requests backend resume from a matching recent session.
+Serve the generated files on the same origin as the Linux workspace API. Choose a configured project and one of its server-listed folders. Project root uses the relative directory `.`. Claude Code and Codex CLI are the agent IDs accepted by the session route.
+
+Recent Sessions loads server history on startup and after each finished turn. Click a Claude Code entry to resume it, or use the Resume session checkbox to pick the latest Claude Code entry for the selected project and folder. Codex CLI history entries are disabled for resume. Clear hides the current list until the next refresh.
 
 Use `?mock=1` for the offline preview, including when opening `dist/index.html` directly. The app also uses the preview when the projects route returns HTTP 404. The preview includes sample tool steps, a mock approval and fixed terminal output.
 
 Below 768px, Terminal starts collapsed and Open projects opens the sidebar. The live workspace API accepts text messages and tool decisions. File and image attachments and terminal output are available in the preview because the current workspace API has no routes for them. Live tool cards show their status and omit raw inputs and outputs, which may contain sensitive data.
+
+Press Enter to send a message and Shift+Enter to insert a newline. If the server is still stopping the previous run, Retry repeats the failed action.

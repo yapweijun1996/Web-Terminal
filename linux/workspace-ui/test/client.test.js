@@ -13,6 +13,19 @@ test('GET projects does not request or send the mutation token', async () => {
   assert.deepEqual(await client.listProjects(), data);
 });
 
+test('GET history requests all agents without a mutation token', async () => {
+  const data = { entries: [{
+    agent: 'claude', rootId: 'root', relPath: 'web', cliSessionId: 'old-id', lastUsedAt: 100,
+  }] };
+  const client = createWorkspaceClient(async (url, options) => {
+    assert.equal(url, '/api/workspace/history');
+    assert.equal(options.method, undefined);
+    assert.equal(options.headers, undefined);
+    return Response.json(data);
+  });
+  assert.deepEqual(await client.listHistory(), data);
+});
+
 test('every POST loads the token and sends the expected headers and body', async () => {
   const calls = [];
   const client = createWorkspaceClient(async (url, options) => {
@@ -22,12 +35,14 @@ test('every POST loads the token and sends the expected headers and body', async
     return Response.json({ ok: true });
   });
 
-  assert.equal(await client.startSession({ rootId: 'root', agent: 'codex', resumeSessionId: 'old-id' }), 'new-id');
+  assert.equal(await client.startSession({ rootId: 'root', relPath: 'web', agent: 'claude', resumeSessionId: 'old-id' }), 'new-id');
+  await client.startSession({ rootId: 'root', agent: 'codex' });
   await client.sendMessage('new-id', 'Hello');
   await client.stop('new-id');
   await client.decideApproval('new-id', 'approval-1', 'deny');
   const expected = [
-    ['/api/workspace/sessions', { rootId: 'root', relPath: '.', agent: 'codex', resumeSessionId: 'old-id' }],
+    ['/api/workspace/sessions', { rootId: 'root', relPath: 'web', agent: 'claude', resumeSessionId: 'old-id' }],
+    ['/api/workspace/sessions', { rootId: 'root', relPath: '.', agent: 'codex' }],
     ['/api/workspace/sessions/new-id/messages', { text: 'Hello' }],
     ['/api/workspace/sessions/new-id/stop', {}],
     ['/api/workspace/sessions/new-id/approvals/approval-1', { decision: 'deny' }],
@@ -49,7 +64,7 @@ test('server error codes map to readable messages and retain HTTP status', async
     ? Response.json({ token: 'fixture-token' })
     : Response.json({ error: 'turn_active' }, { status: 409 }));
   await assert.rejects(client.sendMessage('session', 'Hello'), {
-    code: 'turn_active', status: 409, message: 'Wait for the current turn to finish or stop it first.',
+    code: 'turn_active', status: 409, message: 'The previous run is still stopping, retry in a moment',
   });
 });
 

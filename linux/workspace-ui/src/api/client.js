@@ -26,7 +26,7 @@ const messages = new Map(Object.entries({
   spawn_failed: 'The coding agent could not start.',
   resume_unavailable: 'This session cannot be resumed.',
   resume_not_verified: 'The coding agent could not verify this session for resume.',
-  turn_active: 'Wait for the current turn to finish or stop it first.',
+  turn_active: 'The previous run is still stopping, retry in a moment',
   max_sessions: 'The workspace session limit has been reached.',
   approvals_unsupported: 'This agent cannot handle approvals for this session.',
   project_path_changed: 'The project location changed. Start a new session.',
@@ -87,9 +87,9 @@ export function createWorkspaceClient(fetchImpl = globalThis.fetch.bind(globalTh
 
   return {
     listProjects: () => request(`${base}/projects`),
-    async startSession({ rootId, agent, resumeSessionId }) {
-      // The root selection uses a fixed relative directory, never a server path.
-      const data = await post(`${base}/sessions`, { rootId, relPath: '.', agent, resumeSessionId });
+    listHistory: () => request(`${base}/history`),
+    async startSession({ rootId, relPath = '.', agent, resumeSessionId }) {
+      const data = await post(`${base}/sessions`, { rootId, relPath, agent, resumeSessionId });
       return identifier(data?.sessionId, 'invalid_response');
     },
     sendMessage: (sessionId, text) => post(`${sessionUrl(sessionId)}/messages`, { text }),

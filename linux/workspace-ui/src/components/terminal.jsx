@@ -11,7 +11,7 @@ export function Terminal({ open, onToggle, mock }) {
         {mock ? <>
           <div class="terminal-caption">Sample output</div>
           <pre tabIndex={0} aria-label="Terminal output">{terminalText}</pre>
-        </> : <p class="terminal-caption">Live terminal output is unavailable in this workspace.</p>}
+        </> : <p class="terminal-caption">Terminal panel is not connected in this build</p>}
       </div>
     </aside>
   );
