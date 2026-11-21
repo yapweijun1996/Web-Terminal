@@ -13,8 +13,9 @@ const { createSessionManager } = require('../workspace/session-manager');
 const cliPath = path.join(__dirname, 'fixtures', 'fake-cli.js');
 const cliSessionId = 'c6cecb23-d965-4b2a-a68c-f975304021a2';
 const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+const historyEntry = { agent: 'claude', rootId: 'projects', relPath: 'project', cliSessionId };
 
-function fixture(t, options = {}, mode = 'echo') {
+function fixture(t, { persistHistory, ...options } = {}, mode = 'echo') {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace-manager-'));
   const root = path.join(base, 'root');
   const project = path.join(root, 'project');
@@ -22,7 +23,7 @@ function fixture(t, options = {}, mode = 'echo') {
   fs.mkdirSync(project, { recursive: true });
   fs.mkdirSync(outside);
   const launches = [];
-  const manager = createSessionManager({
+  const managerOptions = {
     roots: loadProjectRoots({ roots: [{ id: 'projects', label: 'Projects', path: root }] }),
     killGraceMs: 100,
     spawnFn(command, args, spawnOptions) {
@@ -33,9 +34,19 @@ function fixture(t, options = {}, mode = 'echo') {
       return child;
     },
     ...options,
-  });
+  };
+  const managers = [];
+  function openManager(historyFile) {
+    const manager = createSessionManager({ ...managerOptions, historyFile });
+    managers.push(manager);
+    return manager;
+  }
+  const historyFile = path.join(base, 'history.json');
+  const manager = openManager(persistHistory ? historyFile : undefined);
   t.after(async () => {
-    for (const { sessionId } of manager.list()) manager.stop(sessionId);
+    for (const manager of managers) {
+      for (const { sessionId } of manager.list()) manager.stop(sessionId);
+    }
     try {
       await Promise.all(launches.map(launch => launch.closed));
     } finally {
@@ -43,7 +54,7 @@ function fixture(t, options = {}, mode = 'echo') {
     }
   });
   const start = overrides => manager.start({ rootId: 'projects', relPath: 'project', agent: 'claude', ...overrides });
-  return { manager, root, project, outside, launches, start };
+  return { manager, root, project, outside, launches, start, historyFile, openManager };
 }
 
 function eventsFor(manager, sessionId) {
@@ -129,6 +140,9 @@ test('buffers partial CRLF lines and split UTF-8 with ordered, opaque events', {
   const f = fixture(t, {}, 'partial');
   const { sessionId } = f.start();
   const output = eventsFor(f.manager, sessionId);
+  assert.deepEqual(f.manager.list(), [{
+    sessionId, agent: 'claude', rootId: 'projects', relPath: 'project', cliSessionId: null, status: 'active',
+  }]);
   f.manager.send(sessionId, 'prompt');
   assert.throws(() => f.manager.send(sessionId, 'overlap'), { code: 'turn_active', status: 409 });
   const finished = await output.wait('turn_finished');
@@ -139,7 +153,7 @@ test('buffers partial CRLF lines and split UTF-8 with ordered, opaque events', {
   assert.match(finished.turnId, uuid);
   assert.deepEqual(output.events.map(event => event.seq), [1, 2, 3]);
   assert.ok(output.events.every(event => event.sessionId === sessionId && event.turnId === finished.turnId));
-  assert.ok(!JSON.stringify(output.events).includes(cliSessionId));
+  assert.equal(output.events[0].cliSessionId, cliSessionId);
 });
 
 for (const decision of ['allow', 'deny']) {
@@ -150,10 +164,15 @@ for (const decision of ['allow', 'deny']) {
     const output = eventsFor(f.manager, sessionId);
     f.manager.send(sessionId, 'prompt');
     const request = await output.wait('approval_request');
+    const write = t.mock.method(f.launches[0].child.stdin, 'write');
     assert.match(request.approvalId, uuid);
     assert.deepEqual(request.options, ['allow', 'deny']);
     assert.throws(() => f.manager.respond(otherSession, request.approvalId, decision), { code: 'unknown_approval' });
     f.manager.respond(sessionId, request.approvalId, decision);
+    if (decision === 'deny') {
+      const [payload] = write.mock.calls[0].arguments;
+      assert.equal(JSON.parse(payload).response.response.message, 'The user denied this action.');
+    }
     assert.throws(() => f.manager.respond(sessionId, request.approvalId, decision), { code: 'unknown_approval' });
     const acknowledged = await output.wait('approval_decision');
     assert.equal(acknowledged.approvalId, request.approvalId);
@@ -225,16 +244,26 @@ test('Codex rejects approvals, closes stdin after the prompt, and keeps the work
   assert.deepEqual(finished.usage, { input_tokens: 3 });
   assert.equal(output.events.find(event => event.type === 'message_done').text, 'exact\nprompt');
   assert.ok(output.events.every(event => event.sessionId === sessionId));
+  assert.equal(output.events[0].cliSessionId, 'private-codex-thread');
+  assert.equal(f.manager.list()[0].cliSessionId, 'private-codex-thread');
 });
 
-test('retains Claude resume IDs server-side and replays only events after the supplied cursor', async t => {
+test('resumes Claude by CLI UUID and replays only events after the supplied cursor', async t => {
   const f = fixture(t);
   const { sessionId } = f.start();
   const output = eventsFor(f.manager, sessionId);
   f.manager.send(sessionId, 'first');
   await f.launches[0].closed;
-  assert.throws(() => f.start({ resumeSessionId: cliSessionId }), { code: 'resume_unavailable' });
-  assert.deepEqual(f.start({ resumeSessionId: sessionId }), { sessionId });
+  assert.deepEqual(f.manager.list(), [{
+    sessionId, agent: 'claude', rootId: 'projects', relPath: 'project', cliSessionId, status: 'idle',
+  }]);
+  assert.throws(() => f.start({ resumeSessionId: '--help' }), { code: 'resume_unavailable' });
+  assert.throws(() => f.start({ resumeSessionId: '8686f84d-d1dd-4ed4-907e-4a431771cb3e' }), {
+    code: 'resume_unavailable',
+  });
+  assert.throws(() => f.start({ resumeSessionId: cliSessionId, relPath: '.' }), { code: 'resume_unavailable' });
+  assert.deepEqual(f.start({ resumeSessionId: cliSessionId }), { sessionId });
+  assert.throws(() => f.start({ resumeSessionId: cliSessionId }), { code: 'turn_active' });
   const args = f.launches[1].args;
   assert.equal(args[args.indexOf('--resume') + 1], cliSessionId);
   f.manager.send(sessionId, 'second');
@@ -245,6 +274,95 @@ test('retains Claude resume IDs server-side and replays only events after the su
   assert.equal(replay[0].text, 'second');
   assert.notEqual(replay[0].turnId, output.events[0].turnId);
   assert.ok(!JSON.stringify(replay).includes(cliSessionId));
+  assert.deepEqual(f.start({ resumeSessionId: sessionId }), { sessionId });
+});
+
+test('persists only private session metadata and resumes Claude after Stop and manager restart', { timeout: 5_000 }, async t => {
+  let clock = 100;
+  const f = fixture(t, { persistHistory: true, now: () => clock });
+  const { sessionId } = f.start();
+  const first = eventsFor(f.manager, sessionId);
+  await first.wait('session_started');
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.historyFile)), [{ ...historyEntry, lastUsedAt: 100 }]);
+  assert.equal(fs.statSync(f.historyFile).mode & 0o777, 0o600);
+
+  clock = 200;
+  f.manager.stop(sessionId);
+  await f.launches[0].closed;
+  assert.deepEqual(f.manager.list(), []);
+  assert.deepEqual(f.manager.listHistory(), [{ ...historyEntry, lastUsedAt: 200 }]);
+  assert.throws(() => f.start({ resumeSessionId: cliSessionId, relPath: '.' }), { code: 'resume_unavailable' });
+  const resumed = f.start({ resumeSessionId: cliSessionId });
+  assert.notEqual(resumed.sessionId, sessionId);
+  const resumeArgs = f.launches[1].args;
+  assert.equal(resumeArgs[resumeArgs.indexOf('--resume') + 1], cliSessionId);
+  await eventsFor(f.manager, resumed.sessionId).wait('session_started');
+  clock = 300;
+  f.manager.send(resumed.sessionId, 'do not persist this prompt');
+  await f.launches[1].closed;
+
+  const restarted = f.openManager(f.historyFile);
+  assert.deepEqual(restarted.listHistory(), [{ ...historyEntry, lastUsedAt: 300 }]);
+  assert.throws(() => restarted.start({ ...historyEntry, relPath: '.', resumeSessionId: cliSessionId }), {
+    code: 'resume_unavailable',
+  });
+  assert.throws(() => restarted.start({ ...historyEntry, agent: 'codex', resumeSessionId: cliSessionId }), {
+    code: 'resume_not_verified',
+  });
+  const afterRestart = restarted.start({ ...historyEntry, resumeSessionId: cliSessionId });
+  assert.notEqual(afterRestart.sessionId, resumed.sessionId);
+  const { args } = f.launches[2];
+  assert.equal(args[args.indexOf('--resume') + 1], cliSessionId);
+});
+
+test('ignores invalid history files and malformed entries', t => {
+  const f = fixture(t);
+  for (const contents of ['{', '{}']) {
+    fs.writeFileSync(f.historyFile, contents);
+    assert.deepEqual(f.openManager(f.historyFile).listHistory(), []);
+  }
+  const valid = { ...historyEntry, lastUsedAt: 10 };
+  const malformed = [
+    null, [],
+    { ...valid, relPath: f.project },
+    { ...valid, relPath: '../outside' },
+    { ...valid, cliSessionId: '--help' },
+    { ...valid, rootId: '/private' },
+    { ...valid, agent: 'unknown' },
+    { ...valid, lastUsedAt: '20' },
+    { ...valid, lastUsedAt: -1 },
+    { ...valid, env: {} },
+  ];
+  fs.writeFileSync(f.historyFile, JSON.stringify([...malformed, valid]));
+  assert.deepEqual(f.openManager(f.historyFile).listHistory(), [valid]);
+});
+
+test('loads and writes at most 200 distinct history entries, newest first', async t => {
+  const f = fixture(t, { now: () => 1000 });
+  const seed = Array.from({ length: 202 }, (_, index) => ({
+    ...historyEntry, cliSessionId: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`, lastUsedAt: index,
+  }));
+  const newest = { ...seed.at(-1), lastUsedAt: 500 };
+  fs.writeFileSync(f.historyFile, JSON.stringify([...seed, newest]));
+  const manager = f.openManager(f.historyFile);
+  assert.deepEqual(manager.listHistory(), [newest, ...seed.slice(2, -1).reverse()]);
+
+  const { sessionId } = manager.start(historyEntry);
+  await eventsFor(manager, sessionId).wait('session_started');
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.historyFile)), [
+    { ...historyEntry, lastUsedAt: 1000 }, newest, ...seed.slice(3, -1).reverse(),
+  ]);
+});
+
+test('does not write through a symlinked history parent', async t => {
+  const f = fixture(t);
+  const linkedParent = f.historyFile + '.link';
+  fs.symlinkSync(f.outside, linkedParent, 'dir');
+  const manager = f.openManager(path.join(linkedParent, 'history.json'));
+  const { sessionId } = manager.start(historyEntry);
+  await eventsFor(manager, sessionId).wait('session_started');
+  assert.equal(manager.listHistory().length, 1);
+  assert.deepEqual(fs.readdirSync(f.outside), []);
 });
 
 test('stops on an oversized stdout frame', { timeout: 5_000 }, async t => {

@@ -22,6 +22,7 @@ test('replays the recorded Codex exec session in order', () => {
     'turn_finished',
   ]);
   const [, firstMessage, toolStart, toolOutput, lastMessage, finished] = events;
+  assert.equal(events[0].cliSessionId, records[0].thread_id);
   assert.deepEqual(events.map(event => event.seq), [1, 2, 3, 4, 5, 6]);
   assert.ok(events[0].turnId);
   for (const event of events) {

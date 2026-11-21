@@ -55,7 +55,7 @@ function checkCodexHome(directory) {
 }
 
 function createWorkspace({ configPath, checkRequest, spawnFn = spawn, gitRunner = runGit }) {
-  let roots, managerRoots, workspacesRoot, codexHome, claudeModelArgs, allowedRepositories;
+  let roots, managerRoots, workspacesRoot, codexHome, claudeModelArgs, allowedRepositories, historyFile;
   try {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     roots = loadProjectRoots(config);
@@ -75,6 +75,8 @@ function createWorkspace({ configPath, checkRequest, spawnFn = spawn, gitRunner 
     checkCodexHome(codexHome);
     fs.mkdirSync(config.workspacesRoot, { recursive: true, mode: 0o700 });
     workspacesRoot = fs.realpathSync(config.workspacesRoot);
+    historyFile = typeof config.historyFile === 'string' && path.isAbsolute(config.historyFile)
+      ? config.historyFile : path.join(workspacesRoot, '.session-history.json');
     managerRoots = loadProjectRoots({
       roots: [
         ...roots.map(({ id, label, realPath }) => ({ id, label, path: realPath })),
@@ -88,6 +90,7 @@ function createWorkspace({ configPath, checkRequest, spawnFn = spawn, gitRunner 
   let closing = false;
   const sessionManager = createSessionManager({
     roots: managerRoots,
+    historyFile,
     env: { CODEX_HOME: codexHome },
     spawnFn(agent, args, options) {
       if (closing) throw new Error('Workspace is shutting down');

@@ -16,7 +16,7 @@ const source = fs.readFileSync(serverPath, 'utf8');
 const dist = path.join(__dirname, '../workspace-ui/dist');
 const fakeCli = path.join(__dirname, 'fixtures/fake-cli.js');
 
-async function fixture(t, enabled, { gitRunner, invalidConfig = false } = {}) {
+async function fixture(t, enabled, { gitRunner, invalidConfig = false, customHistory = false } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-workspace-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const configPath = path.join(directory, 'config.json');
@@ -24,11 +24,13 @@ async function fixture(t, enabled, { gitRunner, invalidConfig = false } = {}) {
   const cwd = path.join(project, 'roots', 'repo');
   const codexHome = path.join(project, 'codex');
   const workspacesRoot = path.join(project, 'managed');
+  const historyFile = customHistory ? path.join(project, 'sessions.json') : path.join(workspacesRoot, '.session-history.json');
   fs.mkdirSync(cwd, { recursive: true });
   fs.writeFileSync(path.join(project, 'roots', 'ignored.txt'), '');
   fs.writeFileSync(configPath, invalidConfig ? 'private fixture config text' : JSON.stringify({
     roots: [{ id: 'development', label: 'Development', path: path.dirname(cwd) }],
     workspacesRoot,
+    ...(customHistory && { historyFile }),
     claude: { model: 'test-model' },
     codex: { home: codexHome },
     github: { repositories: ['example/allowed'] },
@@ -58,8 +60,9 @@ async function fixture(t, enabled, { gitRunner, invalidConfig = false } = {}) {
           createWorkspace: options => createWorkspace({
             ...options, gitRunner,
             spawnFn(agent, args, options) {
-              launches.push({ agent, args, options });
-              return spawn(process.execPath, [fakeCli, agent], options);
+              const child = spawn(process.execPath, [fakeCli, agent], options);
+              launches.push({ agent, args, options, closed: new Promise(resolve => child.once('close', resolve)) });
+              return child;
             },
           }),
         };
@@ -116,7 +119,7 @@ async function fixture(t, enabled, { gitRunner, invalidConfig = false } = {}) {
     'content-type': 'application/json',
     'x-terminal-request': JSON.parse((await request('GET', '/api/sessions')).body).token,
   });
-  return { request, mutationHeaders, launches, cwd, codexHome, workspaceLoads, diagnostics };
+  return { request, mutationHeaders, launches, cwd, codexHome, historyFile, workspaceLoads, diagnostics };
 }
 
 test('flag off keeps workspace routes inactive and skips loading the factory', async t => {
@@ -175,7 +178,9 @@ test('workspace serves only the three built assets with the existing file header
 
 for (const agent of ['claude', 'codex']) {
   test(`workspace runs a fake ${agent} CLI with isolated options and streams sequenced events`, async t => {
-    const { request, mutationHeaders, launches, cwd, codexHome } = await fixture(t, true);
+    const { request, mutationHeaders, launches, cwd, codexHome, historyFile } = await fixture(t, true, {
+      customHistory: agent === 'codex',
+    });
     const headers = await mutationHeaders();
     const create = await request('POST', '/api/workspace/sessions', headers, {
       rootId: 'development', relPath: 'repo', agent,
@@ -206,11 +211,32 @@ for (const agent of ['claude', 'codex']) {
     assert.ok(events.some(event => event.type === 'message_done' && event.text === 'Hello workspace'));
     assert.equal(events.at(-1).type, 'turn_finished');
     assert.equal(events.at(-1).status, 'success');
+    const history = await request('GET', `/api/workspace/history?agent=${agent}`);
+    assert.equal(history.status, 200);
+    const { entries } = JSON.parse(history.body);
+    assert.equal(entries.length, 1);
+    assert.deepEqual(entries[0], {
+      agent, rootId: 'development', relPath: 'repo', cliSessionId: events[0].cliSessionId,
+      lastUsedAt: entries[0].lastUsedAt,
+    });
+    assert.ok(Number.isSafeInteger(entries[0].lastUsedAt));
+    assert.deepEqual(JSON.parse(fs.readFileSync(historyFile, 'utf8')), entries);
     for (const [index, event] of events.entries()) {
       assert.equal(event.seq, index + 1);
       assert.equal(event.sessionId, sessionId);
       assert.equal(event.turnId, events[0].turnId);
       assert.ok(event.turnId);
+    }
+    if (agent === 'claude') {
+      await launches[0].closed;
+      assert.equal((await request('POST', `${url}/stop`, headers)).status, 200);
+      const resumed = await request('POST', '/api/workspace/sessions', headers, {
+        rootId: 'development', relPath: 'repo', agent, resumeSessionId: entries[0].cliSessionId,
+      });
+      assert.equal(resumed.status, 201);
+      assert.notEqual(JSON.parse(resumed.body).sessionId, sessionId);
+      const { args: resumeArgs } = launches[1];
+      assert.equal(resumeArgs[resumeArgs.indexOf('--resume') + 1], entries[0].cliSessionId);
     }
   });
 }

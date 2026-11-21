@@ -67,7 +67,7 @@ function createCodexParser({ sessionId }) {
     switch (record?.type) {
       case 'thread.started':
         sessionId = record.thread_id ?? sessionId;
-        return [event('session_started')];
+        return [event('session_started', { cliSessionId: record.thread_id })];
       case 'item.started':
         if (item?.type === 'command_execution') {
           return [event('tool_call_start', {

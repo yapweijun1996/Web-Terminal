@@ -33,8 +33,9 @@ function replay(filename) {
   return { events, records: lines.map(line => JSON.parse(line)) };
 }
 
-test('replays the denied fixture in order and emits streamed text only once', () => {
+test('replays the denied fixture in order with the full final text after the deltas', () => {
   const { events, records } = replay('claude-bash-denied.jsonl');
+  assert.equal(events[0].cliSessionId, records[0].session_id);
   assert.deepEqual(events.map(event => event.type), [
     'session_started',
     'tool_call_start',
@@ -61,8 +62,8 @@ test('replays the denied fixture in order and emits streamed text only once', ()
   const textEvents = events.filter(event => ['message_delta', 'message_done'].includes(event.type));
   const finalMessage = records.find(record => record.message?.content?.some(block => block.type === 'text')).message;
   assert.ok(textEvents.every(event => event.messageId === finalMessage.id));
-  assert.equal(textEvents.map(event => event.text).join(''), finalMessage.content[0].text);
-  assert.equal(textEvents.at(-1).text, '');
+  assert.equal(textEvents.slice(0, -1).map(event => event.text).join(''), finalMessage.content[0].text);
+  assert.equal(textEvents.at(-1).text, finalMessage.content[0].text);
   assert.equal(events.at(-1).status, 'success');
   assert.equal(events.at(-1).costUsd, records.at(-1).total_cost_usd);
   assert.deepEqual(events.at(-1).usage, records.at(-1).usage);
@@ -142,7 +143,7 @@ test('returns one error for a malformed line and ignores unknown or unrelated re
   assert.equal(push('{"type":"system","subtype":"init"}')[0].seq, 2);
 });
 
-test('emits the unstreamed text suffix and ignores repeated final text for the same message', () => {
+test('emits complete assistant text and ignores repeated final text for the same message', () => {
   const parser = createClaudeParser({ sessionId: SESSION_ID });
   const push = record => parser.push(JSON.stringify(record));
   push({ type: 'stream_event', event: { type: 'message_start', message: { id: 'msg-1' } } });
@@ -155,7 +156,7 @@ test('emits the unstreamed text suffix and ignores repeated final text for the s
   const final = {
     type: 'assistant', message: { id: 'msg-1', content: [{ type: 'text', text: 'Hello again' }] },
   };
-  assert.equal(push(final)[0].text, ' again');
+  assert.equal(push(final)[0].text, 'Hello again');
   assert.deepEqual(push(final), []);
   const [laterBlock] = push({
     type: 'stream_event',
@@ -164,6 +165,29 @@ test('emits the unstreamed text suffix and ignores repeated final text for the s
   assert.equal(laterBlock.messageId, 'msg-1');
   assert.equal(laterBlock.text, 'Second block');
   assert.equal(push({ ...final, message: { ...final.message, id: 'msg-2' } })[0].text, 'Hello again');
+});
+
+test('finalizes each streamed message and uses assistant text when supplied', () => {
+  const parser = createClaudeParser({ sessionId: SESSION_ID });
+  const push = record => parser.push(JSON.stringify(record));
+  for (const [id, parts] of [['first', ['Draft']], ['second', ['One', ' two']]]) {
+    push({ type: 'stream_event', event: { type: 'message_start', message: { id } } });
+    for (const text of parts) {
+      push({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text } } });
+    }
+    push({ type: 'stream_event', event: { type: 'message_stop' } });
+  }
+  const [first] = push({
+    type: 'assistant', message: { id: 'first', content: [{ type: 'text', text: 'Corrected' }, { type: 'text', text: ' text' }] },
+  });
+  assert.equal(first.type, 'message_done');
+  assert.equal(first.messageId, 'first');
+  assert.equal(first.text, 'Corrected text');
+  const [second, finish] = push({ type: 'result' });
+  assert.equal(second.type, 'message_done');
+  assert.equal(second.messageId, 'second');
+  assert.equal(second.text, 'One two');
+  assert.equal(finish.type, 'turn_finished');
 });
 
 test('correlates a system denial with the host approval request', () => {
@@ -217,6 +241,15 @@ test('encodes allow and deny as single approval response lines', () => {
   assert.throws(() => buildApprovalResponse({ requestId: 'request-1', decision: 'ask' }), /decision/);
   assert.throws(() => buildApprovalResponse({ decision: 'deny' }), /requestId/);
   assert.throws(() => buildApprovalResponse({ requestId: 'request-1', decision: 'deny', message: 1 }), /message/);
+});
+
+test('supplies a non-empty denial message when the host omits it or sends whitespace', () => {
+  for (const message of [undefined, '', ' \t\n']) {
+    const deny = JSON.parse(buildApprovalResponse({ requestId: 'request-1', decision: 'deny', message }));
+    assert.deepEqual(deny.response.response, { behavior: 'deny', message: 'The user denied this action.' });
+  }
+  const allow = JSON.parse(buildApprovalResponse({ requestId: 'request-1', decision: 'allow' }));
+  assert.deepEqual(allow.response.response, { behavior: 'allow' });
 });
 
 test('encodes user text as one stdin line', () => {

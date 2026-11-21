@@ -30,7 +30,6 @@ const ERROR_STATUS = new Map([
   ['invalid_json', 400],
   ['invalid_body', 400],
   ['invalid_agent', 400],
-  ['invalid_session', 400],
   ['invalid_text', 400],
   ['invalid_decision', 400],
   ['invalid_path', 400],
@@ -48,6 +47,7 @@ const ERROR_STATUS = new Map([
   ['spawn_failed', 500],
   ['resume_unavailable', 409],
   ['resume_not_verified', 409],
+  ['github_resume_unsupported', 409],
   ['turn_active', 409],
   ['max_sessions', 409],
   ['approvals_unsupported', 409],
@@ -99,7 +99,11 @@ function createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRe
       for (const stream of history.streams) stream.end();
       histories.delete(sessionId);
     }
-    return ids;
+    return sessions;
+  }
+
+  function requireSession(sessionId) {
+    if (!listSessions().some(session => session.sessionId === sessionId)) throw routeError('unknown_session');
   }
 
   function trackEvents(sessionId) {
@@ -162,17 +166,13 @@ function createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRe
 
   async function startSession({ rootId, relPath, agent, resumeSessionId, github }) {
     if (agent !== 'claude' && agent !== 'codex') throw routeError('invalid_agent');
-    if (resumeSessionId !== undefined && (typeof resumeSessionId !== 'string' || !resumeSessionId)) {
-      throw routeError('invalid_session');
-    }
-    const ids = listSessions();
-    if (resumeSessionId !== undefined && !ids.has(resumeSessionId)) throw routeError('unknown_session');
+    listSessions();
 
     let managed;
     if (github !== undefined) {
       const repo = parseGithubRepo(github);
       if (!repo.ok) throw routeError(repo.code);
-      if (resumeSessionId !== undefined) throw routeError('resume_unavailable');
+      if (resumeSessionId !== undefined) throw routeError('github_resume_unsupported');
       const { workspacesRoot, runner } = githubWorkspace;
       managed = await githubWorkspace.createWorkspace({ workspacesRoot, runner, repo, sessionId: randomUUID() });
       if (!managed.ok) throw routeError(managed.code);
@@ -208,11 +208,13 @@ function createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRe
   return async function handle(req, res) {
     const pathname = req.url.split('?', 1)[0];
     const projects = req.method === 'GET' && pathname === `${PREFIX}/projects`;
+    const history = req.method === 'GET' && pathname === `${PREFIX}/history`;
+    const list = req.method === 'GET' && pathname === `${PREFIX}/sessions`;
     const create = req.method === 'POST' && pathname === `${PREFIX}/sessions`;
     const sessionRoute = /^\/api\/workspace\/sessions\/([A-Za-z0-9_-]+)\/(messages|stop|events|approvals\/([A-Za-z0-9_-]+))$/.exec(pathname);
     const [, sessionId, action, approvalId] = sessionRoute ?? [];
     const sessionMethod = action === 'events' ? 'GET' : 'POST';
-    if (!projects && !create && (!sessionRoute || req.method !== sessionMethod)) return false;
+    if (!projects && !history && !list && !create && (!sessionRoute || req.method !== sessionMethod)) return false;
 
     try {
       if (req.method !== 'GET' && !await checkRequest(req)) throw routeError('forbidden');
@@ -220,8 +222,20 @@ function createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRe
         sendJson(res, 200, {
           projects: roots.map(({ id, label }) => ({ id, label, folders: listProjects(roots, id) })),
         });
+      } else if (history) {
+        const agent = new URLSearchParams(req.url.slice(pathname.length + 1)).get('agent') ?? undefined;
+        if (agent !== undefined && agent !== 'claude' && agent !== 'codex') throw routeError('invalid_agent');
+        const entries = sessionManager.listHistory(agent).map(({ agent, rootId, relPath, cliSessionId, lastUsedAt }) => ({
+          agent, rootId, relPath, cliSessionId, lastUsedAt,
+        }));
+        sendJson(res, 200, { entries });
+      } else if (list) {
+        const sessions = listSessions().map(({ sessionId, agent, rootId, relPath, cliSessionId, status }) => ({
+          sessionId, agent, rootId, relPath, cliSessionId, status,
+        }));
+        sendJson(res, 200, { sessions });
       } else if (action === 'events') {
-        if (!listSessions().has(sessionId)) throw routeError('unknown_session');
+        requireSession(sessionId);
         streamEvents(req, res, trackEvents(sessionId));
       } else {
         const routeCap = create ? 4096 : action === 'messages' ? 65536 : 1024;
@@ -229,7 +243,7 @@ function createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRe
         if (create) {
           sendJson(res, 201, await startSession(body));
         } else {
-          if (!listSessions().has(sessionId)) throw routeError('unknown_session');
+          requireSession(sessionId);
           trackEvents(sessionId);
           if (action === 'messages') {
             if (typeof body.text !== 'string' || !body.text.trim() || body.text.length > MAX_MESSAGE_CHARS) {

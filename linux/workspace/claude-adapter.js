@@ -100,19 +100,16 @@ function createClaudeParser({ sessionId }) {
         }));
       } else if (block && block === textBlocks[0] && messageId && !completedMessages.has(messageId)) {
         const text = textBlocks.map(part => part.text).join('');
-        const streamed = streamedText.get(messageId) ?? '';
-        // The final envelope repeats the streamed prefix. Only send any text still missing.
-        const remaining = text.startsWith(streamed) ? text.slice(streamed.length) : '';
         completedMessages.add(messageId);
         streamedText.delete(messageId);
-        events.push(event('message_done', { messageId, text: remaining }));
+        events.push(event('message_done', { messageId, text }));
       }
     }
     return events;
   }
 
   function finishTurn(record) {
-    const events = [];
+    const events = [...streamedText].map(([messageId, text]) => event('message_done', { messageId, text }));
     const cancelled = ['cancelled', 'interrupted'].includes(record.terminal_reason);
     if (record.is_error) {
       const details = Array.isArray(record.errors)
@@ -149,7 +146,9 @@ function createClaudeParser({ sessionId }) {
 
     switch (record?.type) {
       case 'system':
-        if (record.subtype === 'init') return [event('session_started')];
+        if (record.subtype === 'init') {
+          return [event('session_started', { cliSessionId: record.session_id })];
+        }
         if (record.subtype === 'permission_denied') {
           return [event('approval_decision', {
             approvalId: approvalIds.get(record.tool_use_id) ?? record.request_id ?? record.tool_use_id ?? record.uuid,
@@ -193,14 +192,17 @@ function createClaudeParser({ sessionId }) {
   return { push };
 }
 
-function buildApprovalResponse({ requestId, decision, message = '' }) {
+function buildApprovalResponse({ requestId, decision, message }) {
   if (decision !== 'allow' && decision !== 'deny') {
     throw new TypeError('decision must be allow or deny');
   }
   if (typeof requestId !== 'string' || requestId.length === 0) {
     throw new TypeError('requestId must be a nonempty string');
   }
-  if (typeof message !== 'string') throw new TypeError('message must be a string');
+  if (message !== undefined && typeof message !== 'string') {
+    throw new TypeError('message must be a string');
+  }
+  if (decision === 'deny' && !message?.trim()) message = 'The user denied this action.';
 
   return JSON.stringify({
     type: 'control_response',

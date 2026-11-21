@@ -2,6 +2,8 @@
 
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 const { resolveProjectPath, assertStillInsideRoot } = require('./project-roots');
 const {
   buildClaudeArgs, createClaudeParser, buildApprovalResponse, buildUserMessage,
@@ -20,6 +22,8 @@ const MAX_STDOUT_BYTES = 4 * 1024 * 1024;
 const MAX_STDERR_BYTES = 8 * 1024;
 const MAX_REPLAY_EVENTS = 1_000;
 const MAX_RETAINED_SESSIONS = 20;
+const MAX_HISTORY_ENTRIES = 200;
+const MAX_HISTORY_FILE_BYTES = 8 * 1024 * 1024;
 
 function managerError(code, message = code, status) {
   return Object.assign(new Error(message), { code, ...(status && { status }) });
@@ -30,12 +34,92 @@ function sanitizedEnv(overrides) {
   return Object.assign(env, overrides);
 }
 
+function validHistoryEntry(entry) {
+  if (!entry || typeof entry !== 'object' || Object.keys(entry).length !== 5) return false;
+  const { agent, rootId, relPath, cliSessionId, lastUsedAt } = entry;
+  return typeof cliSessionId === 'string' &&
+    (agent === 'claude' ? CLI_SESSION_ID.test(cliSessionId)
+      : agent === 'codex' && /^[a-z0-9_-]{1,128}$/i.test(cliSessionId)) &&
+    typeof rootId === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(rootId) &&
+    typeof relPath === 'string' && Buffer.byteLength(relPath) <= 4096 && !path.win32.isAbsolute(relPath) &&
+    !/[\\\0]/.test(relPath) && relPath.split('/').every(segment => segment && segment !== '..') &&
+    Number.isSafeInteger(lastUsedAt) && lastUsedAt >= 0;
+}
+
+function newestHistory(entries) {
+  const seen = new Set();
+  return entries.filter(validHistoryEntry).sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+    .filter(({ cliSessionId }) => {
+      if (seen.has(cliSessionId)) return false;
+      seen.add(cliSessionId);
+      return true;
+    }).slice(0, MAX_HISTORY_ENTRIES);
+}
+
+function loadHistory(file) {
+  if (!file) return [];
+  try {
+    if (!fs.lstatSync(path.dirname(file)).isDirectory()) return [];
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    try {
+      const stats = fs.fstatSync(fd);
+      if (!stats.isFile() || stats.size > MAX_HISTORY_FILE_BYTES) return [];
+      const entries = JSON.parse(fs.readFileSync(fd, 'utf8'));
+      return Array.isArray(entries) ? newestHistory(entries) : [];
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(file, entries) {
+  if (!file) return;
+  const parent = path.dirname(file);
+  const temp = path.join(parent, `.session-history-${randomUUID()}.tmp`);
+  let created = false;
+  try {
+    if (!fs.lstatSync(parent).isDirectory()) return;
+    const fd = fs.openSync(temp, 'wx', 0o600);
+    created = true;
+    try {
+      fs.fchmodSync(fd, 0o600);
+      fs.writeFileSync(fd, JSON.stringify(entries) + '\n');
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(temp, file);
+    created = false;
+  } catch {
+    // A storage failure must not interrupt a coding session.
+  } finally {
+    if (created) {
+      try { fs.unlinkSync(temp); } catch { /* Best-effort cleanup. */ }
+    }
+  }
+}
+
 function createSessionManager({
   roots, spawnFn = spawn, now = Date.now, maxSessions = 8,
-  idleMs = 60 * 60_000, killGraceMs = 5_000, env,
+  idleMs = 60 * 60_000, killGraceMs = 5_000, env, historyFile,
 }) {
   const sessions = new Map();
   const useProcessGroup = process.platform !== 'win32';
+  const file = typeof historyFile === 'string' && path.isAbsolute(historyFile) ? historyFile : null;
+  let sessionHistory = loadHistory(file);
+
+  function remember({ agent, rootId, relPath, cliSessionId }) {
+    const entry = { agent, rootId, relPath, cliSessionId, lastUsedAt: now() };
+    if (!validHistoryEntry(entry)) return;
+    sessionHistory = newestHistory([entry, ...sessionHistory.filter(previous => previous.cliSessionId !== cliSessionId)]);
+    saveHistory(file, sessionHistory);
+  }
+
+  function listHistory(agent) {
+    return sessionHistory.filter(entry => agent === undefined || entry.agent === agent)
+      .map(entry => ({ ...entry }));
+  }
 
   function getSession(sessionId) {
     const session = sessions.get(sessionId);
@@ -118,6 +202,7 @@ function createSessionManager({
       run.killTimer = setTimeout(() => signal(run, 'SIGKILL'), killGraceMs);
       run.killTimer.unref();
     }
+    remember(session);
     if (error) emit(session, run, { type: 'error', ...error });
     emit(session, run, { ...result, type: 'turn_finished' });
   }
@@ -152,21 +237,23 @@ function createSessionManager({
     for (const event of run.parser.push(line)) {
       if (run.ending) return;
       switch (event.type) {
-        case 'session_started':
-          if (session.agent === 'claude') {
-            const { session_id: cliSessionId } = JSON.parse(line);
-            if (session.cliSessionId && cliSessionId !== session.cliSessionId) {
-              fail(session, run, 'resume_mismatch', 'Agent returned an unexpected resume identifier');
-              break;
-            }
-            if (typeof cliSessionId === 'string' && CLI_SESSION_ID.test(cliSessionId)) {
-              session.cliSessionId = cliSessionId;
-            }
+        case 'session_started': {
+          const { cliSessionId } = event;
+          const claude = session.agent === 'claude';
+          if (claude && session.cliSessionId && cliSessionId !== session.cliSessionId) {
+            fail(session, run, 'resume_mismatch', 'Agent returned an unexpected resume identifier');
+            break;
+          }
+          if (typeof cliSessionId === 'string' && cliSessionId.trim() &&
+              (!claude || CLI_SESSION_ID.test(cliSessionId))) {
+            session.cliSessionId = cliSessionId;
+            remember(session);
           }
           if (session.started) break;
           session.started = true;
-          emit(session, run, event);
+          emit(session, run, { ...event, cliSessionId: session.cliSessionId });
           break;
+        }
         case 'approval_request': {
           if (typeof event.approvalId !== 'string' || !event.approvalId ||
               !run.sent || run.requestIds.has(event.approvalId)) break;
@@ -327,20 +414,34 @@ function createSessionManager({
     const resolved = resolve(rootId, relPath);
     for (const session of sessions.values()) checkIdle(session);
 
+    let cliSessionId;
     if (resumeSessionId !== undefined) {
       if (agent === 'codex') throw managerError('resume_not_verified');
-      const session = sessions.get(resumeSessionId);
-      if (!session?.cliSessionId || session.agent !== agent ||
-          session.rootId !== rootId || session.relPath !== relPath || session.discard) {
+      if (typeof resumeSessionId !== 'string' || !CLI_SESSION_ID.test(resumeSessionId)) {
         throw managerError('resume_unavailable');
       }
-      if (session.run) throw managerError('turn_active', 'An agent process is already active', 409);
-      launch(session, resolved);
-      return { sessionId: session.id };
+      // Accept the workspace ID used by older clients as well as the CLI UUID.
+      const sameProject = entry => entry.agent === agent && entry.rootId === rootId && entry.relPath === relPath;
+      const session = [...sessions.values()].find(entry =>
+        sameProject(entry) &&
+        !entry.discard && entry.cliSessionId &&
+        (entry.cliSessionId === resumeSessionId || entry.id === resumeSessionId));
+      if (session) {
+        if (session.run) throw managerError('turn_active', 'An agent process is already active', 409);
+        launch(session, resolved);
+        return { sessionId: session.id };
+      }
+      if (!sessionHistory.some(entry => entry.cliSessionId === resumeSessionId && sameProject(entry))) {
+        throw managerError('resume_unavailable');
+      }
+      if ([...sessions.values()].some(entry => entry.cliSessionId === resumeSessionId && entry.run)) {
+        throw managerError('turn_active', 'An agent process is already active', 409);
+      }
+      cliSessionId = resumeSessionId;
     }
 
     const session = {
-      id: randomUUID(), rootId, relPath, agent, absolutePath: resolved.absolutePath,
+      id: randomUUID(), rootId, relPath, agent, cliSessionId, absolutePath: resolved.absolutePath,
       seq: 0, history: [], replayBytes: 0, subscribers: new Set(),
     };
     sessions.set(session.id, session);
@@ -403,12 +504,13 @@ function createSessionManager({
 
   function list() {
     for (const session of sessions.values()) checkIdle(session);
-    return [...sessions.values()].map(({ id, rootId, relPath, agent }) => ({
-      sessionId: id, rootId, relPath, agent,
+    return [...sessions.values()].map(({ id, rootId, relPath, agent, cliSessionId, run }) => ({
+      sessionId: id, agent, rootId, relPath, cliSessionId: cliSessionId ?? null,
+      status: run ? 'active' : 'idle',
     }));
   }
 
-  return { start, send, onEvent, respond, stop, list };
+  return { start, send, onEvent, respond, stop, list, listHistory };
 }
 
 module.exports = { createSessionManager };

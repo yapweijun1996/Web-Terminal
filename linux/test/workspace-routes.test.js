@@ -12,7 +12,12 @@ const { createWorkspaceRoutes } = require('../workspace/routes');
 
 const API = '/api/workspace';
 const SESSION_INPUT = { rootId: 'work', relPath: 'project', agent: 'claude' };
+const CLI_SESSION_ID = 'c6cecb23-d965-4b2a-a68c-f975304021a2';
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
+const historyEntries = [
+  { ...SESSION_INPUT, cliSessionId: CLI_SESSION_ID, lastUsedAt: 20 },
+  { ...SESSION_INPUT, agent: 'codex', cliSessionId: 'codex-thread', lastUsedAt: 10 },
+];
 
 function fakeManager() {
   const sessions = new Map();
@@ -21,14 +26,26 @@ function fakeManager() {
     calls,
     start(input) {
       calls.push(['start', input]);
-      if (input.resumeSessionId) return { sessionId: input.resumeSessionId };
+      if (input.resumeSessionId) {
+        const match = this.list().find(session => session.cliSessionId === input.resumeSessionId);
+        const code = input.agent === 'codex' ? 'resume_not_verified' : 'resume_unavailable';
+        if (input.agent === 'codex' || !match) throw Object.assign(new Error(code), { code });
+        return { sessionId: match.sessionId };
+      }
       const sessionId = `session-${sessions.size + 1}`;
-      sessions.set(sessionId, { events: [], listeners: new Set() });
+      const { agent, rootId, relPath } = input;
+      sessions.set(sessionId, { agent, rootId, relPath, events: [], listeners: new Set() });
       this.emit(sessionId, { type: 'session_started' });
       return { sessionId };
     },
     list() {
-      return [...sessions.keys()].map(sessionId => ({ sessionId }));
+      return [...sessions].map(([sessionId, { agent, rootId, relPath }]) => ({
+        sessionId, agent, rootId, relPath, cliSessionId: CLI_SESSION_ID, status: 'idle', absolutePath: '/internal/path',
+      }));
+    },
+    listHistory(agent) {
+      return historyEntries.filter(entry => agent === undefined || entry.agent === agent)
+        .map(entry => ({ ...entry, absolutePath: '/internal/path', prompt: 'private prompt' }));
     },
     send(sessionId, text) {
       calls.push(['send', sessionId, text]);
@@ -187,20 +204,43 @@ test('lists only root identifiers, labels, and contained subfolder names', async
   assertHeaders(result.headers);
 });
 
-test('creates and resumes an admin-root session using only the public project reference', async t => {
-  const { post, sessionManager } = await fixture(t);
+test('lists only public session metadata and resumes by CLI UUID', async t => {
+  const { post, request, sessionManager } = await fixture(t);
+  assert.deepEqual((await request('GET', `${API}/sessions`)).body, { sessions: [] });
   const created = await post(`${API}/sessions`, { ...SESSION_INPUT, path: '/untrusted' });
   assert.equal(created.status, 201);
   assert.deepEqual(created.body, { sessionId: 'session-1' });
   assertHeaders(created.headers);
-  const resumed = await post(`${API}/sessions`, { ...SESSION_INPUT, resumeSessionId: 'session-1' });
+  const listed = await request('GET', `${API}/sessions`);
+  assert.equal(listed.status, 200);
+  assertHeaders(listed.headers);
+  assert.deepEqual(listed.body, {
+    sessions: [{ ...SESSION_INPUT, sessionId: 'session-1', cliSessionId: CLI_SESSION_ID, status: 'idle' }],
+  });
+  const resumed = await post(`${API}/sessions`, { ...SESSION_INPUT, resumeSessionId: CLI_SESSION_ID });
   assert.equal(resumed.status, 201);
   assert.deepEqual(resumed.body, created.body);
   assert.deepEqual(sessionManager.calls, [
     ['start', { ...SESSION_INPUT, resumeSessionId: undefined }],
-    ['start', { ...SESSION_INPUT, resumeSessionId: 'session-1' }],
+    ['start', { ...SESSION_INPUT, resumeSessionId: CLI_SESSION_ID }],
   ]);
-  assertError(await post(`${API}/sessions`, { ...SESSION_INPUT, resumeSessionId: 'missing' }), 404, 'unknown_session');
+  assertError(await post(`${API}/sessions`, { ...SESSION_INPUT, resumeSessionId: 'missing' }), 409, 'resume_unavailable');
+  assertError(await post(`${API}/sessions`, {
+    ...SESSION_INPUT, agent: 'codex', resumeSessionId: CLI_SESSION_ID,
+  }), 409, 'resume_not_verified');
+});
+
+test('lists only public history metadata and supports an agent filter', async t => {
+  const { request, gateCalls } = await fixture(t);
+  const result = await request('GET', `${API}/history`);
+  assert.equal(result.status, 200);
+  assertHeaders(result.headers);
+  assert.deepEqual(result.body, { entries: historyEntries });
+  assert.ok(!result.raw.includes('/internal/path'));
+  assert.deepEqual((await request('GET', `${API}/history?agent=claude`)).body, { entries: historyEntries.slice(0, 1) });
+  assert.deepEqual((await request('GET', `${API}/history?agent=codex`)).body, { entries: historyEntries.slice(1) });
+  assertError(await request('GET', `${API}/history?agent=unknown`), 400, 'invalid_agent');
+  assert.deepEqual(gateCalls, []);
 });
 
 test('rejects invalid agents, traversal, and symlinks outside an admin root', async t => {
@@ -233,6 +273,10 @@ test('provisions GitHub sessions without using a client-supplied path or root', 
   assertError(await post(`${API}/sessions`, { ...SESSION_INPUT, github: 'not-a-repo' }), 400, 'invalid_repo');
   assertError(await post(`${API}/sessions`, { ...SESSION_INPUT, github: 'owner/private-failure' }), 502, 'clone_failed');
   assertError(await post(`${API}/sessions`, { ...SESSION_INPUT, github: 'owner/outside' }), 500, 'outside_workspaces');
+  assertError(await post(`${API}/sessions`, {
+    ...SESSION_INPUT, github: 'owner/repo', resumeSessionId: CLI_SESSION_ID,
+  }), 409, 'github_resume_unsupported');
+  assert.equal(githubCalls.length, 3);
   assert.equal(sessionManager.calls.length, 1);
 });
 
@@ -272,7 +316,7 @@ test('forwards messages, approval decisions, and stop to the session manager', a
   assert.deepEqual((await post(`${session}/messages`, { text })).body, { ok: true });
   assertError(await post(`${session}/messages`, { text: text + 'x' }), 400, 'invalid_text');
   for (const decision of ['allow', 'deny']) {
-    assert.deepEqual((await post(`${session}/approvals/approval-1`, { decision })).body, { ok: true });
+    assert.deepEqual((await post(`${session}/approvals/approval-1`, { decision, message: '' })).body, { ok: true });
   }
   assertError(await post(`${session}/approvals/approval-1`, { decision: 'other' }), 400, 'invalid_decision');
   const stopped = await request('POST', `${session}/stop`, { headers: JSON_HEADERS });
