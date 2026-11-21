@@ -16,6 +16,32 @@ test('streamed deltas concatenate and the final message replaces them', () => {
   assert.deepEqual(done.turns[0].messages, [{ id: 'message', text: 'Hello world!', done: true }]);
 });
 
+test('thinking arrives before the answer and keeps the latest token estimate when details are hidden', () => {
+  const start = receive(undefined, 1, { type: 'thinking_start', messageId: 'message' });
+  assert.equal(start.turns[0].messages[0].thinking.text, '');
+  const first = receive(start, 2, { type: 'thinking_delta', messageId: 'message', text: '', tokens: 40 });
+  const last = receive(first, 3, { type: 'thinking_delta', messageId: 'message', text: '', tokens: 120 });
+  assert.equal(first.turns[0].messages[0].thinking.tokens, 40);
+  assert.equal(last.turns[0].messages[0].text, undefined);
+  const streaming = receive(last, 4, { type: 'message_delta', messageId: 'message', text: 'Answer' });
+  const done = receive(streaming, 5, { type: 'message_done', messageId: 'message', text: 'Answer.' });
+  assert.deepEqual(done.turns[0].messages, [
+    { id: 'message', text: 'Answer.', done: true, thinking: { text: '', tokens: 120 } },
+  ]);
+});
+
+test('thinking deltas preserve plain text per message and do not accumulate replayed chunks', () => {
+  const first = receive(undefined, 1, { type: 'thinking_delta', messageId: 'one', text: '<b>' });
+  const other = receive(first, 2, { type: 'thinking_start', messageId: 'two' });
+  const delta = { type: 'thinking_delta', messageId: 'one', text: 'details</b>', tokens: 5 };
+  const next = receive(other, 3, delta);
+  assert.equal(receive(next, 3, delta), next);
+  assert.equal(first.turns[0].messages[0].thinking.text, '<b>');
+  assert.deepEqual(next.turns[0].messages.map(({ id, thinking }) => [id, thinking.text]), [
+    ['one', '<b>details</b>'], ['two', ''],
+  ]);
+});
+
 test('replayed sequence numbers do not change the state', () => {
   const delta = { type: 'message_delta', messageId: 'message', text: 'Hello' };
   const first = receive(undefined, 4, delta);

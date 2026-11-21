@@ -31,22 +31,24 @@ const fakeCodex = `
   });
 `;
 
-async function fixture(t, enabled, { gitRunner, invalidConfig = false, customHistory = false } = {}) {
+async function fixture(t, enabled, { gitRunner, invalidConfig = false, customHistory = false, claudeMcp = false } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-workspace-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const configPath = path.join(directory, 'config.json');
   const project = fs.realpathSync(directory);
   const cwd = path.join(project, 'roots', 'repo');
   const codexHome = path.join(project, 'codex');
+  const mcpFile = path.join(project, 'private-mcp.json');
   const workspacesRoot = path.join(project, 'managed');
   const historyFile = customHistory ? path.join(project, 'sessions.json') : path.join(workspacesRoot, '.session-history.json');
   fs.mkdirSync(cwd, { recursive: true });
+  if (claudeMcp) fs.writeFileSync(mcpFile, '{"mcpServers":{},"privateMarker":"mcp-fixture-marker"}', { mode: 0o600 });
   fs.writeFileSync(path.join(project, 'roots', 'ignored.txt'), '');
   fs.writeFileSync(configPath, invalidConfig ? 'private fixture config text' : JSON.stringify({
     roots: [{ id: 'development', label: 'Development', path: path.dirname(cwd) }],
     workspacesRoot,
     ...(customHistory && { historyFile }),
-    claude: { model: 'test-model' },
+    ...(claudeMcp && { mcp: { claude: { configFile: mcpFile } } }),
     codex: { home: codexHome },
     github: { repositories: ['example/allowed'] },
   }));
@@ -141,13 +143,13 @@ async function fixture(t, enabled, { gitRunner, invalidConfig = false, customHis
     'content-type': 'application/json',
     'x-terminal-request': JSON.parse((await request('GET', '/api/sessions')).body).token,
   });
-  return { request, mutationHeaders, launches, cwd, codexHome, historyFile, workspaceLoads, diagnostics };
+  return { request, mutationHeaders, launches, cwd, codexHome, mcpFile, historyFile, workspaceLoads, diagnostics };
 }
 
 test('flag off keeps workspace routes inactive and skips loading the factory', async t => {
   const { request, workspaceLoads } = await fixture(t, false);
   assert.equal(workspaceLoads, 0);
-  for (const url of ['/api/workspace/projects', '/workspace/', '/workspace/app.js', '/workspace/styles.css']) {
+  for (const url of ['/api/workspace/projects', '/api/workspace/options', '/workspace/', '/workspace/app.js', '/workspace/styles.css']) {
     const response = await request('GET', url);
     assert.equal(response.status, 404);
     assert.equal(response.body, '{"error":"Not found"}');
@@ -179,6 +181,62 @@ test('invalid workspace configuration leaves the terminal available and emits a 
   assert.deepEqual(diagnostics, ['Workspace configuration unavailable']);
 });
 
+test('validates Claude MCP file permissions, type, and location without exposing the path', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-mcp-config-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const projectRoot = path.join(directory, 'project');
+  const workspacesRoot = path.join(directory, 'managed');
+  const configPath = path.join(directory, 'workspace.json');
+  fs.mkdirSync(projectRoot);
+  fs.mkdirSync(workspacesRoot);
+  const files = [
+    [projectRoot, 'private.json', 0o600],
+    [workspacesRoot, 'private.json', 0o600],
+    [directory, 'group.json', 0o640],
+    [directory, 'world.json', 0o604],
+    [directory, 'execute.json', 0o700],
+    [directory, 'private.json', 0o400],
+  ].map(([parent, name, mode]) => {
+    const file = path.join(parent, name);
+    fs.writeFileSync(file, '{}');
+    fs.chmodSync(file, mode);
+    return file;
+  });
+  const privateFile = files.pop();
+  const externalAlias = path.join(directory, 'external-link.json');
+  const projectAlias = path.join(projectRoot, 'project-link.json');
+  fs.symlinkSync(files[0], externalAlias);
+  fs.symlinkSync(privateFile, projectAlias);
+  function load(mcp) {
+    fs.writeFileSync(configPath, JSON.stringify({
+      roots: [{ id: 'project', label: 'Project', path: projectRoot }], workspacesRoot, mcp,
+    }));
+    return createWorkspace({ configPath });
+  }
+  for (const file of [...files, externalAlias, projectAlias, directory, path.join(directory, 'missing'), 'relative.json']) {
+    assert.throws(() => load({ claude: { configFile: file } }), { message: 'Workspace configuration unavailable' });
+  }
+  assert.throws(() => load({ claude: { configFile: privateFile, overrides: [] } }),
+    { message: 'Workspace configuration unavailable' });
+  load({ claude: { configFile: privateFile } }).close();
+});
+
+test('rechecks the private Claude MCP file before launch', async t => {
+  const { request, mutationHeaders, launches, mcpFile, diagnostics } = await fixture(t, true, { claudeMcp: true });
+  const headers = await mutationHeaders();
+  const session = { rootId: 'development', relPath: 'repo', agent: 'claude' };
+  fs.chmodSync(mcpFile, 0o644);
+  const failure = await request('POST', '/api/workspace/sessions', headers, session);
+  assert.equal(failure.status, 500);
+  assert.deepEqual(JSON.parse(failure.body), { error: 'spawn_failed' });
+  assert.deepEqual(diagnostics, []);
+  assert.equal(launches.length, 0);
+  fs.chmodSync(mcpFile, 0o600);
+  const retry = await request('POST', '/api/workspace/sessions', headers, session);
+  assert.equal(retry.status, 201);
+  assert.equal(launches.length, 1);
+});
+
 test('workspace serves only the three built assets with the existing file headers', async t => {
   const { request } = await fixture(t, true);
   for (const [url, file, contentType] of [
@@ -200,12 +258,18 @@ test('workspace serves only the three built assets with the existing file header
 
 for (const agent of ['claude', 'codex']) {
   test(`workspace runs a fake ${agent} CLI with isolated options and streams sequenced events`, async t => {
-    const { request, mutationHeaders, launches, cwd, codexHome, historyFile } = await fixture(t, true, {
+    const { request, mutationHeaders, launches, cwd, codexHome, mcpFile, historyFile } = await fixture(t, true, {
       customHistory: agent === 'codex',
+      claudeMcp: agent === 'claude',
     });
+    const model = agent === 'claude' ? 'claude-sonnet-5-5' : 'gpt-6.2-sol';
+    const catalog = await request('GET', '/api/workspace/options');
+    assert.equal(catalog.status, 200);
+    assert.equal(JSON.parse(catalog.body).agents[agent].default, model);
+    assert.ok(!catalog.body.includes(mcpFile) && !catalog.body.includes('mcp-fixture-marker'));
     const headers = await mutationHeaders();
     const create = await request('POST', '/api/workspace/sessions', headers, {
-      rootId: 'development', relPath: 'repo', agent,
+      rootId: 'development', relPath: 'repo', agent, mcp: { claude: { configFile: '/untrusted.json' } },
     });
     assert.equal(create.status, 201);
     const { sessionId } = JSON.parse(create.body);
@@ -217,11 +281,13 @@ for (const agent of ['claude', 'codex']) {
       assert.equal(options.env[key], undefined);
     }
     if (agent === 'claude') {
-      assert.deepEqual(args.slice(-6), ['--setting-sources', 'project', '--disable-slash-commands', '--strict-mcp-config', '--model', 'test-model']);
+      assert.deepEqual(args.slice(-10), ['--model', model, '--effort', 'medium', '--mcp-config', mcpFile,
+        '--setting-sources', 'project', '--disable-slash-commands', '--strict-mcp-config']);
       assert.equal(options.env.CODEX_HOME, undefined);
     } else {
       assert.equal(options.env.CODEX_HOME, codexHome);
-      assert.deepEqual(args, ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'read-only']);
+      assert.deepEqual(args, ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'read-only',
+        '-m', model, '-c', 'model_reasoning_effort="medium"']);
     }
 
     const url = `/api/workspace/sessions/${sessionId}`;
@@ -240,7 +306,7 @@ for (const agent of ['claude', 'codex']) {
     assert.equal(entries.length, 1);
     assert.deepEqual(entries[0], {
       agent, rootId: 'development', relPath: 'repo', cliSessionId: events[0].cliSessionId,
-      lastUsedAt: entries[0].lastUsedAt,
+      lastUsedAt: entries[0].lastUsedAt, model, effort: 'medium',
     });
     assert.ok(Number.isSafeInteger(entries[0].lastUsedAt));
     assert.deepEqual(JSON.parse(fs.readFileSync(historyFile, 'utf8')), entries);
@@ -257,18 +323,20 @@ for (const agent of ['claude', 'codex']) {
     assert.equal(rejected.status, 409);
     assert.deepEqual(JSON.parse(rejected.body), { error: 'resume_unavailable' });
     assert.equal(launches.length, 1);
-    const resumed = await request('POST', '/api/workspace/sessions', headers, resumeInput);
+    const choice = agent === 'claude' ? { model: 'claude-opus-5-5', effort: 'xhigh' } : { model: 'gpt-6.2-astra', effort: 'ultra' };
+    const resumed = await request('POST', '/api/workspace/sessions', headers, { ...resumeInput, ...choice });
     assert.equal(resumed.status, 201);
     const resumedId = JSON.parse(resumed.body).sessionId;
     assert.notEqual(resumedId, sessionId);
     const { args: resumeArgs, options: resumeOptions } = launches[1];
     assert.equal(resumeOptions.cwd, cwd);
     if (agent === 'claude') {
-      assert.equal(resumeArgs[resumeArgs.indexOf('--resume') + 1], entries[0].cliSessionId);
+      assert.deepEqual(resumeArgs.slice(-12, -6), ['--resume', entries[0].cliSessionId,
+        '--model', choice.model, '--effort', choice.effort]);
     } else {
       assert.equal(resumeOptions.env.CODEX_HOME, codexHome);
       assert.deepEqual(resumeArgs, ['exec', 'resume', '--json', '--skip-git-repo-check',
-        '-c', 'sandbox_mode="read-only"', codexThreadId, '-']);
+        '-c', 'sandbox_mode="read-only"', '-m', choice.model, '-c', 'model_reasoning_effort="ultra"', codexThreadId, '-']);
       const resumedUrl = `/api/workspace/sessions/${resumedId}`;
       const prompt = 'Resume workspace\nwith stdin';
       assert.equal((await request('POST', `${resumedUrl}/messages`, headers, { text: prompt })).status, 200);

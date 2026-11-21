@@ -4,6 +4,7 @@
 // The sandbox mode is the only control.
 
 const { randomUUID } = require('node:crypto');
+const CODEX_EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
 function isCliSessionId(value) {
   return typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
@@ -26,14 +27,14 @@ function buildCodexArgs({ model, sandbox, resumeSessionId, effort } = {}) {
   else args.push('--sandbox', sandbox);
 
   if (model !== undefined) {
-    if (typeof model !== 'string' || !/^[A-Za-z0-9._-]+$/.test(model) || (resume && model.startsWith('-'))) {
+    if (typeof model !== 'string' || !/^[A-Za-z0-9._-]+$/.test(model)) {
       throw new Error('invalid_model');
     }
-    if (resume) args.push('-m', model);
-    else args.push(`--model=${model}`);
+    if (model.startsWith('-')) args.push(`--model=${model}`);
+    else args.push('-m', model);
   }
   if (effort !== undefined) {
-    if (!['low', 'medium', 'high'].includes(effort)) throw new Error('invalid_effort');
+    if (!CODEX_EFFORTS.includes(effort)) throw new Error('invalid_effort');
     args.push('-c', `model_reasoning_effort="${effort}"`);
   }
 
@@ -44,6 +45,7 @@ function buildCodexArgs({ model, sandbox, resumeSessionId, effort } = {}) {
 function createCodexParser({ sessionId }) {
   let turnId = randomUUID();
   let seq = 0;
+  const reasoning = new Map();
 
   function event(type, fields) {
     return { type, sessionId, turnId, seq: ++seq, ...fields };
@@ -52,7 +54,21 @@ function createCodexParser({ sessionId }) {
   function finishTurn(fields) {
     const finished = event('turn_finished', fields);
     turnId = randomUUID();
+    reasoning.clear();
     return finished;
+  }
+
+  function parseReasoning(item) {
+    const messageId = item.id;
+    if (typeof messageId !== 'string' || !messageId) return [];
+    const events = [];
+    if (!reasoning.has(messageId)) events.push(event('thinking_start', { messageId }));
+    const previous = reasoning.get(messageId) ?? '';
+    const text = typeof item.text === 'string' ? item.text : previous;
+    const delta = text.startsWith(previous) ? text.slice(previous.length) : text;
+    if (delta) events.push(event('thinking_delta', { messageId, text: delta, tokens: 0 }));
+    reasoning.set(messageId, text);
+    return events;
   }
 
   function push(line) {
@@ -67,6 +83,9 @@ function createCodexParser({ sessionId }) {
     }
 
     const item = record?.item;
+    if (item?.type === 'reasoning' && ['item.started', 'item.updated', 'item.completed'].includes(record.type)) {
+      return parseReasoning(item);
+    }
     switch (record?.type) {
       case 'thread.started':
         sessionId = record.thread_id ?? sessionId;
@@ -113,4 +132,4 @@ function createCodexParser({ sessionId }) {
   return { push };
 }
 
-module.exports = { buildCodexArgs, createCodexParser, isCliSessionId };
+module.exports = { CODEX_EFFORTS, buildCodexArgs, createCodexParser, isCliSessionId };

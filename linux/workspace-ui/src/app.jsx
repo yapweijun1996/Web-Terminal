@@ -3,6 +3,7 @@ import { createWorkspaceClient, isMissingSession, workspaceError } from './api/c
 import { subscribeToEvents, watchFirstEvent } from './api/events.js';
 import { composerBlockedReason } from './state/composer.js';
 import { formatHistoryEntry, newestResumableEntry, startWithResumeFallback } from './state/history.js';
+import { readModelChoices, resolveModelChoice, sessionNeedsNewChoice, writeModelChoices } from './state/options.js';
 import { conversationReducer, emptyConversation, hasRunningTurn } from './state/reducer.js';
 import { agents, mockReply, projects as mockProjects, recentSessions, sampleEvents, sampleSession } from './data/mock.js';
 import { ChatStream, Composer, Welcome } from './components/chat.jsx';
@@ -27,6 +28,10 @@ export function App() {
   const [projectId, setProjectId] = useState('');
   const [relPath, setRelPath] = useState('.');
   const [agentId, setAgentId] = useState(agents[0].id);
+  const [agentOptions, setAgentOptions] = useState(undefined);
+  const [optionsError, setOptionsError] = useState(null);
+  const [modelChoices, setModelChoices] = useState(() => readModelChoices());
+  const [draftChoice, setDraftChoice] = useState(null);
   const [mockSessions, setMockSessions] = useState([]);
   const [history, setHistory] = useState([]);
   const [historyHidden, setHistoryHidden] = useState(false);
@@ -64,20 +69,27 @@ export function App() {
     : endedSessionId ? 'session-ended' : mode === 'live' && sessionId ? activeStream?.status ?? 'reconnecting' : 'connected';
   const folders = [{ id: '.', name: 'Project root' }, ...(projects.find((project) => project.id === projectId)?.folders ?? [])
     .map((folder) => ({ id: folder, name: folder }))];
+  const options = agentOptions?.[agentId];
+  const choice = resolveModelChoice(options, session ? draftChoice ?? session : modelChoices[agentId]);
+  const needsNewSession = sessionNeedsNewChoice(session, choice);
+  const optionsPending = mode === 'live' && agentOptions === undefined;
   const resumableSession = mock
     ? mockSessions.find((session) => session.projectId === projectId && session.agentId === agentId)
-    : newestResumableEntry(history, { rootId: projectId, relPath, agent: agentId });
-  const recoveryCliSessionId = endedSessionId && (session.resumeSessionId ?? newestResumableEntry(history, {
-    rootId: session.projectId, relPath: session.relPath, agent: session.agentId,
-  })?.cliSessionId);
+    : newestResumableEntry(history, { rootId: projectId, relPath, agent: agentId, model: choice?.model });
+  const recoveryCliSessionId = endedSessionId && (!choice || session.model === choice.model) &&
+    (session.resumeSessionId ?? newestResumableEntry(history, {
+      rootId: session.projectId, relPath: session.relPath, agent: session.agentId, model: choice?.model,
+    })?.cliSessionId);
   const sessions = mock ? mockSessions : historyHidden ? [] : history.map((entry) => ({
     ...formatHistoryEntry(entry), entry,
   }));
   const agentName = agents.find((agent) => agent.id === agentId).name;
-  const message = actionError?.message ?? activeStream?.message ?? loadError ?? historyError;
-  const disabled = working || mode === 'loading' || mode === 'error';
-  const blockedReason = composerBlockedReason({ mode, sending, running, ended: Boolean(endedSessionId) });
+  const message = actionError?.message ?? activeStream?.message ?? loadError ?? optionsError ?? historyError;
+  const disabled = working || mode === 'loading' || mode === 'error' || optionsPending;
+  const blockedReason = optionsPending ? 'Loading model options.'
+    : composerBlockedReason({ mode, sending, running, ended: Boolean(endedSessionId) && !needsNewSession });
   const displayText = mock ? (value) => value : api.displayText;
+  const modelPicker = choice && { options, choice, running, needsNewSession, onChange: changeModelChoice };
 
   useEffect(() => {
     let active = true;
@@ -141,6 +153,21 @@ export function App() {
     refreshHistory();
     return () => { historyRequest.current++; };
   }, [mode, refreshHistory]);
+
+  useEffect(() => {
+    if (mode !== 'live') return;
+    let active = true;
+    api.listOptions().then((data) => {
+      if (!active) return;
+      if (!data?.agents || typeof data.agents !== 'object') throw workspaceError('invalid_response');
+      setAgentOptions(data.agents);
+    }).catch((error) => {
+      if (!active) return;
+      setAgentOptions(null);
+      if (error.status !== 404) setOptionsError('Could not load model options.');
+    });
+    return () => { active = false; };
+  }, [mode]);
 
   function dispatch(id, action) {
     setConversations((current) => {
@@ -277,9 +304,19 @@ export function App() {
     resetSession();
   }
 
+  function changeModelChoice(preferred) {
+    if (disabled || running) return;
+    const nextChoice = resolveModelChoice(options, preferred);
+    const nextChoices = { ...modelChoices, [agentId]: nextChoice };
+    setDraftChoice(nextChoice);
+    setModelChoices(nextChoices);
+    writeModelChoices(nextChoices);
+  }
+
   function resetSession() {
     setActionError(null);
     setResumeAfterRestart(false);
+    setDraftChoice(null);
     setSession(null);
     setShowWelcome(true);
   }
@@ -287,6 +324,7 @@ export function App() {
   function openSession(session) {
     setActionError(null);
     setResumeAfterRestart(false);
+    setDraftChoice(null);
     setProjectId(session.projectId);
     const project = projects.find((item) => item.id === session.projectId);
     setRelPath(project?.folders?.includes(session.relPath) ? session.relPath : '.');
@@ -295,10 +333,10 @@ export function App() {
     setShowWelcome(false);
   }
 
-  async function createSession({ rootId = projectId, folder = relPath, agent = agentId, resumeSessionId } = {}) {
+  async function createSession({ rootId = projectId, folder = relPath, agent = agentId, resumeSessionId, settings = choice } = {}) {
     const id = mock ? `local-session-${++nextId.current}`
-      : await api.startSession({ rootId, relPath: folder, agent, resumeSessionId });
-    const session = { id, projectId: rootId, relPath: folder, agentId: agent, resumeSessionId };
+      : await api.startSession({ rootId, relPath: folder, agent, resumeSessionId, ...settings });
+    const session = { id, projectId: rootId, relPath: folder, agentId: agent, resumeSessionId, ...settings };
     if (mock) {
       const project = projects.find((item) => item.id === rootId);
       setMockSessions((current) => [{ ...session, label: `${project.name} session` }, ...current]);
@@ -350,8 +388,25 @@ export function App() {
       openSession(session);
       return;
     }
-    const { rootId, relPath: folder, agent, cliSessionId } = session.entry;
-    return mutate(() => createSession({ rootId, folder, agent, resumeSessionId: cliSessionId }));
+    const { rootId, relPath: folder, agent, cliSessionId, model } = session.entry;
+    return mutate(() => {
+      const settings = resolveModelChoice(agentOptions?.[agent], session.entry);
+      if (settings && model && settings.model !== model) throw workspaceError('invalid_model');
+      return createSession({ rootId, folder, agent, resumeSessionId: cliSessionId, settings: settings ?? null });
+    });
+  }
+
+  async function replacementResumeId() {
+    if (session.model !== choice.model) return undefined;
+    if (!sessionId) return session.resumeSessionId;
+    const hasTurns = conversation.turns.length > 0;
+    if (!hasTurns && !session.resumeSessionId) return undefined;
+    const data = await api.listSessions();
+    if (!Array.isArray(data?.sessions)) throw workspaceError('invalid_response');
+    const current = data.sessions.find((entry) => entry.sessionId === sessionId);
+    // A prestarted CLI can hold the resume ID before the first prompt.
+    if (!hasTurns && current?.status === 'active') return undefined;
+    return current?.cliSessionId ?? session.resumeSessionId;
   }
 
   function sendMessage(prompt, attachments, onAccepted) {
@@ -364,7 +419,14 @@ export function App() {
     return mutate(async () => {
       setSending(true);
       try {
-        if (id === null) id = await createSession();
+        if (needsNewSession && id === sessionId) {
+          id = await startWithResumeFallback(
+            (resumeSessionId) => createSession({ resumeSessionId }),
+            await replacementResumeId(),
+          );
+        } else if (id === null) {
+          id = await createSession();
+        }
         followChat.current = true;
         setShowWelcome(false);
         dispatch(id, { type: 'prompt', prompt: { prompt, attachments } });
@@ -475,7 +537,7 @@ export function App() {
           <div class="chat-content">
             {showWelcome && <Welcome projects={projects} projectId={projectId} folders={folders} relPath={relPath} agentId={agentId}
               onProject={selectProject} onFolder={selectFolder} onAgent={selectAgent} canResume={Boolean(resumableSession)}
-              onStart={startSession} disabled={disabled} />}
+              onStart={startSession} disabled={disabled} modelPicker={modelPicker} />}
             <ChatStream conversation={conversation} agentName={agentName} mock={mock} displayText={displayText}
               onDecision={decideApproval} approvalDisabled={working} />
           </div>
@@ -483,7 +545,8 @@ export function App() {
         <div class="composer-area">
           <Composer agentId={agentId} terminalOpen={terminalOpen} onAgent={selectAgent} onTerminal={toggleTerminal}
             onSend={sendMessage} onStop={() => mutate(() => api.stop(sessionId))} mock={mock} working={working}
-            running={running} blockedReason={blockedReason} streamStalled={stalledStreams.has(sessionId)} />
+            running={running} blockedReason={blockedReason} streamStalled={stalledStreams.has(sessionId)}
+            modelPicker={modelPicker} selectorsDisabled={disabled} />
         </div>
       </main>
       <Terminal open={terminalOpen} onToggle={toggleTerminal} mock={mock}

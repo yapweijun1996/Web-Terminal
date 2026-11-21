@@ -6,10 +6,9 @@ const fs = require('node:fs');
 const { homedir } = require('node:os');
 const path = require('node:path');
 const { promisify } = require('node:util');
-const { buildClaudeArgs } = require('./claude-adapter');
 const github = require('./github-workspace');
 const { loadProjectRoots, resolveProjectPath, assertStillInsideRoot } = require('./project-roots');
-const { createSessionManager } = require('./session-manager');
+const { createSessionManager, loadModelOptions } = require('./session-manager');
 const { createWorkspaceRoutes } = require('./routes');
 
 const execute = promisify(execFile);
@@ -39,6 +38,31 @@ async function runGit(command, args, { cwd, env, timeoutMs }) {
 function inside(parent, directory) {
   const relative = path.relative(parent, directory);
   return relative === '' || (!path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`));
+}
+
+function resolveClaudeMcpFile(file, projectPaths) {
+  if (typeof file !== 'string' || !path.isAbsolute(file)) throw new Error('Invalid MCP configuration');
+  const canonical = fs.realpathSync.native(file);
+  const stats = fs.statSync(canonical);
+  const mode = stats.mode & 0o7777;
+  if (!stats.isFile() || (mode !== 0o600 && mode !== 0o400) ||
+      projectPaths.some(root => inside(root, file) || inside(root, canonical))) {
+    throw new Error('Invalid MCP configuration');
+  }
+  return canonical;
+}
+
+function loadClaudeMcpFile(mcp, projectPaths) {
+  if (mcp === undefined) return undefined;
+  if (!mcp || typeof mcp !== 'object' || Array.isArray(mcp) || Object.keys(mcp).some(key => key !== 'claude')) {
+    throw new Error('Invalid MCP configuration');
+  }
+  if (!Object.hasOwn(mcp, 'claude')) return undefined;
+  const { claude } = mcp;
+  if (!claude || typeof claude !== 'object' || Object.keys(claude).length !== 1 || !Object.hasOwn(claude, 'configFile')) {
+    throw new Error('Invalid MCP configuration');
+  }
+  return resolveClaudeMcpFile(claude.configFile, projectPaths);
 }
 
 function checkCodexHome(directory) {
@@ -188,7 +212,7 @@ function createWorkspaceTerminals({ service, roots, getProject }) {
 }
 
 function createWorkspace({ configPath, checkRequest, terminal: terminalService, spawnFn = spawn, gitRunner = runGit }) {
-  let roots, managerRoots, workspacesRoot, codexHome, claudeModelArgs, allowedRepositories, historyFile;
+  let roots, managerRoots, workspacesRoot, codexHome, agents, claudeMcpConfigFile, projectPaths, allowedRepositories, historyFile;
   try {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     roots = loadProjectRoots(config);
@@ -200,14 +224,16 @@ function createWorkspace({ configPath, checkRequest, terminal: terminalService, 
       if (!parsed.ok) throw new Error();
       return repositoryKey(parsed);
     }));
-    const { model } = config.claude ?? {};
-    claudeModelArgs = model === undefined ? [] : buildClaudeArgs({ model }).slice(buildClaudeArgs().length);
+    agents = loadModelOptions(config.models);
     codexHome = config.codex?.home ?? path.join(homedir(), '.local/share/linux-web-terminal/codex');
     if (!path.isAbsolute(codexHome)) throw new Error();
     codexHome = path.resolve(codexHome);
     checkCodexHome(codexHome);
     fs.mkdirSync(config.workspacesRoot, { recursive: true, mode: 0o700 });
     workspacesRoot = fs.realpathSync(config.workspacesRoot);
+    projectPaths = [...roots.map(root => root.realPath), workspacesRoot,
+      ...config.roots.map(root => root.path), config.workspacesRoot];
+    claudeMcpConfigFile = loadClaudeMcpFile(config.mcp, projectPaths);
     historyFile = typeof config.historyFile === 'string' && path.isAbsolute(config.historyFile)
       ? config.historyFile : path.join(workspacesRoot, '.session-history.json');
     managerRoots = loadProjectRoots({
@@ -227,6 +253,8 @@ function createWorkspace({ configPath, checkRequest, terminal: terminalService, 
   const sessionManager = createSessionManager({
     roots: managerRoots,
     historyFile,
+    agents,
+    claudeMcpConfigFile,
     onDiscard: terminal?.closeChat,
     env: { CODEX_HOME: codexHome },
     spawnFn(agent, args, options) {
@@ -234,8 +262,10 @@ function createWorkspace({ configPath, checkRequest, terminal: terminalService, 
       const env = Object.fromEntries(Object.entries(options.env).filter(([key]) => agentEnvKey.test(key)));
       if (agent === 'claude') {
         delete env.CODEX_HOME;
-        // The session manager already appends the Claude isolation flags.
-        return spawnFn(agent, [...args, ...claudeModelArgs], { ...options, env });
+        if (claudeMcpConfigFile && resolveClaudeMcpFile(claudeMcpConfigFile, projectPaths) !== claudeMcpConfigFile) {
+          throw new Error('Invalid MCP configuration');
+        }
+        return spawnFn(agent, args, { ...options, env });
       }
       fs.mkdirSync(env.CODEX_HOME, { recursive: true, mode: 0o700 });
       env.CODEX_HOME = fs.realpathSync(env.CODEX_HOME);
@@ -253,7 +283,7 @@ function createWorkspace({ configPath, checkRequest, terminal: terminalService, 
     },
     cleanupWorkspace: github.cleanupWorkspace,
   };
-  const handleRoutes = createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRequest, terminal });
+  const handleRoutes = createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRequest, terminal, agents });
   const eventStreams = new Set();
   return {
     async handle(req, res) {

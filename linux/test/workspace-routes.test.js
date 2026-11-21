@@ -17,8 +17,8 @@ const CLI_SESSION_ID = 'c6cecb23-d965-4b2a-a68c-f975304021a2';
 const CODEX_THREAD_ID = '2ef9cb3e-e900-4acb-aef2-9d1c945935ad';
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 const historyEntries = [
-  { ...SESSION_INPUT, cliSessionId: CLI_SESSION_ID, lastUsedAt: 20 },
-  { ...SESSION_INPUT, agent: 'codex', cliSessionId: CODEX_THREAD_ID, lastUsedAt: 10 },
+  { ...SESSION_INPUT, cliSessionId: CLI_SESSION_ID, lastUsedAt: 20, model: 'claude-opus-5-5', effort: 'high' },
+  { ...SESSION_INPUT, agent: 'codex', cliSessionId: CODEX_THREAD_ID, lastUsedAt: 10, model: null, effort: null },
 ];
 
 function fakeManager({ emitSessionStarted = true } = {}) {
@@ -35,14 +35,14 @@ function fakeManager({ emitSessionStarted = true } = {}) {
         return { sessionId: match.sessionId };
       }
       const sessionId = `session-${sessions.size + 1}`;
-      const { agent, rootId, relPath } = input;
-      sessions.set(sessionId, { agent, rootId, relPath, events: [], listeners: new Set() });
+      const { agent, rootId, relPath, model, effort } = input;
+      sessions.set(sessionId, { agent, rootId, relPath, model, effort, events: [], listeners: new Set() });
       if (emitSessionStarted) this.emit(sessionId, { type: 'session_started' });
       return { sessionId };
     },
     list() {
-      return [...sessions].map(([sessionId, { agent, rootId, relPath }]) => ({
-        sessionId, agent, rootId, relPath, status: 'idle', absolutePath: '/internal/path',
+      return [...sessions].map(([sessionId, { agent, rootId, relPath, model, effort }]) => ({
+        sessionId, agent, rootId, relPath, model, effort, status: 'idle', absolutePath: '/internal/path',
         cliSessionId: agent === 'codex' ? CODEX_THREAD_ID : CLI_SESSION_ID,
       }));
     },
@@ -215,10 +215,45 @@ test('lists only root identifiers, labels, and contained subfolder names', async
   assertHeaders(result.headers);
 });
 
+test('serves the built-in model catalog and validates choices before provisioning', async t => {
+  const { request, post, gateCalls, githubCalls, sessionManager } = await fixture(t);
+  const result = await request('GET', `${API}/options`);
+  assert.equal(result.status, 200);
+  assertHeaders(result.headers);
+  assert.deepEqual(gateCalls, []);
+  const { claude, codex } = result.body.agents;
+  assert.deepEqual(claude, {
+    default: 'claude-sonnet-5-5', defaultEffort: 'medium',
+    models: [
+      ['claude-haiku-5-5', 'Claude Haiku 5.5'], ['claude-sonnet-5-5', 'Claude Sonnet 5.5'],
+      ['claude-opus-5-5', 'Claude Opus 5.5'], ['claude-fable-5-2', 'Claude Fable 5.2'],
+    ].map(([id, label]) => ({ id, label, efforts: ['low', 'medium', 'high', 'xhigh', 'max'] })),
+  });
+  assert.equal(codex.default, 'gpt-6.2-sol');
+  assert.equal(codex.defaultEffort, 'medium');
+  assert.deepEqual(codex.models.map(model => model.id), [
+    'gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-sol',
+    'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-6-luna', 'gpt-5.6-luna',
+  ]);
+  for (const { id, efforts } of codex.models) {
+    assert.deepEqual(efforts, ['low', 'medium', 'high', 'xhigh', 'max', ...(id.endsWith('-luna') ? [] : ['ultra'])]);
+  }
+  for (const [fields, error] of [
+    [{ model: 'gpt-6.2-sol' }, 'invalid_model'], [{ model: null }, 'invalid_model'],
+    [{ effort: 'ultra' }, 'invalid_effort'], [{ effort: null }, 'invalid_effort'],
+    [{ agent: 'codex', model: 'gpt-6-luna', effort: 'ultra' }, 'invalid_effort'],
+  ]) {
+    assertError(await post(`${API}/sessions`, { ...SESSION_INPUT, github: 'owner/repo', ...fields }), 400, error);
+  }
+  assert.deepEqual(githubCalls, []);
+  assert.deepEqual(sessionManager.calls, []);
+});
+
 test('lists only public session metadata and resumes by CLI UUID', async t => {
   const { post, request, sessionManager } = await fixture(t);
   assert.deepEqual((await request('GET', `${API}/sessions`)).body, { sessions: [] });
-  const created = await post(`${API}/sessions`, { ...SESSION_INPUT, path: '/untrusted' });
+  const choice = { model: 'claude-opus-5-5', effort: 'high' };
+  const created = await post(`${API}/sessions`, { ...SESSION_INPUT, ...choice, path: '/untrusted' });
   assert.equal(created.status, 201);
   assert.deepEqual(created.body, { sessionId: 'session-1' });
   assertHeaders(created.headers);
@@ -226,13 +261,13 @@ test('lists only public session metadata and resumes by CLI UUID', async t => {
   assert.equal(listed.status, 200);
   assertHeaders(listed.headers);
   assert.deepEqual(listed.body, {
-    sessions: [{ ...SESSION_INPUT, sessionId: 'session-1', cliSessionId: CLI_SESSION_ID, status: 'idle' }],
+    sessions: [{ ...SESSION_INPUT, ...choice, sessionId: 'session-1', cliSessionId: CLI_SESSION_ID, status: 'idle' }],
   });
   const resumed = await post(`${API}/sessions`, { ...SESSION_INPUT, resumeSessionId: CLI_SESSION_ID });
   assert.equal(resumed.status, 201);
   assert.deepEqual(resumed.body, created.body);
   assert.deepEqual(sessionManager.calls, [
-    ['start', { ...SESSION_INPUT, resumeSessionId: undefined }],
+    ['start', { ...SESSION_INPUT, ...choice, resumeSessionId: undefined }],
     ['start', { ...SESSION_INPUT, resumeSessionId: CLI_SESSION_ID }],
   ]);
   assertError(await post(`${API}/sessions`, { ...SESSION_INPUT, resumeSessionId: 'missing' }), 409, 'resume_unavailable');
@@ -415,15 +450,19 @@ test('streams unified events and replays only events newer than Last-Event-ID', 
   assert.deepEqual((await live.next()).value, {
     id: 1, data: { type: 'session_started', sessionId: id, turnId: 'turn-1', seq: 1 },
   });
-  const first = sessionManager.emit(id, { type: 'message_delta', messageId: 'message-1', text: 'first\nline' });
+  const first = sessionManager.emit(id, { type: 'thinking_start', messageId: 'message-1' });
   assert.deepEqual((await live.next()).value, { id: 2, data: first });
   await live.return();
 
-  const missed = sessionManager.emit(id, { type: 'message_done', messageId: 'message-1', text: 'complete' });
+  const thinking = sessionManager.emit(id, { type: 'thinking_delta', messageId: 'message-1', text: '', tokens: 50 });
+  const message = sessionManager.emit(id, { type: 'message_delta', messageId: 'message-1', text: 'first\nline' });
   const resumed = readEvents(await open('GET', eventsPath, { headers: { 'Last-Event-ID': '2' } }));
-  assert.deepEqual((await resumed.next()).value, { id: 3, data: missed });
+  assert.deepEqual((await resumed.next()).value, { id: 3, data: thinking });
+  assert.deepEqual((await resumed.next()).value, { id: 4, data: message });
+  const complete = sessionManager.emit(id, { type: 'message_done', messageId: 'message-1', text: 'complete' });
+  assert.deepEqual((await resumed.next()).value, { id: 5, data: complete });
   const finished = sessionManager.emit(id, { type: 'turn_finished', status: 'success' });
-  assert.deepEqual((await resumed.next()).value, { id: 4, data: finished });
+  assert.deepEqual((await resumed.next()).value, { id: 6, data: finished });
   await resumed.return();
 });
 

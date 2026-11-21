@@ -1,9 +1,11 @@
 'use strict';
 
 const { randomUUID } = require('node:crypto');
+const path = require('node:path');
 
 const UUID_PATTERN = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const MODEL_PATTERN = /^[A-Za-z0-9._-]+$/;
+const CLAUDE_EFFORTS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
 
 // The caller sets the child process cwd from a server-managed workspace.
 function buildClaudeArgs(options = {}) {
@@ -11,7 +13,7 @@ function buildClaudeArgs(options = {}) {
     throw new TypeError('Set cwd on the child process, not in Claude arguments');
   }
 
-  const { resumeSessionId, model, maxBudgetUsd, approvalMode = 'deny' } = options;
+  const { resumeSessionId, model, effort, mcpConfigFile, maxBudgetUsd, approvalMode = 'deny' } = options;
   const args = [
     '-p', '--verbose',
     '--input-format', 'stream-json',
@@ -44,6 +46,16 @@ function buildClaudeArgs(options = {}) {
       args.push('--model', model);
     }
   }
+  if (effort !== undefined) {
+    if (!CLAUDE_EFFORTS.includes(effort)) throw new TypeError('invalid_effort');
+    args.push('--effort', effort);
+  }
+  if (mcpConfigFile !== undefined) {
+    if (typeof mcpConfigFile !== 'string' || !path.isAbsolute(mcpConfigFile)) {
+      throw new TypeError('invalid_mcp_config');
+    }
+    args.push('--mcp-config', mcpConfigFile);
+  }
   if (maxBudgetUsd !== undefined) {
     if (!Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0) {
       throw new TypeError('maxBudgetUsd must be a finite positive number');
@@ -59,10 +71,23 @@ function createClaudeParser({ sessionId }) {
   const activeMessages = new Map();
   const streamedText = new Map();
   const completedMessages = new Set();
+  const thinkingMessages = new Set();
   const approvalIds = new Map();
 
   function event(type, fields = {}) {
     return { type, sessionId, turnId, seq: ++seq, ...fields };
+  }
+
+  function thinkingStart(messageId) {
+    if (!messageId || thinkingMessages.has(messageId)) return [];
+    thinkingMessages.add(messageId);
+    return [event('thinking_start', { messageId })];
+  }
+
+  function thinkingDelta(messageId, thinking, estimatedTokens) {
+    const text = typeof thinking === 'string' ? thinking : '';
+    const tokens = Number.isSafeInteger(estimatedTokens) && estimatedTokens >= 0 ? estimatedTokens : null;
+    return event('thinking_delta', { messageId, text, tokens });
   }
 
   function parseStreamEvent(record) {
@@ -72,6 +97,17 @@ function createClaudeParser({ sessionId }) {
       activeMessages.set(scope, update.message?.id);
     } else if (update?.type === 'message_stop') {
       activeMessages.delete(scope);
+    } else if (update?.type === 'content_block_start' && update.content_block?.type === 'thinking') {
+      const messageId = activeMessages.get(scope);
+      if (!messageId) return [];
+      const events = thinkingStart(messageId);
+      const { thinking, estimated_tokens: tokens } = update.content_block;
+      if (thinking || tokens) events.push(thinkingDelta(messageId, thinking, tokens));
+      return events;
+    } else if (update?.type === 'content_block_delta' && update.delta?.type === 'thinking_delta') {
+      const messageId = activeMessages.get(scope);
+      if (!messageId) return [];
+      return [...thinkingStart(messageId), thinkingDelta(messageId, update.delta.thinking, update.delta.estimated_tokens)];
     } else if (update?.type === 'content_block_delta' && update.delta?.type === 'text_delta') {
       const messageId = activeMessages.get(scope);
       const { text } = update.delta;
@@ -90,9 +126,15 @@ function createClaudeParser({ sessionId }) {
 
     const events = [];
     const messageId = message.id;
+    const hasStreamedThinking = thinkingMessages.has(messageId);
     const textBlocks = message.content.filter(block => block?.type === 'text' && typeof block.text === 'string');
     for (const block of message.content) {
-      if (block?.type === 'tool_use') {
+      if (block?.type === 'thinking' && messageId && !hasStreamedThinking) {
+        events.push(...thinkingStart(messageId));
+        if (block.thinking || block.estimated_tokens) {
+          events.push(thinkingDelta(messageId, block.thinking, block.estimated_tokens));
+        }
+      } else if (block?.type === 'tool_use') {
         events.push(event('tool_call_start', {
           toolCallId: block.id,
           name: block.name,
@@ -129,6 +171,7 @@ function createClaudeParser({ sessionId }) {
     activeMessages.clear();
     streamedText.clear();
     completedMessages.clear();
+    thinkingMessages.clear();
     approvalIds.clear();
     return events;
   }
@@ -219,4 +262,4 @@ function buildUserMessage(text) {
   return JSON.stringify({ type: 'user', message: { role: 'user', content: text } }) + '\n';
 }
 
-module.exports = { buildClaudeArgs, createClaudeParser, buildApprovalResponse, buildUserMessage };
+module.exports = { CLAUDE_EFFORTS, buildClaudeArgs, createClaudeParser, buildApprovalResponse, buildUserMessage };

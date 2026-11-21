@@ -13,13 +13,15 @@ export function formatHistoryEntry(entry, now) {
     id: entry.cliSessionId,
     label: codex ? 'Codex CLI' : 'Claude Code',
     detail: `${folder} · ${relativeTime(entry.lastUsedAt, now)}`,
+    modelDetail: [entry.model, entry.effort].filter(Boolean).join(' · '),
   };
 }
 
-export function newestResumableEntry(entries, { rootId, relPath, agent }) {
+export function newestResumableEntry(entries, { rootId, relPath, agent, model }) {
   let newest;
   for (const entry of entries) {
     if (entry.rootId === rootId && entry.relPath === relPath && entry.agent === agent &&
+        (model === undefined || entry.model === model) &&
         (!newest || entry.lastUsedAt > newest.lastUsedAt)) {
       newest = entry;
     }

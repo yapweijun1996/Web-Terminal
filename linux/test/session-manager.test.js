@@ -8,13 +8,15 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { loadProjectRoots } = require('../workspace/project-roots');
-const { createSessionManager } = require('../workspace/session-manager');
+const { createSessionManager, loadModelOptions } = require('../workspace/session-manager');
 
 const cliPath = path.join(__dirname, 'fixtures', 'fake-cli.js');
 const cliSessionId = 'c6cecb23-d965-4b2a-a68c-f975304021a2';
 const codexThreadId = '2ef9cb3e-e900-4acb-aef2-9d1c945935ad';
 const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 const historyEntry = { agent: 'claude', rootId: 'projects', relPath: 'project', cliSessionId };
+const claudeDefault = { model: 'claude-sonnet-5-5', effort: 'medium' };
+const codexDefault = { model: 'gpt-6.2-sol', effort: 'medium' };
 const fakeCodex = `
   const [threadId] = process.argv.slice(1);
   const write = record => console.log(JSON.stringify(record));
@@ -161,6 +163,7 @@ test('buffers partial CRLF lines and split UTF-8 with ordered, opaque events', {
   const output = eventsFor(f.manager, sessionId);
   assert.deepEqual(f.manager.list(), [{
     sessionId, agent: 'claude', rootId: 'projects', relPath: 'project', cliSessionId: null, status: 'active',
+    ...claudeDefault,
   }]);
   f.manager.send(sessionId, 'prompt');
   assert.throws(() => f.manager.send(sessionId, 'overlap'), { code: 'turn_active', status: 409 });
@@ -259,7 +262,8 @@ test('Codex rejects approvals, closes stdin after the prompt, and keeps the work
   const output = eventsFor(f.manager, sessionId);
   assert.throws(() => f.manager.respond(sessionId, 'unused', 'deny'), { code: 'approvals_unsupported' });
   assert.throws(() => f.start({ agent: 'codex', resumeSessionId: sessionId }), { code: 'resume_unavailable' });
-  assert.deepEqual(f.launches[0].args, ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'read-only']);
+  assert.deepEqual(f.launches[0].args, ['exec', '--json', '--skip-git-repo-check', '--sandbox', 'read-only',
+    '-m', codexDefault.model, '-c', 'model_reasoning_effort="medium"']);
   f.manager.send(sessionId, 'exact\nprompt');
   const finished = await output.wait('turn_finished');
   assert.deepEqual(finished.usage, { input_tokens: 3 });
@@ -276,7 +280,7 @@ test('resumes Codex turns in the same project and restores the thread from histo
   const { sessionId } = f.start(project);
   f.manager.send(sessionId, 'first prompt');
   await f.launches[0].closed;
-  const entry = { ...project, cliSessionId: codexThreadId, lastUsedAt: 100 };
+  const entry = { ...project, ...codexDefault, cliSessionId: codexThreadId, lastUsedAt: 100 };
   assert.deepEqual(JSON.parse(fs.readFileSync(f.historyFile, 'utf8')), [entry]);
 
   for (const overrides of [
@@ -289,7 +293,7 @@ test('resumes Codex turns in the same project and restores the thread from histo
   assert.deepEqual(f.start(resume), { sessionId });
   assert.throws(() => f.start(resume), { code: 'turn_active' });
   const resumeArgs = ['exec', 'resume', '--json', '--skip-git-repo-check',
-    '-c', 'sandbox_mode="read-only"', codexThreadId, '-'];
+    '-c', 'sandbox_mode="read-only"', '-m', codexDefault.model, '-c', 'model_reasoning_effort="medium"', codexThreadId, '-'];
   assert.deepEqual(f.launches[1].args, resumeArgs);
   f.manager.send(sessionId, 'explicit resume');
   await f.launches[1].closed;
@@ -318,6 +322,61 @@ test('resumes Codex turns in the same project and restores the thread from histo
   assert.equal((await output.wait('turn_finished')).status, 'success');
 });
 
+test('validates model catalogs and applies server defaults for custom models', t => {
+  const claude = {
+    default: 'example-model', defaultEffort: 'medium',
+    list: [{ id: 'example-model', label: 'Example' }, { id: 'high-only', label: 'High Only', efforts: ['high'] }],
+  };
+  const codex = { default: 'gpt-6-luna', defaultEffort: 'medium', list: [{ id: 'gpt-6-luna', label: 'Luna' }] };
+  for (const config of [
+    null, [], { other: claude }, { claude: null }, { claude: { ...claude, extra: true } },
+    { claude: { ...claude, default: 'missing' } }, { claude: { ...claude, defaultEffort: null } },
+    { claude: { ...claude, list: [] } }, { claude: { ...claude, list: [...claude.list, claude.list[0]] } },
+    { codex: { ...codex, list: [{ ...codex.list[0], efforts: ['medium', 'ultra'] }] } },
+    ...[
+      { id: 42 }, { id: 'example-model\n' }, { id: 'model/name' }, { label: '   ' }, { efforts: null },
+      { efforts: [] }, { efforts: ['high'] }, { efforts: ['medium', 'ultra'] }, { efforts: ['medium', 'medium'] },
+    ].map(fields => ({ claude: { ...claude, list: [{ ...claude.list[0], ...fields }] } })),
+  ]) {
+    assert.throws(() => loadModelOptions(config), { code: 'invalid_models_config' });
+  }
+
+  const agents = loadModelOptions({ claude });
+  const f = fixture(t, { agents });
+  f.start();
+  f.start({ model: 'high-only' });
+  assert.deepEqual(f.manager.list().map(({ model, effort }) => ({ model, effort })), [
+    { model: 'example-model', effort: 'medium' }, { model: 'high-only', effort: 'high' },
+  ]);
+  assert.equal(agents.codex.default, codexDefault.model);
+  assert.deepEqual(loadModelOptions({ codex }).codex.models[0].efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.throws(() => f.start({ model: 'claude-sonnet-5-5' }), { code: 'invalid_model' });
+  assert.throws(() => f.start({ model: 'high-only', effort: 'medium' }), { code: 'invalid_effort' });
+  assert.equal(f.launches.length, 2);
+});
+
+test('resumes an idle conversation with a new workspace session when the selection changes', async t => {
+  const f = fixture(t, { persistHistory: true });
+  const { sessionId } = f.start();
+  f.manager.send(sessionId, 'first');
+  await f.launches[0].closed;
+
+  const choice = { model: 'claude-opus-5-5', effort: 'xhigh' };
+  const resumed = f.start({ resumeSessionId: sessionId, ...choice });
+  assert.notEqual(resumed.sessionId, sessionId);
+  assert.throws(() => f.manager.send(sessionId, 'old session'), { code: 'unknown_session' });
+  assert.deepEqual(f.launches[1].args.slice(-10, -4), ['--resume', cliSessionId,
+    '--model', choice.model, '--effort', choice.effort]);
+  assert.throws(() => f.start({ resumeSessionId: cliSessionId }), { code: 'turn_active' });
+  f.manager.send(resumed.sessionId, 'second');
+  await f.launches[1].closed;
+  assert.deepEqual(f.manager.listHistory().map(({ model, effort }) => ({ model, effort })), [choice]);
+
+  f.manager.send(resumed.sessionId, 'automatic resume');
+  await f.launches[2].closed;
+  assert.deepEqual(f.launches[2].args, f.launches[1].args);
+});
+
 test('resumes Claude by CLI UUID and replays only events after the supplied cursor', async t => {
   const f = fixture(t);
   const { sessionId } = f.start();
@@ -326,6 +385,7 @@ test('resumes Claude by CLI UUID and replays only events after the supplied curs
   await f.launches[0].closed;
   assert.deepEqual(f.manager.list(), [{
     sessionId, agent: 'claude', rootId: 'projects', relPath: 'project', cliSessionId, status: 'idle',
+    ...claudeDefault,
   }]);
   assert.throws(() => f.start({ resumeSessionId: '--help' }), { code: 'resume_unavailable' });
   assert.throws(() => f.start({ resumeSessionId: '8686f84d-d1dd-4ed4-907e-4a431771cb3e' }), {
@@ -353,14 +413,14 @@ test('persists only private session metadata and resumes Claude after Stop and m
   const { sessionId } = f.start();
   const first = eventsFor(f.manager, sessionId);
   await first.wait('session_started');
-  assert.deepEqual(JSON.parse(fs.readFileSync(f.historyFile)), [{ ...historyEntry, lastUsedAt: 100 }]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.historyFile)), [{ ...historyEntry, ...claudeDefault, lastUsedAt: 100 }]);
   assert.equal(fs.statSync(f.historyFile).mode & 0o777, 0o600);
 
   clock = 200;
   f.manager.stop(sessionId);
   await f.launches[0].closed;
   assert.deepEqual(f.manager.list(), []);
-  assert.deepEqual(f.manager.listHistory(), [{ ...historyEntry, lastUsedAt: 200 }]);
+  assert.deepEqual(f.manager.listHistory(), [{ ...historyEntry, ...claudeDefault, lastUsedAt: 200 }]);
   assert.throws(() => f.start({ resumeSessionId: cliSessionId, relPath: '.' }), { code: 'resume_unavailable' });
   const resumed = f.start({ resumeSessionId: cliSessionId });
   assert.notEqual(resumed.sessionId, sessionId);
@@ -372,7 +432,7 @@ test('persists only private session metadata and resumes Claude after Stop and m
   await f.launches[1].closed;
 
   const restarted = f.openManager(f.historyFile);
-  assert.deepEqual(restarted.listHistory(), [{ ...historyEntry, lastUsedAt: 300 }]);
+  assert.deepEqual(restarted.listHistory(), [{ ...historyEntry, ...claudeDefault, lastUsedAt: 300 }]);
   assert.throws(() => restarted.start({ ...historyEntry, relPath: '.', resumeSessionId: cliSessionId }), {
     code: 'resume_unavailable',
   });
@@ -402,6 +462,9 @@ test('ignores invalid history files and malformed entries', t => {
     { ...valid, agent: 'unknown' },
     { ...valid, lastUsedAt: '20' },
     { ...valid, lastUsedAt: -1 },
+    { ...valid, model: 'valid-id' },
+    { ...valid, model: 'bad id', effort: 'high' },
+    { ...valid, model: 'valid-id', effort: 'ultra' },
     { ...valid, env: {} },
   ];
   fs.writeFileSync(f.historyFile, JSON.stringify([...malformed, valid]));
@@ -421,7 +484,7 @@ test('loads and writes at most 200 distinct history entries, newest first', asyn
   const { sessionId } = manager.start(historyEntry);
   await eventsFor(manager, sessionId).wait('session_started');
   assert.deepEqual(JSON.parse(fs.readFileSync(f.historyFile)), [
-    { ...historyEntry, lastUsedAt: 1000 }, newest, ...seed.slice(3, -1).reverse(),
+    { ...historyEntry, ...claudeDefault, lastUsedAt: 1000 }, newest, ...seed.slice(3, -1).reverse(),
   ]);
 });
 

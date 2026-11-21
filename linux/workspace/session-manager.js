@@ -6,9 +6,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { resolveProjectPath, assertStillInsideRoot } = require('./project-roots');
 const {
-  buildClaudeArgs, createClaudeParser, buildApprovalResponse, buildUserMessage,
+  CLAUDE_EFFORTS, buildClaudeArgs, createClaudeParser, buildApprovalResponse, buildUserMessage,
 } = require('./claude-adapter');
-const { buildCodexArgs, createCodexParser, isCliSessionId } = require('./codex-adapter');
+const { CODEX_EFFORTS, buildCodexArgs, createCodexParser, isCliSessionId } = require('./codex-adapter');
 
 // This flag set is marked verified for Claude only. Linux runtime acceptance is separate.
 const CLAUDE_ISOLATION_ARGS = ['--setting-sources', 'project', '--disable-slash-commands', '--strict-mcp-config'];
@@ -23,9 +23,84 @@ const MAX_REPLAY_EVENTS = 1_000;
 const MAX_RETAINED_SESSIONS = 20;
 const MAX_HISTORY_ENTRIES = 200;
 const MAX_HISTORY_FILE_BYTES = 8 * 1024 * 1024;
+const MODEL_ID = /^[A-Za-z0-9._-]+$/;
+const AGENT_EFFORTS = { claude: CLAUDE_EFFORTS, codex: CODEX_EFFORTS };
+const LUNA_EFFORTS = CODEX_EFFORTS.filter(effort => effort !== 'ultra');
+const BUILTIN_MODELS = {
+  claude: {
+    default: 'claude-sonnet-5-5',
+    defaultEffort: 'medium',
+    list: [
+      { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5' },
+      { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5' },
+      { id: 'claude-opus-5-5', label: 'Claude Opus 5.5' },
+      { id: 'claude-fable-5-2', label: 'Claude Fable 5.2' },
+    ],
+  },
+  codex: {
+    default: 'gpt-6.2-sol',
+    defaultEffort: 'medium',
+    list: [
+      { id: 'gpt-6.2-sol', label: 'GPT-6.2 Sol' },
+      { id: 'gpt-6.2-astra', label: 'GPT-6.2 Astra' },
+      { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol' },
+      { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra' },
+      { id: 'gpt-6-sol', label: 'GPT-6 Sol' },
+      { id: 'gpt-6-astra', label: 'GPT-6 Astra' },
+      { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' },
+      { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra' },
+      { id: 'gpt-6-luna', label: 'GPT-6 Luna', efforts: LUNA_EFFORTS },
+      { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', efforts: LUNA_EFFORTS },
+    ],
+  },
+};
 
 function managerError(code, message = code, status) {
   return Object.assign(new Error(message), { code, ...(status && { status }) });
+}
+
+function hasOnlyKeys(value, keys) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) &&
+    Object.keys(value).every(key => keys.includes(key));
+}
+
+function validModelId(value) {
+  return typeof value === 'string' && MODEL_ID.test(value);
+}
+
+function loadModelOptions(config = {}) {
+  const invalid = () => managerError('invalid_models_config');
+  if (!hasOnlyKeys(config, ['claude', 'codex'])) throw invalid();
+  return Object.fromEntries(Object.entries(BUILTIN_MODELS).map(([agent, builtin]) => {
+    const settings = Object.hasOwn(config, agent) ? config[agent] : builtin;
+    if (!hasOnlyKeys(settings, ['default', 'defaultEffort', 'list']) || !Array.isArray(settings.list)) throw invalid();
+    const ids = new Set();
+    const models = settings.list.map(model => {
+      if (!hasOnlyKeys(model, ['id', 'label', 'efforts'])) throw invalid();
+      const allowedEfforts = builtin.list.find(({ id }) => id === model.id)?.efforts ?? AGENT_EFFORTS[agent];
+      const { id, label, efforts = allowedEfforts } = model;
+      if (!validModelId(id) || ids.has(id) || typeof label !== 'string' || !label.trim() ||
+          !Array.isArray(efforts) || !efforts.length || new Set(efforts).size !== efforts.length ||
+          !efforts.every(effort => allowedEfforts.includes(effort))) throw invalid();
+      ids.add(id);
+      return { id, label, efforts: [...efforts] };
+    });
+    const { default: defaultModel, defaultEffort } = settings;
+    if (!models.find(({ id }) => id === defaultModel)?.efforts.includes(defaultEffort)) throw invalid();
+    return [agent, { default: defaultModel, defaultEffort, models }];
+  }));
+}
+
+function selectModel(agents, agent, model, effort) {
+  if (agent !== 'claude' && agent !== 'codex') throw managerError('invalid_agent');
+  const options = agents[agent];
+  const selected = options.models.find(({ id }) => id === (model === undefined ? options.default : model));
+  if (!selected) throw managerError('invalid_model');
+  if (effort === undefined) {
+    effort = selected.efforts.includes(options.defaultEffort) ? options.defaultEffort : selected.efforts[0];
+  }
+  if (!selected.efforts.includes(effort)) throw managerError('invalid_effort');
+  return { model: selected.id, effort };
 }
 
 function sanitizedEnv(overrides) {
@@ -34,9 +109,10 @@ function sanitizedEnv(overrides) {
 }
 
 function validHistoryEntry(entry) {
-  if (!entry || typeof entry !== 'object' || Object.keys(entry).length !== 5) return false;
-  const { agent, rootId, relPath, cliSessionId, lastUsedAt } = entry;
+  if (!hasOnlyKeys(entry, ['agent', 'rootId', 'relPath', 'cliSessionId', 'lastUsedAt', 'model', 'effort'])) return false;
+  const { agent, rootId, relPath, cliSessionId, lastUsedAt, model, effort } = entry;
   return (agent === 'claude' || agent === 'codex') && isCliSessionId(cliSessionId) &&
+    ((model === undefined && effort === undefined) || (validModelId(model) && AGENT_EFFORTS[agent].includes(effort))) &&
     typeof rootId === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(rootId) &&
     typeof relPath === 'string' && Buffer.byteLength(relPath) <= 4096 && !path.win32.isAbsolute(relPath) &&
     !/[\\\0]/.test(relPath) && relPath.split('/').every(segment => segment && segment !== '..') &&
@@ -101,14 +177,15 @@ function saveHistory(file, entries) {
 function createSessionManager({
   roots, spawnFn = spawn, now = Date.now, maxSessions = 8,
   idleMs = 60 * 60_000, killGraceMs = 5_000, env, historyFile, onDiscard = () => {},
+  agents = loadModelOptions(), claudeMcpConfigFile,
 }) {
   const sessions = new Map();
   const useProcessGroup = process.platform !== 'win32';
   const file = typeof historyFile === 'string' && path.isAbsolute(historyFile) ? historyFile : null;
   let sessionHistory = loadHistory(file);
 
-  function remember({ agent, rootId, relPath, cliSessionId }) {
-    const entry = { agent, rootId, relPath, cliSessionId, lastUsedAt: now() };
+  function remember({ agent, rootId, relPath, cliSessionId, model, effort }) {
+    const entry = { agent, rootId, relPath, cliSessionId, model, effort, lastUsedAt: now() };
     if (!validHistoryEntry(entry)) return;
     sessionHistory = newestHistory([entry, ...sessionHistory.filter(previous =>
       previous.agent !== agent || previous.cliSessionId !== cliSessionId)]);
@@ -364,10 +441,12 @@ function createSessionManager({
     if ([...sessions.values()].filter(entry => entry.run).length >= maxSessions) {
       throw managerError('max_sessions', 'Maximum number of active sessions reached', 409);
     }
-    const claude = session.agent === 'claude';
+    const { agent, cliSessionId: resumeSessionId, model, effort } = session;
+    const claude = agent === 'claude';
     const args = claude
-      ? [...buildClaudeArgs({ approvalMode: 'prompt', resumeSessionId: session.cliSessionId }), ...CLAUDE_ISOLATION_ARGS]
-      : buildCodexArgs({ sandbox: 'read-only', resumeSessionId: session.cliSessionId });
+      ? [...buildClaudeArgs({ approvalMode: 'prompt', resumeSessionId, model, effort, mcpConfigFile: claudeMcpConfigFile }),
+        ...CLAUDE_ISOLATION_ARGS]
+      : buildCodexArgs({ sandbox: 'read-only', resumeSessionId, model, effort });
     const options = {
       shell: false, stdio: ['pipe', 'pipe', 'pipe'], detached: useProcessGroup, env: sanitizedEnv(env),
     };
@@ -407,12 +486,13 @@ function createSessionManager({
     return resolved;
   }
 
-  function start({ rootId, relPath, agent, resumeSessionId, ownerId }) {
-    if (agent !== 'claude' && agent !== 'codex') throw managerError('invalid_agent');
+  function start({ rootId, relPath, agent, resumeSessionId, ownerId, model, effort }) {
+    const selection = selectModel(agents, agent, model, effort);
     const resolved = resolve(rootId, relPath);
     for (const session of sessions.values()) checkIdle(session);
 
     let cliSessionId;
+    let previousSession;
     if (resumeSessionId !== undefined) {
       if (!isCliSessionId(resumeSessionId)) {
         throw managerError('resume_unavailable');
@@ -425,20 +505,26 @@ function createSessionManager({
         (entry.cliSessionId === resumeSessionId || (agent === 'claude' && entry.id === resumeSessionId)));
       if (session) {
         if (session.run) throw managerError('turn_active', 'An agent process is already active', 409);
-        launch(session, resolved);
-        return { sessionId: session.id };
+        if (session.model === selection.model && session.effort === selection.effort) {
+          launch(session, resolved);
+          return { sessionId: session.id };
+        }
+        if (session.absolutePath !== resolved.absolutePath) throw managerError('project_path_changed');
+        previousSession = session;
+        cliSessionId = session.cliSessionId;
+      } else {
+        if (!sessionHistory.some(entry => entry.cliSessionId === resumeSessionId && sameProject(entry))) {
+          throw managerError('resume_unavailable');
+        }
+        if ([...sessions.values()].some(entry => entry.agent === agent && entry.cliSessionId === resumeSessionId && entry.run)) {
+          throw managerError('turn_active', 'An agent process is already active', 409);
+        }
+        cliSessionId = resumeSessionId;
       }
-      if (!sessionHistory.some(entry => entry.cliSessionId === resumeSessionId && sameProject(entry))) {
-        throw managerError('resume_unavailable');
-      }
-      if ([...sessions.values()].some(entry => entry.agent === agent && entry.cliSessionId === resumeSessionId && entry.run)) {
-        throw managerError('turn_active', 'An agent process is already active', 409);
-      }
-      cliSessionId = resumeSessionId;
     }
 
     const session = {
-      id: randomUUID(), rootId, relPath, agent, cliSessionId, ownerId, absolutePath: resolved.absolutePath,
+      id: randomUUID(), rootId, relPath, agent, cliSessionId, ownerId, absolutePath: resolved.absolutePath, ...selection,
       seq: 0, history: [], replayBytes: 0, subscribers: new Set(),
     };
     sessions.set(session.id, session);
@@ -448,6 +534,7 @@ function createSessionManager({
       forget(session);
       throw error;
     }
+    if (previousSession) forget(previousSession);
     return { sessionId: session.id };
   }
 
@@ -510,8 +597,8 @@ function createSessionManager({
 
   function list() {
     for (const session of sessions.values()) checkIdle(session);
-    return [...sessions.values()].map(({ id, rootId, relPath, agent, cliSessionId, run }) => ({
-      sessionId: id, agent, rootId, relPath, cliSessionId: cliSessionId ?? null,
+    return [...sessions.values()].map(({ id, rootId, relPath, agent, cliSessionId, model, effort, run }) => ({
+      sessionId: id, agent, rootId, relPath, cliSessionId: cliSessionId ?? null, model, effort,
       status: run ? 'active' : 'idle',
     }));
   }
@@ -519,4 +606,4 @@ function createSessionManager({
   return { start, send, onEvent, respond, stop, list, listHistory, terminalProject };
 }
 
-module.exports = { createSessionManager };
+module.exports = { createSessionManager, loadModelOptions, selectModel };

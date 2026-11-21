@@ -2,11 +2,11 @@ import { useState } from 'preact/hooks';
 import { agents, user } from '../data/mock.js';
 import { Icon } from './icon.jsx';
 
-export function WorkspaceSelect({ kind, value, onChange, label = kind, choices = agents, disabled }) {
-
+export function WorkspaceSelect({ kind, value, onChange, label = kind, choices = agents, disabled, describedBy }) {
   return (
     <span class="select-wrap">
-      <select aria-label={label} value={value} disabled={disabled || !choices.length} onChange={(event) => onChange(event.currentTarget.value)}>
+      <select aria-label={label} aria-describedby={describedBy} value={value} disabled={disabled || !choices.length}
+        onChange={(event) => onChange(event.currentTarget.value)}>
         {!choices.length && <option value="">No projects</option>}
         {choices.map((choice) => <option key={choice.id} value={choice.id}>{choice.name}</option>)}
       </select>
@@ -58,7 +58,8 @@ export function Sidebar({
             <button class="nav-item" key={session.id} disabled={disabled}
               aria-pressed={mock ? session.id === sessionId : undefined} onClick={() => onSession(session)}>
               <Icon name="history" size={16} />
-              <span>{session.label}{session.detail && <small>{session.detail}</small>}</span>
+              <span>{session.label}{session.detail && <small>{session.detail}</small>}
+                {session.modelDetail && <small>{session.modelDetail}</small>}</span>
             </button>
           ))}
           {sessions.length === 0 && <p class="empty-list">No recent sessions.</p>}

@@ -17,6 +17,7 @@ const { randomUUID } = require('node:crypto');
 const timers = require('node:timers');
 const { listProjects, resolveProjectPath } = require('./project-roots');
 const { parseGithubRepo } = require('./github-workspace');
+const { loadModelOptions, selectModel } = require('./session-manager');
 
 const PREFIX = '/api/workspace';
 const REPLAY_SIZE = 500;
@@ -33,6 +34,8 @@ const ERROR_STATUS = new Map([
   ['invalid_json', 400],
   ['invalid_body', 400],
   ['invalid_agent', 400],
+  ['invalid_model', 400],
+  ['invalid_effort', 400],
   ['invalid_text', 400],
   ['invalid_decision', 400],
   ['invalid_path', 400],
@@ -91,6 +94,7 @@ async function readBody(req, limit, allowEmpty) {
 
 function createWorkspaceRoutes({
   roots, sessionManager, githubWorkspace, checkRequest, terminal, maxBodyBytes = 16384, heartbeatIntervalMs = 15000,
+  agents = loadModelOptions(),
 }) {
   const histories = new Map();
 
@@ -182,9 +186,8 @@ function createWorkspaceRoutes({
     stream.send();
   }
 
-  async function startSession({ rootId, relPath, agent, resumeSessionId, github }, ownerId) {
-    if (agent !== 'claude' && agent !== 'codex') throw routeError('invalid_agent');
-    listSessions();
+  async function startSession({ rootId, relPath, agent, resumeSessionId, github, model, effort }, ownerId) {
+    selectModel(agents, agent, model, effort);
 
     let managed;
     if (github !== undefined) {
@@ -206,7 +209,11 @@ function createWorkspaceRoutes({
 
     let sessionId;
     try {
-      ({ sessionId } = sessionManager.start({ rootId, relPath, agent, resumeSessionId, ...(ownerId === undefined ? {} : { ownerId }) }));
+      ({ sessionId } = sessionManager.start({
+        rootId, relPath, agent, resumeSessionId,
+        ...(model !== undefined && { model }), ...(effort !== undefined && { effort }),
+        ...(ownerId !== undefined && { ownerId }),
+      }));
     } catch (error) {
       if (managed && githubWorkspace.cleanupWorkspace) {
         try {
@@ -219,6 +226,7 @@ function createWorkspaceRoutes({
       }
       throw error;
     }
+    listSessions();
     trackEvents(sessionId);
     return { sessionId };
   }
@@ -226,6 +234,7 @@ function createWorkspaceRoutes({
   return async function handle(req, res) {
     const pathname = req.url.split('?', 1)[0];
     const projects = req.method === 'GET' && pathname === `${PREFIX}/projects`;
+    const options = req.method === 'GET' && pathname === `${PREFIX}/options`;
     const history = req.method === 'GET' && pathname === `${PREFIX}/history`;
     const list = req.method === 'GET' && pathname === `${PREFIX}/sessions`;
     const create = req.method === 'POST' && pathname === `${PREFIX}/sessions`;
@@ -236,7 +245,7 @@ function createWorkspaceRoutes({
     const sessionMethod = action === 'events' ? 'GET' : 'POST';
     if (terminalCreate || terminalDelete) {
       if (!terminal) return false;
-    } else if (!projects && !history && !list && !create && (!sessionRoute || req.method !== sessionMethod)) return false;
+    } else if (!projects && !options && !history && !list && !create && (!sessionRoute || req.method !== sessionMethod)) return false;
 
     try {
       if (req.method !== 'GET' && !await checkRequest(req)) throw routeError('forbidden');
@@ -256,16 +265,18 @@ function createWorkspaceRoutes({
         sendJson(res, 200, {
           projects: roots.map(({ id, label }) => ({ id, label, folders: listProjects(roots, id) })),
         });
+      } else if (options) {
+        sendJson(res, 200, { agents });
       } else if (history) {
         const agent = new URLSearchParams(req.url.slice(pathname.length + 1)).get('agent') ?? undefined;
         if (agent !== undefined && agent !== 'claude' && agent !== 'codex') throw routeError('invalid_agent');
-        const entries = sessionManager.listHistory(agent).map(({ agent, rootId, relPath, cliSessionId, lastUsedAt }) => ({
-          agent, rootId, relPath, cliSessionId, lastUsedAt,
+        const entries = sessionManager.listHistory(agent).map(({ agent, rootId, relPath, cliSessionId, lastUsedAt, model, effort }) => ({
+          agent, rootId, relPath, cliSessionId, lastUsedAt, model: model ?? null, effort: effort ?? null,
         }));
         sendJson(res, 200, { entries });
       } else if (list) {
-        const sessions = listSessions().map(({ sessionId, agent, rootId, relPath, cliSessionId, status }) => ({
-          sessionId, agent, rootId, relPath, cliSessionId, status,
+        const sessions = listSessions().map(({ sessionId, agent, rootId, relPath, cliSessionId, status, model, effort }) => ({
+          sessionId, agent, rootId, relPath, cliSessionId, status, model, effort,
         }));
         sendJson(res, 200, { sessions });
       } else if (action === 'events') {

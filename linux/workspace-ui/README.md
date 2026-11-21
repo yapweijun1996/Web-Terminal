@@ -9,7 +9,11 @@ node --test test/*.test.js
 
 Serve the generated files on the same origin as the Linux workspace API. Choose a configured project and one of its server-listed folders. Project root uses the relative directory `.`. Claude Code and Codex CLI are the agent IDs accepted by the session route.
 
-Recent Sessions loads server history on startup and after each finished turn. Click a Claude Code or Codex CLI entry to resume it. The Resume session checkbox picks the latest entry for the selected project, folder, and agent. Clear hides the current list until the next refresh.
+Recent Sessions loads server history on startup and after each finished turn. Entries show the model and effort when recorded. Click an entry to resume it. The Resume session checkbox picks the latest entry for the selected project, folder, agent, and model when model options are available. Clear hides the current list until the next refresh.
+
+The welcome card and composer show Model and Effort when the server provides options. A running turn locks both controls. Changing either setting between turns applies it on the next Send, which starts a new workspace session and can resume the CLI conversation if the model is unchanged. The browser remembers the last selection for each agent.
+
+Assistant messages with thinking events show a collapsed Thinking row. Expand it to see any details supplied by the agent.
 
 Use `?mock=1` for the offline preview, including when opening `dist/index.html` directly. The app also uses the preview when the projects route returns HTTP 404. The preview includes sample tool steps, a mock approval and fixed terminal output.
 

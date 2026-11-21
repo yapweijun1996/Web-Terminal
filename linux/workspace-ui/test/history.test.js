@@ -17,13 +17,13 @@ test('relative time uses compact units and handles clock skew', () => {
 
 test('Claude history shows the agent, project root and relative age', () => {
   assert.deepEqual(formatHistoryEntry(claude, now), {
-    id: 'claude-id', label: 'Claude Code', detail: 'Project root · 2h ago',
+    id: 'claude-id', label: 'Claude Code', detail: 'Project root · 2h ago', modelDetail: '',
   });
 });
 
 test('Codex history shows the agent, folder and relative age', () => {
-  assert.deepEqual(formatHistoryEntry({ ...codex, relPath: 'web/ui' }, now), {
-    id: 'codex-id', label: 'Codex CLI', detail: 'web/ui · 2h ago',
+  assert.deepEqual(formatHistoryEntry({ ...codex, relPath: 'web/ui', model: 'gpt-6.2-sol', effort: 'medium' }, now), {
+    id: 'codex-id', label: 'Codex CLI', detail: 'web/ui · 2h ago', modelDetail: 'gpt-6.2-sol · medium',
   });
 });
 
@@ -47,6 +47,14 @@ test('resume finds the newest Codex CLI ID for the selected project and folder',
   assert.equal(newestResumableEntry(entries, codex), newest);
   assert.equal(newestResumableEntry(entries, otherFolder), otherFolder);
   assert.equal(newestResumableEntry(entries, { ...codex, relPath: 'missing' }), undefined);
+});
+
+test('model-aware resume only considers history with the selected model', () => {
+  const saved = { ...claude, model: 'sonnet', effort: 'low' };
+  const unknown = { ...claude, lastUsedAt: now };
+  const different = { ...claude, model: 'opus', lastUsedAt: now };
+  assert.equal(newestResumableEntry([unknown, saved, different], { ...claude, model: 'sonnet' }), saved);
+  assert.equal(newestResumableEntry([unknown], { ...claude, model: 'sonnet' }), undefined);
 });
 
 test('restart recovery uses the chosen CLI ID and starts fresh when no ID is chosen', async () => {

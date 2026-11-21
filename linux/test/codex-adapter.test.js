@@ -46,10 +46,10 @@ test('builds exec arguments for supported sandboxes, models, and effort levels',
   assert.deepEqual(buildCodexArgs({ sandbox: 'read-only' }), [
     'exec', '--json', '--skip-git-repo-check', '--sandbox', 'read-only',
   ]);
-  for (const effort of ['low', 'medium', 'high']) {
+  for (const effort of ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']) {
     assert.deepEqual(buildCodexArgs({ sandbox: 'workspace-write', model: 'gpt-5.4_test', effort }), [
       'exec', '--json', '--skip-git-repo-check', '--sandbox', 'workspace-write',
-      '--model=gpt-5.4_test', '-c', `model_reasoning_effort="${effort}"`,
+      '-m', 'gpt-5.4_test', '-c', `model_reasoning_effort="${effort}"`,
     ]);
   }
 });
@@ -59,7 +59,7 @@ test('rejects sandbox bypasses and invalid model or effort values', () => {
     assert.throws(() => buildCodexArgs({ sandbox }), /invalid_sandbox/);
   }
   assert.throws(() => buildCodexArgs({ sandbox: 'read-only', model: 'bad model' }), /invalid_model/);
-  assert.throws(() => buildCodexArgs({ sandbox: 'read-only', effort: 'max' }), /invalid_effort/);
+  assert.throws(() => buildCodexArgs({ sandbox: 'read-only', effort: 'extreme' }), /invalid_effort/);
 });
 
 const resumeSessionId = 'c6cecb23-d965-4b2a-a68c-f975304021a2';
@@ -84,9 +84,32 @@ test('rejects malformed resume IDs and sandbox bypasses in resume options', () =
   for (const sandbox of ['danger-full-access', '--dangerously-bypass-approvals-and-sandbox']) {
     assert.throws(() => buildCodexArgs({ sandbox, resumeSessionId }), /invalid_sandbox/);
   }
-  assert.throws(() => buildCodexArgs({
-    sandbox: 'read-only', resumeSessionId, model: '--dangerously-bypass-approvals-and-sandbox',
-  }), /invalid_model/);
+  const flag = '--dangerously-bypass-approvals-and-sandbox';
+  const args = buildCodexArgs({ sandbox: 'read-only', resumeSessionId, model: flag });
+  assert.ok(args.includes(`--model=${flag}`));
+  assert.ok(!args.includes(flag));
+});
+
+test('maps optional Codex reasoning without repeating text snapshots', () => {
+  const { push } = createCodexParser({ sessionId: 'session-1' });
+  const item = { id: 'item-1', type: 'reasoning' };
+  const [start] = push(JSON.stringify({ type: 'item.started', item }));
+  assert.equal(start.type, 'thinking_start');
+  assert.equal(start.messageId, item.id);
+  for (const [type, text, delta, seq] of [
+    ['item.updated', 'Plan', 'Plan', 2],
+    ['item.completed', 'Plan the change', ' the change', 3],
+  ]) {
+    assert.deepEqual(push(JSON.stringify({ type, item: { ...item, text } })), [
+      { ...start, type: 'thinking_delta', text: delta, tokens: 0, seq },
+    ]);
+  }
+  assert.deepEqual(push(JSON.stringify({ type: 'item.completed', item: { ...item, text: 'Plan the change' } })), []);
+  const completedOnly = push(JSON.stringify({
+    type: 'item.completed', item: { type: 'reasoning', id: 'item-2', text: 'Review' },
+  }));
+  assert.deepEqual(completedOnly.map(event => event.type), ['thinking_start', 'thinking_delta']);
+  assert.equal(completedOnly[1].text, 'Review');
 });
 
 test('reports one error for malformed JSON and continues parsing', () => {

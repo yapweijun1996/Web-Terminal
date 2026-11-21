@@ -10,6 +10,8 @@ const messages = new Map(Object.entries({
   invalid_body: 'The workspace request was invalid.',
   body_too_large: 'The request is too large. Try a shorter message.',
   invalid_agent: 'Choose a supported coding agent.',
+  invalid_model: 'Choose a model supported by this agent.',
+  invalid_effort: 'Choose an effort supported by this model.',
   invalid_session: 'The session reference is invalid.',
   invalid_terminal: 'The terminal reference is invalid.',
   invalid_text: 'Enter a message between 1 and 20,000 characters.',
@@ -110,8 +112,10 @@ export function createWorkspaceClient(fetchImpl = globalThis.fetch.bind(globalTh
   return {
     listProjects: () => request(`${base}/projects`),
     listHistory: () => request(`${base}/history`),
-    async startSession({ rootId, relPath = '.', agent, resumeSessionId }) {
-      const data = await post(`${base}/sessions`, { rootId, relPath, agent, resumeSessionId });
+    listOptions: () => request(`${base}/options`),
+    listSessions: () => request(`${base}/sessions`),
+    async startSession({ rootId, relPath = '.', agent, resumeSessionId, model, effort }) {
+      const data = await post(`${base}/sessions`, { rootId, relPath, agent, resumeSessionId, model, effort });
       return identifier(data?.sessionId, 'invalid_response');
     },
     async createTerminal(sessionId, { rootId, relPath = '.' }) {

@@ -26,6 +26,43 @@ test('GET history requests all agents without a mutation token', async () => {
   assert.deepEqual(await client.listHistory(), data);
 });
 
+test('GET options and sessions use the workspace API without a mutation token', async () => {
+  const responses = [
+    ['/api/workspace/options', { agents: { claude: { default: 'sonnet' } } }],
+    ['/api/workspace/sessions', { sessions: [{ sessionId: 'current', cliSessionId: 'cli-id' }] }],
+  ];
+  const client = createWorkspaceClient(async (url, options) => {
+    const [expected, data] = responses.shift();
+    assert.equal(url, expected);
+    assert.equal(options.method, undefined);
+    assert.equal(options.headers, undefined);
+    return Response.json(data);
+  });
+  assert.deepEqual(await client.listOptions(), { agents: { claude: { default: 'sonnet' } } });
+  assert.deepEqual(await client.listSessions(), { sessions: [{ sessionId: 'current', cliSessionId: 'cli-id' }] });
+});
+
+test('GET options preserves a 404 from an older server', async () => {
+  const client = createWorkspaceClient(async () => new Response('Not found', { status: 404 }));
+  await assert.rejects(client.listOptions(), { status: 404 });
+});
+
+test('session creation sends the selected model and effort and exposes validation errors', async () => {
+  const selection = { rootId: 'root', agent: 'codex', model: 'gpt-6.2-sol', effort: 'medium' };
+  let errorCode;
+  const client = createWorkspaceClient(async (url, options) => {
+    if (url === '/api/sessions') return Response.json({ token: 'fixture-token' });
+    assert.deepEqual(JSON.parse(options.body), { ...selection, relPath: '.' });
+    return errorCode ? Response.json({ error: errorCode }, { status: 400 })
+      : Response.json({ sessionId: 'new-id' }, { status: 201 });
+  });
+  assert.equal(await client.startSession(selection), 'new-id');
+  for (const code of ['invalid_model', 'invalid_effort']) {
+    errorCode = code;
+    await assert.rejects(client.startSession(selection), { code, status: 400 });
+  }
+});
+
 test('every POST loads the token and sends the expected headers and body', async () => {
   const calls = [];
   const client = createWorkspaceClient(async (url, options) => {

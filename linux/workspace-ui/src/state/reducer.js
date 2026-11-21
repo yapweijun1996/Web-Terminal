@@ -15,6 +15,14 @@ function upsert(items, id, changes) {
 
 function applyEvent(turn, event) {
   switch (event.type) {
+    case 'thinking_start':
+    case 'thinking_delta':
+      return { ...turn, messages: upsert(turn.messages, event.messageId, (message) => ({
+        thinking: {
+          text: (message?.thinking?.text ?? '') + (event.text ?? ''),
+          tokens: event.tokens ?? message?.thinking?.tokens,
+        },
+      })) };
     case 'message_delta':
     case 'message_done':
       return { ...turn, messages: upsert(turn.messages, event.messageId, (message) => ({

@@ -4,8 +4,33 @@ import { isSubmitKey, sendDisabledReason } from '../state/composer.js';
 import { Icon } from './icon.jsx';
 import { WorkspaceSelect } from './navigation.jsx';
 
+function ModelSelectors({ picker, location, disabled }) {
+  const { options, choice, running, needsNewSession, onChange } = picker;
+  const model = options.models.find(({ id }) => id === choice.model);
+  const reason = running ? 'Model is fixed for this session' : needsNewSession ? 'New session needed' : null;
+  const reasonId = reason ? `${location}-model-reason` : undefined;
+
+  return (
+    <>
+      <div class="model-field"><span>Model</span>
+        <WorkspaceSelect kind="Model" label={`${location} model`} value={choice.model}
+          choices={options.models.map(({ id, label }) => ({ id, name: label }))}
+          disabled={disabled || running} describedBy={reasonId}
+          onChange={(model) => onChange({ ...choice, model })} />
+      </div>
+      <div class="model-field"><span>Effort</span>
+        <WorkspaceSelect kind="Effort" label={`${location} effort`} value={choice.effort ?? ''}
+          choices={model.efforts.length ? model.efforts.map((id) => ({ id, name: id })) : [{ id: '', name: 'Default' }]}
+          disabled={disabled || running || !model.efforts.length} describedBy={reasonId}
+          onChange={(effort) => onChange({ ...choice, effort })} />
+      </div>
+      {reason && <small class="model-reason" id={reasonId} role="status">{reason}</small>}
+    </>
+  );
+}
+
 export function Welcome({
-  projects, projectId, folders, relPath, agentId, onProject, onFolder, onAgent, onStart, canResume, disabled,
+  projects, projectId, folders, relPath, agentId, onProject, onFolder, onAgent, onStart, canResume, disabled, modelPicker,
 }) {
   const [resume, setResume] = useState(true);
 
@@ -23,6 +48,7 @@ export function Welcome({
           <div><span>Folder</span><WorkspaceSelect kind="Folder" choices={folders} disabled={disabled || !projectId} value={relPath} onChange={onFolder} /></div>
         </div>
         <div><span>Agent</span><WorkspaceSelect kind="Agent" label="Welcome agent" disabled={disabled} value={agentId} onChange={onAgent} /></div>
+        {modelPicker && <ModelSelectors picker={modelPicker} location="Welcome" disabled={disabled} />}
       </div>
       <div class="welcome-actions">
         <label class="resume"><input type="checkbox" checked={resume && canResume} disabled={disabled || !canResume}
@@ -30,6 +56,19 @@ export function Welcome({
         <button class="primary" type="submit" disabled={disabled || !projectId}>Start Coding <Icon name="arrow" size={16} /></button>
       </div>
     </form>
+  );
+}
+
+function Thinking({ thinking, active, displayText }) {
+  return (
+    <details class="thinking">
+      <summary>
+        <strong>{active ? 'Thinking…' : 'Thinking'}</strong>
+        {Number.isFinite(thinking.tokens) && <span>~{thinking.tokens} tokens</span>}
+        <Icon name="chevron" size={14} />
+      </summary>
+      <p>{thinking.text.trim() ? displayText(thinking.text) : 'Thinking (details are not provided by this agent)'}</p>
+    </details>
   );
 }
 
@@ -144,7 +183,12 @@ export function ChatStream({ conversation, agentName, mock, displayText, onDecis
             <div class="assistant-heading">
               <span class="assistant-icon"><Icon name="brand" size={16} /></span><strong>{agentName}</strong>
             </div>
-            {messages.map((message) => <p class="message-text" key={message.id}>{displayText(message.text)}</p>)}
+            {messages.map(({ id, text, thinking }) => (
+              <div key={id}>
+                {thinking && <Thinking thinking={thinking} active={status === 'running' && text === undefined} displayText={displayText} />}
+                {text !== undefined && <p class="message-text">{displayText(text)}</p>}
+              </div>
+            ))}
             <ToolSteps steps={tools} approvals={approvals} turnStatus={status} mock={mock} displayText={displayText} />
             {approvals.filter((approval) => approval.request).map(({ id, request, decision }) => (
               <Approval key={id} request={request} decision={decision} onDecision={onDecision}
@@ -164,12 +208,15 @@ export function ChatStream({ conversation, agentName, mock, displayText, onDecis
 
 export function Composer({
   agentId, terminalOpen, onAgent, onTerminal, onSend, onStop, mock, running, blockedReason, working, streamStalled,
+  modelPicker, selectorsDisabled,
 }) {
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState([]);
   const fileInput = useRef(null);
   const imageInput = useRef(null);
   const disabledReason = sendDisabledReason(draft, blockedReason);
+  const agentSelector = <WorkspaceSelect kind="Agent" label="Composer agent" disabled={selectorsDisabled}
+    value={agentId} onChange={onAgent} />;
 
   function addFiles(event) {
     const input = event.currentTarget;
@@ -204,6 +251,10 @@ export function Composer({
       {streamStalled && <p class="composer-stream-status" role="status">
         No response yet. The event stream may be blocked; retrying…
       </p>}
+      {modelPicker && <div class="composer-models">
+        <div class="model-field"><span>Agent</span>{agentSelector}</div>
+        <ModelSelectors picker={modelPicker} location="Composer" disabled={selectorsDisabled} />
+      </div>}
       <div class="composer-actions">
         <input type="file" multiple hidden ref={fileInput} onChange={addFiles} />
         <input type="file" multiple hidden accept="image/*" ref={imageInput} onChange={addFiles} />
@@ -211,7 +262,7 @@ export function Composer({
         <button class="icon-button" type="button" disabled={!mock || working} aria-label="Attach images" title={mock ? "Attach images" : "Image attachments are unavailable"} onClick={() => imageInput.current.click()}><Icon name="image" /></button>
         <button class="icon-button" type="button" aria-label="Toggle terminal" title="Toggle terminal" aria-controls="terminal-output"
           aria-expanded={terminalOpen} onClick={onTerminal}><Icon name="terminal" /></button>
-        <div class="composer-agent"><WorkspaceSelect kind="Agent" label="Composer agent" disabled={working} value={agentId} onChange={onAgent} /></div>
+        {!modelPicker && <div class="composer-agent">{agentSelector}</div>}
         {running && !mock && <button class="secondary" type="button" onClick={onStop} disabled={working}>Stop</button>}
         <div class={disabledReason ? 'composer-submit is-disabled' : 'composer-submit'}>
           {disabledReason && <span id="send-disabled-reason" role="status">{disabledReason}</span>}

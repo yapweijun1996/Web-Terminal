@@ -38,16 +38,26 @@ test('replays the denied fixture in order with the full final text after the del
   assert.equal(events[0].cliSessionId, records[0].session_id);
   assert.deepEqual(events.map(event => event.type), [
     'session_started',
+    'thinking_start', 'thinking_delta', 'thinking_delta', 'thinking_delta',
     'tool_call_start',
     'approval_decision',
     'tool_call_output',
+    'thinking_start', 'thinking_delta', 'thinking_delta',
     'tool_call_start',
     'tool_call_output',
     ...Array(41).fill('message_delta'),
     'message_done',
     'turn_finished',
   ]);
-  const [, skill, denial, failedOutput, bash, bashOutput] = events;
+  const [, skill, denial, failedOutput, bash, bashOutput] = events.filter(event => !event.type.startsWith('thinking_'));
+  const starts = events.filter(event => event.type === 'thinking_start');
+  const deltas = events.filter(event => event.type === 'thinking_delta');
+  assert.deepEqual(starts.map(event => event.messageId), records
+    .filter(record => record.message?.content?.some(block => block.type === 'thinking'))
+    .map(record => record.message.id));
+  assert.deepEqual(deltas.map(event => event.tokens), [50, 200, null, 50, null]);
+  assert.ok(deltas.every(event => event.text === ''));
+  assert.deepEqual(deltas.map(event => event.messageId), [0, 0, 0, 1, 1].map(index => starts[index].messageId));
   assert.equal(skill.name, 'Skill');
   assert.equal(denial.approvalId, skill.toolCallId);
   assert.equal(denial.decision, 'deny');
@@ -72,10 +82,10 @@ test('replays the denied fixture in order with the full final text after the del
 test('replays the Write approval fixture and preserves its request and tool output', () => {
   const { events, records } = replay('claude-write-approval.jsonl');
   assert.deepEqual(events.map(event => event.type), [
-    'session_started', 'tool_call_start', 'approval_request',
-    'tool_call_output', 'message_done', 'turn_finished',
+    'session_started', 'thinking_start', 'tool_call_start', 'approval_request',
+    'tool_call_output', 'thinking_start', 'message_done', 'turn_finished',
   ]);
-  const [, tool, approval, output, message] = events;
+  const [, tool, approval, output, message] = events.filter(event => event.type !== 'thinking_start');
   const request = records.find(record => record.type === 'control_request');
   assert.equal(approval.approvalId, request.request_id);
   assert.equal(approval.toolName, 'Write');
@@ -89,13 +99,31 @@ test('replays the Write approval fixture and preserves its request and tool outp
   assert.equal(message.text, records.at(-1).result);
 });
 
-test('builds prompt-mode arguments with resume, model, and budget', () => {
+test('builds prompt-mode arguments with resume, model, effort, MCP file, and budget', () => {
   assert.deepEqual(buildClaudeArgs({
     approvalMode: 'prompt', resumeSessionId: RESUME_ID, model: 'claude-sonnet_4.5', maxBudgetUsd: 1.25,
+    effort: 'xhigh', mcpConfigFile: '/private/mcp.json',
   }), [
     ...BASE_ARGS, '--permission-prompts', 'host', '--permission-prompt-tool', 'stdio',
-    '--resume', RESUME_ID, '--model', 'claude-sonnet_4.5', '--max-budget-usd', '1.25',
+    '--resume', RESUME_ID, '--model', 'claude-sonnet_4.5', '--effort', 'xhigh',
+    '--mcp-config', '/private/mcp.json', '--max-budget-usd', '1.25',
   ]);
+  assert.throws(() => buildClaudeArgs({ effort: 'ultra' }), /invalid_effort/);
+  assert.throws(() => buildClaudeArgs({ mcpConfigFile: 'relative.json' }), /invalid_mcp_config/);
+});
+
+test('emits final-only thinking text once per message', () => {
+  const { push } = createClaudeParser({ sessionId: SESSION_ID });
+  const assistant = JSON.stringify({
+    type: 'assistant',
+    message: { id: 'message-1', content: [{ type: 'thinking', thinking: 'Plan next step' }] },
+  });
+  const [start, delta] = push(assistant);
+  assert.equal(start.type, 'thinking_start');
+  assert.deepEqual(delta, {
+    ...start, type: 'thinking_delta', seq: 2, text: 'Plan next step', tokens: null,
+  });
+  assert.deepEqual(push(assistant), []);
 });
 
 test('builds deny-mode arguments and defaults to deny', () => {
