@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { formatHistoryEntry, newestResumableEntry, relativeTime } from '../src/state/history.js';
+import { formatHistoryEntry, newestResumableEntry, relativeTime, startWithResumeFallback } from '../src/state/history.js';
 
 const now = 100_000_000;
 const claude = { agent: 'claude', rootId: 'root', relPath: '.', cliSessionId: 'claude-id', lastUsedAt: now - 7_200_000 };
@@ -47,4 +47,30 @@ test('resume finds the newest Codex CLI ID for the selected project and folder',
   assert.equal(newestResumableEntry(entries, codex), newest);
   assert.equal(newestResumableEntry(entries, otherFolder), otherFolder);
   assert.equal(newestResumableEntry(entries, { ...codex, relPath: 'missing' }), undefined);
+});
+
+test('restart recovery uses the chosen CLI ID and starts fresh when no ID is chosen', async () => {
+  const start = async (cliSessionId) => cliSessionId ?? 'fresh';
+  assert.equal(await startWithResumeFallback(start, 'known-id'), 'known-id');
+  assert.equal(await startWithResumeFallback(start), 'fresh');
+});
+
+test('restart recovery tries a fresh session only once when resuming is unavailable', async () => {
+  const unavailable = { status: 409, code: 'resume_unavailable' };
+  const calls = [];
+  await assert.rejects(startWithResumeFallback(async (cliSessionId) => {
+    calls.push(cliSessionId);
+    throw unavailable;
+  }, 'known-id'), unavailable);
+  assert.deepEqual(calls, ['known-id', undefined]);
+});
+
+test('restart recovery leaves other conflicts to the caller', async () => {
+  const active = { status: 409, code: 'turn_active' };
+  const calls = [];
+  await assert.rejects(startWithResumeFallback(async (cliSessionId) => {
+    calls.push(cliSessionId);
+    throw active;
+  }, 'known-id'), active);
+  assert.deepEqual(calls, ['known-id']);
 });

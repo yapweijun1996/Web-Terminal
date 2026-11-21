@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { once } = require('node:events');
 const { test } = require('node:test');
+const timers = require('node:timers');
 const { loadProjectRoots } = require('../workspace/project-roots');
 const { createWorkspaceRoutes } = require('../workspace/routes');
 
@@ -20,7 +21,7 @@ const historyEntries = [
   { ...SESSION_INPUT, agent: 'codex', cliSessionId: CODEX_THREAD_ID, lastUsedAt: 10 },
 ];
 
-function fakeManager() {
+function fakeManager({ emitSessionStarted = true } = {}) {
   const sessions = new Map();
   const calls = [];
   return {
@@ -36,7 +37,7 @@ function fakeManager() {
       const sessionId = `session-${sessions.size + 1}`;
       const { agent, rootId, relPath } = input;
       sessions.set(sessionId, { agent, rootId, relPath, events: [], listeners: new Set() });
-      this.emit(sessionId, { type: 'session_started' });
+      if (emitSessionStarted) this.emit(sessionId, { type: 'session_started' });
       return { sessionId };
     },
     list() {
@@ -77,7 +78,7 @@ function fakeManager() {
   };
 }
 
-async function fixture(t, options = {}) {
+async function fixture(t, { sessionManager = fakeManager(), ...options } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workspace-routes-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const projectRoot = path.join(directory, 'private-project-root');
@@ -88,7 +89,6 @@ async function fixture(t, options = {}) {
   fs.writeFileSync(path.join(projectRoot, 'file.txt'), 'not a project');
   fs.symlinkSync(workspacesRoot, path.join(projectRoot, 'escape'));
   const roots = loadProjectRoots({ roots: [{ id: 'work', label: 'Work', path: projectRoot }] });
-  const sessionManager = fakeManager();
   const githubCalls = [];
   const githubWorkspace = {
     workspacesRoot,
@@ -190,10 +190,19 @@ async function* readEvents(response) {
     while ((end = pending.indexOf('\n\n')) !== -1) {
       const frame = pending.slice(0, end);
       pending = pending.slice(end + 2);
+      if (frame.startsWith(':') || frame.startsWith('retry:')) continue;
       const [, id, data] = /^id: (\d+)\ndata: (.+)$/.exec(frame);
       yield { id: Number(id), data: JSON.parse(data) };
     }
   }
+}
+
+function assertEventStreamHeaders(headers) {
+  assert.match(headers['content-type'], /^text\/event-stream/);
+  assert.equal(headers['cache-control'], 'no-store, no-transform');
+  assert.equal(headers['x-content-type-options'], 'nosniff');
+  assert.equal(headers['x-accel-buffering'], 'no');
+  assert.equal(headers['content-encoding'], 'identity');
 }
 
 test('lists only root identifiers, labels, and contained subfolder names', async t => {
@@ -349,14 +358,59 @@ test('returns 404 from each session-scoped endpoint for an unknown session', asy
   assertError(await post(`${missing}/stop`, {}), 404, 'unknown_session');
 });
 
+test('writes an opening SSE frame within 200 ms with no pending events', { timeout: 5000 }, async t => {
+  const { createSession, open } = await fixture(t, { sessionManager: fakeManager({ emitSessionStarted: false }) });
+  const id = await createSession();
+  const deadline = AbortSignal.timeout(200);
+  const response = await open('GET', `${API}/sessions/${id}/events`);
+  assert.equal(response.statusCode, 200);
+  assertEventStreamHeaders(response.headers);
+  response.setEncoding('utf8');
+  const [firstBytes] = await once(response, 'data', { signal: deadline });
+  assert.equal(firstBytes, 'retry: 3000\n: stream open\n\n');
+  response.destroy();
+});
+
+test('writes unnumbered SSE heartbeats and clears the unrefed timer on client close', { timeout: 5000 }, async t => {
+  const heartbeatIntervalMs = 20;
+  const { createSession, open, sessionManager } = await fixture(t, { heartbeatIntervalMs });
+  const id = await createSession();
+  const eventsPath = `${API}/sessions/${id}/events`;
+  const scheduled = t.mock.method(timers, 'setInterval');
+  const clearInterval = timers.clearInterval;
+  const { promise: intervalCleared, resolve: onIntervalCleared } = Promise.withResolvers();
+  t.mock.method(timers, 'clearInterval', timer => {
+    clearInterval(timer);
+    onIntervalCleared(timer);
+  });
+
+  const response = await open('GET', eventsPath, { headers: { 'Last-Event-ID': '1' } });
+  response.setEncoding('utf8');
+  let body = '';
+  for await (const chunk of response) {
+    body += chunk;
+    if (body.includes(': ping\n\n')) break;
+  }
+  assert.match(body, /^retry: 3000\n: stream open\n\n(?:: ping\n\n)+$/);
+  assert.equal(scheduled.mock.callCount(), 1);
+  const [{ arguments: [, delay], result: timer }] = scheduled.mock.calls;
+  assert.equal(delay, heartbeatIntervalMs);
+  assert.equal(timer.hasRef(), false);
+  assert.equal(await intervalCleared, timer);
+
+  const missed = sessionManager.emit(id, { type: 'message_done', messageId: 'message-1', text: 'complete' });
+  const replay = readEvents(await open('GET', eventsPath, { headers: { 'Last-Event-ID': '1' } }));
+  assert.deepEqual((await replay.next()).value, { id: 2, data: missed });
+  await replay.return();
+});
+
 test('streams unified events and replays only events newer than Last-Event-ID', { timeout: 5000 }, async t => {
   const { createSession, open, sessionManager } = await fixture(t);
   const id = await createSession();
   const eventsPath = `${API}/sessions/${id}/events`;
   const initial = await open('GET', eventsPath);
   assert.equal(initial.statusCode, 200);
-  assert.match(initial.headers['content-type'], /^text\/event-stream/);
-  assertHeaders(initial.headers);
+  assertEventStreamHeaders(initial.headers);
   const live = readEvents(initial);
   assert.deepEqual((await live.next()).value, {
     id: 1, data: { type: 'session_started', sessionId: id, turnId: 'turn-1', seq: 1 },

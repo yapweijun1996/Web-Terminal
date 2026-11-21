@@ -26,3 +26,13 @@ export function newestResumableEntry(entries, { rootId, relPath, agent }) {
   }
   return newest;
 }
+
+export async function startWithResumeFallback(start, resumeSessionId) {
+  if (!resumeSessionId) return start();
+  try {
+    return await start(resumeSessionId);
+  } catch (error) {
+    if (error.status !== 409 || error.code !== 'resume_unavailable') throw error;
+    return start();
+  }
+}

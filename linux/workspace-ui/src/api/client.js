@@ -59,7 +59,12 @@ export async function responseError(response) {
   const fallback = {
     401: 'forbidden', 403: 'forbidden', 404: 'not_found', 413: 'body_too_large',
   }[response.status] ?? 'internal_error';
-  return workspaceError(messages.has(data?.error) ? data.error : fallback, response.status);
+  const serverCode = messages.has(data?.error) ? data.error : undefined;
+  return Object.assign(workspaceError(serverCode ?? fallback, response.status), { serverCode });
+}
+
+export function isMissingSession(error) {
+  return error?.status === 404 && error.serverCode === 'not_found';
 }
 
 export function createWorkspaceClient(fetchImpl = globalThis.fetch.bind(globalThis)) {
@@ -84,12 +89,22 @@ export function createWorkspaceClient(fetchImpl = globalThis.fetch.bind(globalTh
     return { 'Content-Type': 'application/json', 'X-Terminal-Request': requestToken };
   }
 
-  async function post(url, body, headers = {}) {
-    return request(url, {
-      method: 'POST',
-      headers: { ...await mutationHeaders(), ...headers },
-      body: JSON.stringify(body),
-    });
+  async function mutate(url, { headers, ...options }) {
+    async function send(tokenHeaders) {
+      return request(url, { ...options, headers: { ...tokenHeaders, ...headers } });
+    }
+
+    const tokenHeaders = await mutationHeaders();
+    try {
+      return await send(tokenHeaders);
+    } catch (error) {
+      if (error.status !== 403) throw error;
+    }
+    return send(await mutationHeaders());
+  }
+
+  function post(url, body, headers) {
+    return mutate(url, { method: 'POST', headers, body: JSON.stringify(body) });
   }
 
   return {
@@ -108,10 +123,7 @@ export function createWorkspaceClient(fetchImpl = globalThis.fetch.bind(globalTh
     },
     async closeTerminal(terminalId) {
       if (!isTerminalId(terminalId)) throw workspaceError('invalid_terminal');
-      const data = await request(`${base}/terminal/${terminalId}`, {
-        method: 'DELETE',
-        headers: await mutationHeaders(),
-      });
+      const data = await mutate(`${base}/terminal/${terminalId}`, { method: 'DELETE' });
       if (data?.ok !== true) throw workspaceError('invalid_response');
       return data;
     },

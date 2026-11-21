@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { createWorkspaceClient, workspaceError } from './api/client.js';
-import { subscribeToEvents } from './api/events.js';
-import { formatHistoryEntry, newestResumableEntry } from './state/history.js';
+import { createWorkspaceClient, isMissingSession, workspaceError } from './api/client.js';
+import { subscribeToEvents, watchFirstEvent } from './api/events.js';
+import { composerBlockedReason } from './state/composer.js';
+import { formatHistoryEntry, newestResumableEntry, startWithResumeFallback } from './state/history.js';
 import { conversationReducer, emptyConversation, hasRunningTurn } from './state/reducer.js';
 import { agents, mockReply, projects as mockProjects, recentSessions, sampleEvents, sampleSession } from './data/mock.js';
 import { ChatStream, Composer, Welcome } from './components/chat.jsx';
@@ -11,7 +12,10 @@ import { Terminal } from './components/terminal.jsx';
 
 const api = createWorkspaceClient();
 const mobileQuery = '(width < 768px)';
-const connectionLabels = { connected: 'Connected', reconnecting: 'Reconnecting', error: 'Error' };
+const connectionLabels = {
+  connected: 'Connected', reconnecting: 'Reconnecting', error: 'Error', 'session-ended': 'Session ended',
+};
+const sessionEndedMessage = 'The server restarted, so this session ended.';
 const preview = sampleEvents.reduce(
   (state, event) => conversationReducer(state, { type: 'event', event }),
   conversationReducer(emptyConversation, { type: 'prompt', prompt: { prompt: sampleSession.prompt } }),
@@ -28,14 +32,17 @@ export function App() {
   const [historyHidden, setHistoryHidden] = useState(false);
   const [historyError, setHistoryError] = useState(null);
   const [session, setSession] = useState(null);
+  const [resumeAfterRestart, setResumeAfterRestart] = useState(false);
   const [conversations, setConversations] = useState(() => new Map());
   const [showWelcome, setShowWelcome] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(() => !window.matchMedia(mobileQuery).matches);
   const [streamStatuses, setStreamStatuses] = useState(() => new Map());
+  const [stalledStreams, setStalledStreams] = useState(() => new Set());
   const [loadError, setLoadError] = useState(null);
   const [actionError, setActionError] = useState(null);
   const [working, setWorking] = useState(false);
+  const [sending, setSending] = useState(false);
   const mutationPending = useRef(false);
   const historyRequest = useRef(0);
   const projectsMenu = useRef(null);
@@ -43,27 +50,33 @@ export function App() {
   const nextId = useRef(0);
   const cursors = useRef(new Map());
   const subscriptions = useRef(new Map());
+  const firstEventWatches = useRef(new Map());
   const chatBody = useRef(null);
   const followChat = useRef(true);
 
   const mock = mode === 'mock';
   const sessionId = session?.id ?? null;
-  const conversation = conversations.get(sessionId) ?? emptyConversation;
-  const running = hasRunningTurn(conversation, mock ? sampleEvents[0].turnId : undefined);
+  const endedSessionId = session?.endedId;
+  const conversation = conversations.get(sessionId ?? endedSessionId) ?? emptyConversation;
+  const running = Boolean(sessionId) && hasRunningTurn(conversation, mock ? sampleEvents[0].turnId : undefined);
   const activeStream = streamStatuses.get(sessionId);
   const connection = mode === 'loading' ? 'reconnecting' : mode === 'error' ? 'error'
-    : mode === 'live' && sessionId ? activeStream?.status ?? 'reconnecting' : 'connected';
+    : endedSessionId ? 'session-ended' : mode === 'live' && sessionId ? activeStream?.status ?? 'reconnecting' : 'connected';
   const folders = [{ id: '.', name: 'Project root' }, ...(projects.find((project) => project.id === projectId)?.folders ?? [])
     .map((folder) => ({ id: folder, name: folder }))];
   const resumableSession = mock
     ? mockSessions.find((session) => session.projectId === projectId && session.agentId === agentId)
     : newestResumableEntry(history, { rootId: projectId, relPath, agent: agentId });
+  const recoveryCliSessionId = endedSessionId && (session.resumeSessionId ?? newestResumableEntry(history, {
+    rootId: session.projectId, relPath: session.relPath, agent: session.agentId,
+  })?.cliSessionId);
   const sessions = mock ? mockSessions : historyHidden ? [] : history.map((entry) => ({
     ...formatHistoryEntry(entry), entry,
   }));
   const agentName = agents.find((agent) => agent.id === agentId).name;
   const message = actionError?.message ?? activeStream?.message ?? loadError ?? historyError;
   const disabled = working || mode === 'loading' || mode === 'error';
+  const blockedReason = composerBlockedReason({ mode, sending, running, ended: Boolean(endedSessionId) });
   const displayText = mock ? (value) => value : api.displayText;
 
   useEffect(() => {
@@ -137,6 +150,46 @@ export function App() {
     });
   }
 
+  function clearFirstEventWatch(id) {
+    const watch = firstEventWatches.current.get(id);
+    if (!watch) return;
+    watch.cancel();
+    firstEventWatches.current.delete(id);
+    setStalledStreams((current) => {
+      if (!current.has(id)) return current;
+      const next = new Set(current);
+      next.delete(id);
+      return next;
+    });
+  }
+
+  function endSession(id) {
+    clearFirstEventWatch(id);
+    subscriptions.current.get(id)?.();
+    cursors.current.delete(id);
+    dispatch(id, { type: 'session_ended' });
+    setSession((current) => current?.id === id ? { ...current, id: null, endedId: id } : current);
+  }
+
+  function openEventStream(id, fresh = false) {
+    const close = subscribeToEvents(id, {
+      lastSeq: cursors.current.get(id),
+      // Use the no-cache fetch path for the watchdog reconnect, even before the first event.
+      EventSourceImpl: fresh ? null : undefined,
+      onEvent(event) {
+        clearFirstEventWatch(id);
+        dispatch(id, { type: 'event', event });
+        cursors.current.set(id, event.seq);
+        if (event.type === 'turn_finished') refreshHistory();
+      },
+      onStatus(status, message) {
+        if (status === 'session-ended') endSession(id);
+        else setStreamStatuses((current) => new Map(current).set(id, { status, message }));
+      },
+    });
+    subscriptions.current.set(id, close);
+  }
+
   useEffect(() => {
     if (mode !== 'live') return;
     const wanted = new Set(sessionId ? [sessionId] : []);
@@ -155,23 +208,13 @@ export function App() {
       });
     }
     for (const id of wanted) {
-      if (subscriptions.current.has(id)) continue;
-      const close = subscribeToEvents(id, {
-        lastSeq: cursors.current.get(id),
-        onEvent(event) {
-          dispatch(id, { type: 'event', event });
-          cursors.current.set(id, event.seq);
-          if (event.type === 'turn_finished') refreshHistory();
-        },
-        onStatus(status, message) {
-          setStreamStatuses((current) => new Map(current).set(id, { status, message }));
-        },
-      });
-      subscriptions.current.set(id, close);
+      if (!subscriptions.current.has(id)) openEventStream(id);
     }
   }, [mode, sessionId, conversations, refreshHistory]);
 
   useEffect(() => () => {
+    for (const watch of firstEventWatches.current.values()) watch.cancel();
+    firstEventWatches.current.clear();
     for (const close of subscriptions.current.values()) close();
     subscriptions.current.clear();
   }, []);
@@ -236,12 +279,14 @@ export function App() {
 
   function resetSession() {
     setActionError(null);
+    setResumeAfterRestart(false);
     setSession(null);
     setShowWelcome(true);
   }
 
   function openSession(session) {
     setActionError(null);
+    setResumeAfterRestart(false);
     setProjectId(session.projectId);
     const project = projects.find((item) => item.id === session.projectId);
     setRelPath(project?.folders?.includes(session.relPath) ? session.relPath : '.');
@@ -253,7 +298,7 @@ export function App() {
   async function createSession({ rootId = projectId, folder = relPath, agent = agentId, resumeSessionId } = {}) {
     const id = mock ? `local-session-${++nextId.current}`
       : await api.startSession({ rootId, relPath: folder, agent, resumeSessionId });
-    const session = { id, projectId: rootId, relPath: folder, agentId: agent };
+    const session = { id, projectId: rootId, relPath: folder, agentId: agent, resumeSessionId };
     if (mock) {
       const project = projects.find((item) => item.id === rootId);
       setMockSessions((current) => [{ ...session, label: `${project.name} session` }, ...current]);
@@ -287,6 +332,13 @@ export function App() {
     return mutate(async () => {
       if (resume && mock) {
         openSession(resumableSession);
+      } else if (endedSessionId) {
+        await startWithResumeFallback(
+          (resumeSessionId) => createSession({
+            rootId: session.projectId, folder: session.relPath, agent: session.agentId, resumeSessionId,
+          }),
+          resume ? recoveryCliSessionId : undefined,
+        );
       } else {
         await createSession({ resumeSessionId: resume ? resumableSession?.cliSessionId : undefined });
       }
@@ -303,32 +355,54 @@ export function App() {
   }
 
   function sendMessage(prompt, attachments, onAccepted) {
-    if (disabled || running || !prompt.trim()) return;
+    if (blockedReason || !prompt.trim()) return;
+    if (!projectId) {
+      setActionError({ message: 'Select a project to send a message.' });
+      return;
+    }
     let id = sessionId;
     return mutate(async () => {
-      id ??= await createSession();
-      followChat.current = true;
-      setShowWelcome(false);
-      dispatch(id, { type: 'prompt', prompt: { prompt, attachments } });
+      setSending(true);
+      try {
+        if (id === null) id = await createSession();
+        followChat.current = true;
+        setShowWelcome(false);
+        dispatch(id, { type: 'prompt', prompt: { prompt, attachments } });
 
-      if (mock) {
-        const turnId = `local-turn-${++nextId.current}`;
-        const lastSeq = conversations.get(id)?.lastSeq ?? 0;
-        [
-          { type: 'message_done', messageId: `${turnId}-assistant`, text: mockReply },
-          { type: 'turn_finished', status: 'success' },
-        ].forEach((event, index) => dispatch(id, {
-          type: 'event', event: { ...event, sessionId: id, turnId, seq: lastSeq + index + 1 },
-        }));
-      } else {
-        try {
-          await api.sendMessage(id, prompt);
-        } catch (error) {
-          dispatch(id, { type: 'discard_prompt' });
-          throw error;
+        if (mock) {
+          const turnId = `local-turn-${++nextId.current}`;
+          const lastSeq = conversations.get(id)?.lastSeq ?? 0;
+          [
+            { type: 'message_done', messageId: `${turnId}-assistant`, text: mockReply },
+            { type: 'turn_finished', status: 'success' },
+          ].forEach((event, index) => dispatch(id, {
+            type: 'event', event: { ...event, sessionId: id, turnId, seq: lastSeq + index + 1 },
+          }));
+        } else {
+          // An event can arrive before the POST response, so register before sending.
+          const watch = watchFirstEvent(() => {
+            setStalledStreams((current) => new Set(current).add(id));
+            subscriptions.current.get(id)?.();
+            openEventStream(id, true);
+          });
+          firstEventWatches.current.set(id, watch);
+          try {
+            await api.sendMessage(id, prompt);
+            watch.accepted();
+          } catch (error) {
+            clearFirstEventWatch(id);
+            if (isMissingSession(error)) {
+              endSession(id);
+              return;
+            }
+            dispatch(id, { type: 'discard_prompt' });
+            throw error;
+          }
         }
+        onAccepted();
+      } finally {
+        setSending(false);
       }
-      onAccepted();
     });
   }
 
@@ -374,13 +448,27 @@ export function App() {
             onClick={() => setSidebarOpen(true)}><Icon name="menu" /></button>
           <WorkspaceSelect kind="Project" choices={projects} value={projectId} onChange={selectProject} disabled={disabled} />
           <WorkspaceSelect kind="Agent" value={agentId} onChange={selectAgent} disabled={disabled} />
-          <span class={`connection ${connection}`} role="status"><span aria-hidden="true" />{connectionLabels[connection]}</span>
+          <span class={`connection ${connection}`} role="status">
+            {connection !== 'reconnecting' && <span aria-hidden="true" />}{connectionLabels[connection]}
+          </span>
         </header>
-        {message ? <div class="prototype-banner error" role="alert">{message}
-          {actionError?.retry && <button class="secondary" type="button" disabled={disabled || running}
-            onClick={() => mutate(actionError.retry)}>Retry</button>}
-        </div>
-          : mock && <div class="prototype-banner">Mock mode</div>}
+        {(endedSessionId || message || mock) && <div class="prototype-banner">
+          {endedSessionId && <>
+            <p role="status">{sessionEndedMessage}</p>
+            {recoveryCliSessionId && <label class="recovery-resume">
+              <input type="checkbox" checked={resumeAfterRestart} disabled={disabled}
+                onChange={(event) => setResumeAfterRestart(event.currentTarget.checked)} />
+              {session.resumeSessionId ? 'Resume CLI session' : 'Resume most recent CLI session for this folder and agent'}
+            </label>}
+            <button class="secondary" type="button" disabled={disabled} onClick={() => startSession(resumeAfterRestart)}>
+              Start Coding
+            </button>
+          </>}
+          {message ? <div class="error" role="alert">{message}
+            {!endedSessionId && actionError?.retry && <button class="secondary" type="button" disabled={disabled || running}
+              onClick={() => mutate(actionError.retry)}>Retry</button>}
+          </div> : mock && 'Mock mode'}
+        </div>}
         <div class="chat-body" ref={chatBody} onScroll={({ currentTarget }) => {
           followChat.current = currentTarget.scrollHeight - currentTarget.scrollTop - currentTarget.clientHeight < 32;
         }}>
@@ -389,17 +477,17 @@ export function App() {
               onProject={selectProject} onFolder={selectFolder} onAgent={selectAgent} canResume={Boolean(resumableSession)}
               onStart={startSession} disabled={disabled} />}
             <ChatStream conversation={conversation} agentName={agentName} mock={mock} displayText={displayText}
-              onDecision={decideApproval} approvalDisabled={working || connection !== 'connected'} />
+              onDecision={decideApproval} approvalDisabled={working} />
           </div>
         </div>
         <div class="composer-area">
           <Composer agentId={agentId} terminalOpen={terminalOpen} onAgent={selectAgent} onTerminal={toggleTerminal}
             onSend={sendMessage} onStop={() => mutate(() => api.stop(sessionId))} mock={mock} working={working}
-            running={running} disabled={disabled || !projectId || running || (!mock && connection !== 'connected')} />
+            running={running} blockedReason={blockedReason} streamStalled={stalledStreams.has(sessionId)} />
         </div>
       </main>
       <Terminal open={terminalOpen} onToggle={toggleTerminal} mock={mock}
-        session={mode === 'live' ? session : null} client={api} />
+        session={mode === 'live' && sessionId ? session : null} client={api} />
     </div>
   );
 }

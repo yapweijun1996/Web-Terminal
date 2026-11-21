@@ -117,9 +117,14 @@ async function fixture(t, enabled, { gitRunner, invalidConfig = false, customHis
         chunks.push(chunk);
         if (res.headers['content-type']?.startsWith('text/event-stream')) {
           const frames = Buffer.concat(chunks).toString('utf8').split('\n\n').slice(0, -1);
-          const events = frames.map(frame => JSON.parse(frame.split('\ndata: ')[1]));
+          const events = [];
+          for (const frame of frames) {
+            const lines = frame.split('\n').filter(line => !line.startsWith(':') && !line.startsWith('retry:'));
+            if (lines.length === 0) continue;
+            events.push(JSON.parse(lines.join('\n').split('\ndata: ')[1]));
+          }
           if (events.some(event => event.type === 'turn_finished')) {
-            resolve({ status: res.statusCode, events });
+            resolve({ status: res.statusCode, openingFrame: frames[0], events });
             req.destroy();
           }
         }
@@ -223,6 +228,7 @@ for (const agent of ['claude', 'codex']) {
     assert.equal((await request('POST', `${url}/messages`, headers, { text: 'Hello workspace' })).status, 200);
     const stream = await request('GET', `${url}/events`);
     assert.equal(stream.status, 200);
+    assert.match(stream.openingFrame, /^: stream open$/m);
     const { events } = stream;
     assert.equal(events[0].type, 'session_started');
     assert.ok(events.some(event => event.type === 'message_done' && event.text === 'Hello workspace'));

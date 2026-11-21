@@ -1,6 +1,24 @@
-import { eventUrl, responseError, workspaceError } from './client.js';
+import { eventUrl, isMissingSession, responseError, workspaceError } from './client.js';
 
 const maximumDelay = 15_000;
+const firstEventTimeout = 20_000;
+
+export function watchFirstEvent(onTimeout) {
+  let timer;
+  let settled = false;
+
+  return {
+    accepted() {
+      if (settled) return;
+      settled = true;
+      timer = setTimeout(onTimeout, firstEventTimeout);
+    },
+    cancel() {
+      settled = true;
+      clearTimeout(timer);
+    },
+  };
+}
 
 async function readEvents(body, deliver) {
   const reader = body.getReader();
@@ -50,7 +68,7 @@ export function subscribeToEvents(sessionId, {
 
   function fail(error) {
     close();
-    onStatus('error', error.message);
+    onStatus(isMissingSession(error) ? 'session-ended' : 'error', error.message);
   }
 
   function deliver(id, data) {

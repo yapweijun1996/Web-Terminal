@@ -42,11 +42,21 @@ function applyEvent(turn, event) {
 }
 
 export function conversationReducer(state = emptyConversation, action) {
+  if (state.ended) return state;
   switch (action.type) {
     case 'prompt':
       return { ...state, pendingPrompt: action.prompt };
     case 'discard_prompt':
       return { ...state, pendingPrompt: null };
+    case 'session_ended':
+      return {
+        ...state,
+        ended: true,
+        pendingPrompt: null,
+        turns: state.turns.map((turn) => turn.status === 'running' ? {
+          ...turn, status: 'interrupted', approvals: turn.approvals.filter((approval) => approval.decision),
+        } : turn),
+      };
     case 'event': {
       const { event } = action;
       if (!Number.isSafeInteger(event.seq) || event.seq <= state.lastSeq) return state;

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { subscribeToEvents } from '../src/api/events.js';
+import { subscribeToEvents, watchFirstEvent } from '../src/api/events.js';
 
 const sessionId = 'session';
 const endpoint = '/api/workspace/sessions/session/events';
@@ -17,6 +17,35 @@ function nativeSource() {
   }
   return { source, EventSource };
 }
+
+test('the first-event watch times out once, 20 seconds after the POST is accepted', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const onTimeout = t.mock.fn();
+  const watch = watchFirstEvent(onTimeout);
+  t.mock.timers.tick(25_000);
+  assert.equal(onTimeout.mock.callCount(), 0);
+  watch.accepted();
+  t.mock.timers.tick(19_999);
+  assert.equal(onTimeout.mock.callCount(), 0);
+  t.mock.timers.tick(1);
+  watch.accepted();
+  t.mock.timers.tick(20_000);
+  assert.equal(onTimeout.mock.callCount(), 1);
+});
+
+test('the first-event watch can be cancelled both before and after acceptance', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const onTimeout = t.mock.fn();
+  const early = watchFirstEvent(onTimeout);
+  early.cancel();
+  early.accepted();
+  const late = watchFirstEvent(onTimeout);
+  late.accepted();
+  t.mock.timers.tick(19_999);
+  late.cancel();
+  t.mock.timers.tick(20_000);
+  assert.equal(onTimeout.mock.callCount(), 0);
+});
 
 test('a dropped EventSource resumes with the last delivered SSE ID', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -90,4 +119,33 @@ test('retries back off to 15 seconds and stop on an expired replay cursor', asyn
   assert.deepEqual(statuses.at(-1), ['error', 'Part of the session history expired during the disconnect. Start a new session.']);
   t.mock.timers.tick(30_000);
   assert.equal(attempts.length, 7);
+});
+
+test('a native stream that loses its session stops reconnecting on the first 404 replay', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { source, EventSource } = nativeSource();
+  const statuses = [];
+  let attempts = 0;
+  const close = subscribeToEvents(sessionId, {
+    EventSourceImpl: EventSource,
+    async fetchImpl(url, options) {
+      assert.equal(url, endpoint);
+      assert.equal(options.headers['Last-Event-ID'], '1');
+      attempts++;
+      return Response.json({ error: 'not_found' }, { status: 404 });
+    },
+    onEvent: () => {},
+    onStatus: (status) => statuses.push(status),
+  });
+  t.after(close);
+
+  source.onopen();
+  source.onmessage({ lastEventId: '1', data: JSON.stringify(event(1)) });
+  source.onerror();
+  t.mock.timers.tick(1000);
+  await new Promise(setImmediate);
+  assert.equal(source.closed, true);
+  assert.deepEqual(statuses, ['reconnecting', 'connected', 'reconnecting', 'session-ended']);
+  t.mock.timers.tick(60_000);
+  assert.equal(attempts, 1);
 });

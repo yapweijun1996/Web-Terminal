@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createWorkspaceClient } from '../src/api/client.js';
+import { createWorkspaceClient, isMissingSession } from '../src/api/client.js';
 
 test('GET projects does not request or send the mutation token', async () => {
   const data = { projects: [{ id: 'root', label: 'Example', folders: [] }] };
@@ -66,6 +66,71 @@ test('server error codes map to readable messages and retain HTTP status', async
   await assert.rejects(client.sendMessage('session', 'Hello'), {
     code: 'turn_active', status: 409, message: 'The previous run is still stopping, retry in a moment',
   });
+});
+
+test('a POST rejected with 403 refreshes the token and retries the same request once', async () => {
+  let tokenCount = 0;
+  const posts = [];
+  const client = createWorkspaceClient(async (url, options) => {
+    if (url === '/api/sessions') return Response.json({ token: `token-${++tokenCount}` });
+    assert.equal(url, '/api/workspace/terminal');
+    posts.push(options);
+    if (posts.length === 1) return Response.json({ error: 'forbidden' }, { status: 403 });
+    return Response.json({ terminalId: 'web-012345abcdef' });
+  });
+
+  assert.equal(await client.createTerminal('chat-1', { rootId: 'root', relPath: 'src' }), 'web-012345abcdef');
+  assert.equal(tokenCount, 2);
+  assert.deepEqual(posts.map(({ method, headers, body }) => [method, headers, JSON.parse(body)]), [1, 2].map((id) => [
+    'POST', { 'Content-Type': 'application/json', 'X-Terminal-Request': `token-${id}`, 'X-Workspace-Session': 'chat-1' },
+    { rootId: 'root', relPath: 'src' },
+  ]));
+});
+
+test('a DELETE stops after two 403 responses and exposes the readable error', async () => {
+  const calls = [];
+  let tokenCount = 0;
+  const client = createWorkspaceClient(async (url, options) => {
+    if (url === '/api/sessions') return Response.json({ token: `token-${++tokenCount}` });
+    calls.push([url, options.method, options.headers['X-Terminal-Request'], options.body]);
+    return Response.json({ error: 'forbidden' }, { status: 403 });
+  });
+  await assert.rejects(client.closeTerminal('web-012345abcdef'), {
+    code: 'forbidden', status: 403, message: 'Your workspace access could not be verified. Reload and sign in again.',
+  });
+  assert.equal(tokenCount, 2);
+  assert.deepEqual(calls, [1, 2].map((id) => ['/api/workspace/terminal/web-012345abcdef', 'DELETE', `token-${id}`, undefined]));
+});
+
+test('a message POST reports a missing session after token refresh without retrying the 404', async () => {
+  for (const explicit of [true, false]) {
+    let tokenCount = 0;
+    let messages = 0;
+    const client = createWorkspaceClient(async (url) => {
+      if (url === '/api/sessions') return Response.json({ token: `token-${++tokenCount}` });
+      assert.equal(url, '/api/workspace/sessions/old-id/messages');
+      if (++messages === 1) return Response.json({ error: 'forbidden' }, { status: 403 });
+      return explicit ? Response.json({ error: 'not_found' }, { status: 404 })
+        : new Response('Not found', { status: 404 });
+    });
+    await assert.rejects(client.sendMessage('old-id', 'Hello'), (error) => {
+      assert.equal(error.status, 404);
+      assert.equal(isMissingSession(error), explicit);
+      return true;
+    });
+    assert.equal(tokenCount, 2);
+    assert.equal(messages, 2);
+  }
+});
+
+test('a 403 fetching the token prevents the mutation without retrying the token GET', async () => {
+  const calls = [];
+  const client = createWorkspaceClient(async (url) => {
+    calls.push(url);
+    return Response.json({ error: 'forbidden' }, { status: 403 });
+  });
+  await assert.rejects(client.sendMessage('old-id', 'Hello'), { code: 'forbidden', status: 403 });
+  assert.deepEqual(calls, ['/api/sessions']);
 });
 
 test('a missing projects route keeps its 404 status even with a non-JSON body', async () => {

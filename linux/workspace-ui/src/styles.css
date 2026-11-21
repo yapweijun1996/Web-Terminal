@@ -180,8 +180,9 @@ summary::-webkit-details-marker { display: none; }
   font-size: .74rem;
   font-weight: 700;
 }
-.connection.reconnecting { color: var(--warning); background: var(--warning-soft); }
-.connection.error, .prototype-banner.error { color: var(--danger); }
+.connection.reconnecting { color: var(--muted); background: transparent; font-weight: 500; }
+.connection.error, .prototype-banner .error { color: var(--danger); }
+.connection.session-ended { color: var(--warning); background: var(--warning-soft); }
 .connection span { width: 6px; height: 6px; background: currentColor; border-radius: 50%; }
 .prototype-banner {
   padding: 5px 12px;
@@ -192,6 +193,7 @@ summary::-webkit-details-marker { display: none; }
   font-size: .77rem;
 }
 .prototype-banner .secondary { margin-inline-start: 8px; }
+.recovery-resume { display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; }
 .chat-body { grid-row: 3; overflow: auto; }
 .chat-content, .composer { width: min(100%, 740px); margin-inline: auto; }
 .chat-content { padding: 18px 18px 16px; }
@@ -294,9 +296,14 @@ summary::-webkit-details-marker { display: none; }
 }
 .composer textarea::placeholder, .project-search input::placeholder { color: var(--muted); }
 .composer-actions { display: flex; align-items: center; gap: 3px; }
+.composer-actions:has(.composer-submit.is-disabled) { flex-wrap: wrap; }
 .icon-button { display: inline-grid; flex: none; place-items: center; width: 36px; height: 36px; color: var(--muted); }
 .projects-menu, .sidebar-close, .sidebar-overlay { display: none; }
 .composer-agent { width: min(145px, 100%); min-width: 0; margin-left: auto; }
+.composer-submit { display: flex; flex: none; align-items: center; gap: 6px; }
+.composer-submit.is-disabled { margin-inline-start: auto; }
+.composer-submit span { color: var(--muted); font-size: .73rem; white-space: nowrap; }
+.composer-stream-status { margin: 4px 6px; color: var(--warning); font-size: .8rem; }
 .send { background: var(--accent); color: var(--accent-ink); }
 .attachments { display: flex; align-items: center; gap: 6px; padding: 3px 6px; color: var(--muted); font-size: .8rem; }
 .attachments span { min-width: 0; overflow-wrap: anywhere; }
@@ -356,6 +363,8 @@ summary::-webkit-details-marker { display: none; }
   .welcome { padding: 12px; }
   .composer-area { padding: 0 8px 6px; }
   .composer-actions { gap: 3px; }
+  .composer-actions:has(.composer-submit.is-disabled) .composer-agent { flex: 1 1 0; max-width: 145px; }
+  .composer-submit.is-disabled { flex-basis: 100%; justify-content: flex-end; }
   .icon-button { width: 44px; }
   button, .new-session, .primary, .secondary, .select-wrap select, .project-search input,
   .tool-group summary, .tool-step summary, .sidebar-detail summary, .resume, .resume input,

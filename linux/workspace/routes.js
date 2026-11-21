@@ -14,6 +14,7 @@
 
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const timers = require('node:timers');
 const { listProjects, resolveProjectPath } = require('./project-roots');
 const { parseGithubRepo } = require('./github-workspace');
 
@@ -88,7 +89,9 @@ async function readBody(req, limit, allowEmpty) {
   return body;
 }
 
-function createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRequest, terminal, maxBodyBytes = 16384 }) {
+function createWorkspaceRoutes({
+  roots, sessionManager, githubWorkspace, checkRequest, terminal, maxBodyBytes = 16384, heartbeatIntervalMs = 15000,
+}) {
   const histories = new Map();
 
   function listSessions() {
@@ -158,9 +161,23 @@ function createWorkspaceRoutes({ roots, sessionManager, githubWorkspace, checkRe
       waitingForDrain = false;
       stream.send();
     });
-    res.once('close', () => history.streams.delete(stream));
-    res.writeHead(200, { ...RESPONSE_HEADERS, 'Content-Type': 'text/event-stream; charset=utf-8' });
+    res.writeHead(200, {
+      ...RESPONSE_HEADERS,
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store, no-transform',
+      'X-Accel-Buffering': 'no',
+      'Content-Encoding': 'identity',
+    });
     res.flushHeaders();
+    waitingForDrain = !res.write('retry: 3000\n: stream open\n\n');
+    const heartbeat = timers.setInterval(() => {
+      if (res.writableEnded || res.destroyed || waitingForDrain) return;
+      waitingForDrain = !res.write(': ping\n\n');
+    }, heartbeatIntervalMs).unref();
+    res.once('close', () => {
+      timers.clearInterval(heartbeat);
+      history.streams.delete(stream);
+    });
     history.streams.add(stream);
     stream.send();
   }

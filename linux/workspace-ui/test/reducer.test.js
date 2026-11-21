@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { conversationReducer, emptyConversation } from '../src/state/reducer.js';
+import { conversationReducer, emptyConversation, hasRunningTurn } from '../src/state/reducer.js';
 
 function receive(state, seq, event) {
   return conversationReducer(state, { type: 'event', event: { sessionId: 'session', turnId: 'turn', seq, ...event } });
@@ -67,4 +67,24 @@ test('cancelling a turn clears unanswered approvals', () => {
   const finished = receive(pending, 2, { type: 'turn_finished', status: 'cancelled' });
   assert.equal(finished.turns[0].status, 'cancelled');
   assert.deepEqual(finished.turns[0].approvals, []);
+});
+
+test('ending a session preserves the transcript and clears work that cannot finish', () => {
+  const complete = receive(undefined, 1, { type: 'turn_finished', status: 'success', turnId: 'earlier' });
+  const partial = receive(complete, 2, { type: 'message_delta', messageId: 'message', text: 'Partial response' });
+  const approval = receive(partial, 3, {
+    type: 'approval_request', approvalId: 'approval', toolCallId: 'tool', options: ['allow', 'deny'],
+  });
+  const pending = conversationReducer(approval, { type: 'prompt', prompt: { prompt: 'Unsent draft' } });
+  const ended = conversationReducer(pending, { type: 'session_ended' });
+
+  assert.equal(ended.ended, true);
+  assert.equal(ended.pendingPrompt, null);
+  assert.equal(ended.turns[0], complete.turns[0]);
+  assert.equal(ended.turns[1].status, 'interrupted');
+  assert.equal(ended.turns[1].messages[0].text, 'Partial response');
+  assert.deepEqual(ended.turns[1].approvals, []);
+  assert.equal(hasRunningTurn(ended), false);
+  assert.equal(conversationReducer(ended, { type: 'session_ended' }), ended);
+  assert.equal(receive(ended, 4, { type: 'message_done', text: 'Late event' }), ended);
 });

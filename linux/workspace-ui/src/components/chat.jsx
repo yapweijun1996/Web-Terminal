@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { workspaceError } from '../api/client.js';
-import { canSendMessage, isSubmitKey } from '../state/composer.js';
+import { isSubmitKey, sendDisabledReason } from '../state/composer.js';
 import { Icon } from './icon.jsx';
 import { WorkspaceSelect } from './navigation.jsx';
 
@@ -35,7 +35,8 @@ export function Welcome({
 
 function ToolSteps({ steps, approvals, turnStatus, mock, displayText }) {
   const statuses = {
-    done: 'Done', running: 'Running', pending: 'Awaiting approval', error: 'Failed', cancelled: 'Cancelled', denied: 'Denied',
+    done: 'Done', running: 'Running', pending: 'Awaiting approval', error: 'Failed', cancelled: 'Cancelled',
+    denied: 'Denied', interrupted: 'Interrupted',
   };
 
   if (!steps.length) return null;
@@ -119,7 +120,9 @@ function Approval({ request, decision, onDecision, disabled, displayText }) {
 
 export function ChatStream({ conversation, agentName, mock, displayText, onDecision, approvalDisabled }) {
   const { turns, pendingPrompt, error } = conversation;
-  const statuses = { running: 'Working…', success: 'Completed', error: 'Turn failed', cancelled: 'Stopped' };
+  const statuses = {
+    running: 'Working…', success: 'Completed', error: 'Turn failed', cancelled: 'Stopped', interrupted: 'Interrupted',
+  };
 
   function userMessage(prompt, attachments = []) {
     if (prompt === undefined) return null;
@@ -160,13 +163,13 @@ export function ChatStream({ conversation, agentName, mock, displayText, onDecis
 }
 
 export function Composer({
-  agentId, terminalOpen, onAgent, onTerminal, onSend, onStop, mock, running, disabled, working,
+  agentId, terminalOpen, onAgent, onTerminal, onSend, onStop, mock, running, blockedReason, working, streamStalled,
 }) {
   const [draft, setDraft] = useState('');
   const [attachments, setAttachments] = useState([]);
   const fileInput = useRef(null);
   const imageInput = useRef(null);
-  const canSend = canSendMessage(draft, disabled);
+  const disabledReason = sendDisabledReason(draft, blockedReason);
 
   function addFiles(event) {
     const input = event.currentTarget;
@@ -176,7 +179,7 @@ export function Composer({
 
   function send(event) {
     event.preventDefault();
-    if (!canSend) return;
+    if (disabledReason) return;
     onSend(draft.trim(), attachments, () => {
       setDraft((current) => current === draft ? '' : current);
       setAttachments((current) => current === attachments ? [] : current);
@@ -185,7 +188,7 @@ export function Composer({
 
   return (
     <form class="composer" aria-label="Message composer" onSubmit={send}>
-      <textarea aria-label="Message" rows="2" placeholder="Ask your agent to build something…" value={draft} disabled={working}
+      <textarea aria-label="Message" rows="2" placeholder="Ask your agent to build something…" value={draft}
         onInput={(event) => setDraft(event.currentTarget.value)}
         onKeyDown={(event) => {
           if (!isSubmitKey(event)) return;
@@ -198,6 +201,9 @@ export function Composer({
           <button class="quiet-button" type="button" onClick={() => setAttachments([])}>Remove attachments</button>
         </div>
       )}
+      {streamStalled && <p class="composer-stream-status" role="status">
+        No response yet. The event stream may be blocked; retrying…
+      </p>}
       <div class="composer-actions">
         <input type="file" multiple hidden ref={fileInput} onChange={addFiles} />
         <input type="file" multiple hidden accept="image/*" ref={imageInput} onChange={addFiles} />
@@ -207,8 +213,12 @@ export function Composer({
           aria-expanded={terminalOpen} onClick={onTerminal}><Icon name="terminal" /></button>
         <div class="composer-agent"><WorkspaceSelect kind="Agent" label="Composer agent" disabled={working} value={agentId} onChange={onAgent} /></div>
         {running && !mock && <button class="secondary" type="button" onClick={onStop} disabled={working}>Stop</button>}
-        <button class="icon-button send" type="submit" aria-label="Send message" title="Send message"
-          disabled={!canSend}><Icon name="send" /></button>
+        <div class={disabledReason ? 'composer-submit is-disabled' : 'composer-submit'}>
+          {disabledReason && <span id="send-disabled-reason" role="status">{disabledReason}</span>}
+          <button class="icon-button send" type="submit" aria-label="Send message" title="Send message"
+            aria-describedby={disabledReason ? 'send-disabled-reason' : undefined}
+            disabled={Boolean(disabledReason)}><Icon name="send" /></button>
+        </div>
       </div>
     </form>
   );
