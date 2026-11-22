@@ -9,6 +9,7 @@ Map of what the repository source implements, by component. It was derived from 
 | Mac client | `client/` | ttyd 1.7.7-based web client (TypeScript/Preact) plus toolbar, upload UI, window tabs, connection lifecycle | `tests/*.test.js`, `tests/browser/` |
 | Mac runtime | `runtime/` | tmux config, attach/serve scripts, image upload service, input broker | `tests/` |
 | Linux UI | `linux/ui/` | Node HTTP/WS server, multi-tab UI, sidebar, mobile keys, context paste | `linux/test/` |
+| AI Coding Workspace | `linux/workspace/`, `linux/workspace-ui/` | Optional chat-first page driving Claude Code or Codex CLI in admin-defined Project Roots, with approvals, session history and an optional Terminal panel; off unless configured. See [usage](coding-workspace-usage.md) and [spec](coding-workspace-spec.md) | `linux/test/workspace-*.test.js`, `linux/test/*-adapter.test.js`, `linux/workspace-ui/test/` |
 | Shared terminal MCP | `mcp/` | MCP server controlling the shared tmux terminal (stdio or private Unix-socket HTTP) | `mcp/test/` |
 | MCP auth gateway | `mcp-auth/` | OAuth 2.x gateway with Cloudflare Access-verified consent in front of `/mcp` | `mcp-auth/*.test.mjs`, `mcp-auth/browser/` |
 | Windows adapter | `windows/` | ConPTY shells, Access-JWT-protected HTTP/WS | `windows/test/` |
